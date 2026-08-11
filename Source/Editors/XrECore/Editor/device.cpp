@@ -126,10 +126,25 @@ void CEditorRenderDevice::Initialize()
 	UIRenderImpl.CreateUIGeom();
 
 	Resize(EPrefs->start_w, EPrefs->start_h, EPrefs->start_maximized);
-	HW.updateWindowProps(m_hWnd);
 
-
-	::ShowWindow(m_hWnd, EPrefs->start_maximized? SW_SHOWMAXIMIZED: SW_SHOWDEFAULT);
+	// No updateWindowProps here: that is the game's fullscreen/borderless
+	// helper, and it forces the window to the swap-chain size (psCurrentVidMode,
+	// typically 1024x768) centred on screen - which threw away both the saved
+	// size and the saved maximised state.
+	if (EPrefs->start_maximized)
+		::ShowWindow(m_hWnd, SW_SHOWMAXIMIZED);
+	else
+	{
+		// restore the saved window size, honouring the current DPI, then show
+		if (EPrefs->start_w && EPrefs->start_h)
+		{
+			RECT r;	::SetRect(&r, 0, 0, int(EPrefs->start_w), int(EPrefs->start_h));
+			::AdjustWindowRect(&r, ::GetWindowLong(m_hWnd, GWL_STYLE), FALSE);
+			::SetWindowPos(m_hWnd, HWND_NOTOPMOST, 0, 0,
+				r.right - r.left, r.bottom - r.top, SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+		}
+		::ShowWindow(m_hWnd, SW_SHOWDEFAULT);
+	}
 }
 
 void CEditorRenderDevice::ShutDown()

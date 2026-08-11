@@ -610,7 +610,10 @@ void CHW::CreateDevice( HWND m_hWnd, bool move_window )
 	size_t	memory									= Desc.DedicatedVideoMemory;
 	Msg		("*     Texture memory: %d M",		memory/(1024*1024));
 	//Msg		("*          DDI-level: %2.1f",		float(D3DXGetDriverLevel(pDevice))/100.f);
-#ifndef _EDITOR
+// REDITOR, not _EDITOR: _EDITOR is defined nowhere in this tree, so this used
+// to run in the editor too and hand the tool window the game's borderless
+// treatment. XrRender/Private/HW.cpp guards the same two calls with REDITOR.
+#ifndef REDITOR
 	updateWindowProps							(m_hWnd);
 	fill_vid_mode_list							(this);
 #endif
@@ -667,13 +670,24 @@ void CHW::Reset (HWND hwnd)
 {
 	DXGI_SWAP_CHAIN_DESC &cd = m_ChainDesc;
 
+	DXGI_MODE_DESC	&desc = m_ChainDesc.BufferDesc;
+
+#ifdef REDITOR
+	// The editor owns its window: it resets on every viewport resize and has
+	// already written the client size it wants into BufferDesc. The game path
+	// below must not run here - selectResolution would overwrite that size with
+	// the console vid_mode, and ResizeTarget would then resize the WINDOW to
+	// match, which is what kept snapping the editor back to 1024x768 and undid
+	// the maximised state on every reset.
+	cd.Windowed = TRUE;
+	desc.RefreshRate.Numerator = 60;
+	desc.RefreshRate.Denominator = 1;
+#else
 	BOOL	bWindowed		= !psDeviceFlags.is	(rsFullscreen);
 
 	cd.Windowed = bWindowed;
 
 	m_pSwapChain->SetFullscreenState(!bWindowed, NULL);
-
-	DXGI_MODE_DESC	&desc = m_ChainDesc.BufferDesc;
 
 	selectResolution(desc.Width, desc.Height, bWindowed);
 
@@ -686,6 +700,7 @@ void CHW::Reset (HWND hwnd)
 		desc.RefreshRate = selectRefresh( desc.Width, desc.Height, desc.Format);
 
 	CHK_DX(m_pSwapChain->ResizeTarget(&desc));
+#endif
 
 
 #ifdef DEBUG
@@ -757,7 +772,11 @@ void CHW::Reset (HWND hwnd)
 //	R_CHK				(pDevice->CreateStateBlock			(D3DSBT_ALL,&dwDebugSB));
 //#endif
 
+// The editor resets on every viewport resize; re-applying the game's window
+// treatment there would fight the user for control of their own window.
+#ifndef REDITOR
 	updateWindowProps	(hwnd);
+#endif
 
 
 		/*
@@ -955,7 +974,10 @@ BOOL CHW::support( D3DFORMAT fmt, DWORD type, DWORD usage)
 void CHW::updateWindowProps(HWND m_hWnd)
 {
 	//	BOOL	bWindowed				= strstr(Core.Params,"-dedicated") ? TRUE : !psDeviceFlags.is	(rsFullscreen);
-	BOOL	bWindowed				= !psDeviceFlags.is	(rsFullscreen);
+	BOOL	bWindowed				= TRUE;
+#ifndef REDITOR
+	bWindowed						= !psDeviceFlags.is	(rsFullscreen);
+#endif
 
 	u32		dwWindowStyle			= 0;
 	// Set window properties depending on what mode were in.
@@ -964,7 +986,10 @@ void CHW::updateWindowProps(HWND m_hWnd)
 			if (strstr(Core.Params,"-no_dialog_header"))
 				SetWindowLong	( m_hWnd, GWL_STYLE, dwWindowStyle=(WS_BORDER|WS_VISIBLE) );
 			else
-				SetWindowLong	( m_hWnd, GWL_STYLE, dwWindowStyle=(WS_BORDER|WS_DLGFRAME|WS_VISIBLE|WS_SYSMENU|WS_MINIMIZEBOX ) );
+				// WS_OVERLAPPEDWINDOW, same as the D3D9 path: the hand-rolled
+				// set below dropped WS_MAXIMIZEBOX and WS_THICKFRAME, which is
+				// how the editor lost its maximise button and resizable border
+				SetWindowLong	( m_hWnd, GWL_STYLE, dwWindowStyle=(WS_OVERLAPPEDWINDOW) );
 			// When moving from fullscreen to windowed mode, it is important to
 			// adjust the window size after recreating the device rather than
 			// beforehand to ensure that you get the window size you want.  For
@@ -975,7 +1000,10 @@ void CHW::updateWindowProps(HWND m_hWnd)
 			// desktop.
 
 			RECT			m_rcWindowBounds;
-			BOOL			bCenter = FALSE;
+			// centered by default, as in the D3D9 path. Anchoring at 0,0 and
+			// then running AdjustWindowRect pushes the caption above the top of
+			// the screen - the window looks chromeless and cannot be dragged.
+			BOOL			bCenter = TRUE;
 			if (strstr(Core.Params, "-center_screen"))	bCenter = TRUE;
 
 			if (bCenter) {
@@ -1012,8 +1040,13 @@ void CHW::updateWindowProps(HWND m_hWnd)
 		SetWindowLong			( m_hWnd, GWL_STYLE, dwWindowStyle=(WS_POPUP|WS_VISIBLE) );
 	}
 
+// The game hides the cursor because it does mouse-look; the editor needs it.
+// ShowCursor is a counter, and this ran on every device reset, so it went
+// deeply negative and the cursor stayed hidden over the whole window.
+#ifndef REDITOR
 	ShowCursor	(FALSE);
 	SetForegroundWindow( m_hWnd );
+#endif
 }
 
 
