@@ -34,6 +34,34 @@ CHW			HW;
 string256			CHW::PreferredAdapter = {};
 xr_vector<xr_string>	CHW::AdapterNames;
 
+// On a hybrid laptop the display outputs belong to the integrated GPU: for the
+// discrete adapter EnumOutputs(0) comes back empty, and both the vid-mode list
+// and the refresh-rate picker used to die on it. When the render adapter has no
+// output, take the first output any adapter in the system exposes - display
+// modes describe the monitor, not the GPU doing the rendering.
+static IDXGIOutput* hw_FirstOutput(IDXGIAdapter* render_adapter)
+{
+	IDXGIOutput* out = 0;
+	if (render_adapter && SUCCEEDED(render_adapter->EnumOutputs(0, &out)) && out)
+		return out;
+
+	IDXGIFactory* factory = 0;
+	if (!render_adapter || FAILED(render_adapter->GetParent(__uuidof(IDXGIFactory), (void**)&factory)) || !factory)
+		return 0;
+
+	IDXGIAdapter* a = 0;
+	for (UINT n = 0; factory->EnumAdapters(n, &a) != DXGI_ERROR_NOT_FOUND; ++n)
+	{
+		const HRESULT hr = a->EnumOutputs(0, &out);
+		a->Release();
+		if (SUCCEEDED(hr) && out)
+			break;
+		out = 0;
+	}
+	factory->Release();
+	return out;
+}
+
 //	DX10: Don't neeed this?
 /*
 #ifdef DEBUG
@@ -148,6 +176,7 @@ void CHW::CreateD3D()
 				xr_strcpy(name, "unknown");
 
 			AdapterNames.push_back(xr_string(name));
+			Msg("* adapter %u: %s", n, name);
 
 			if (!chosen && PreferredAdapter[0] && 0 == _stricmp(name, PreferredAdapter))
 			{
@@ -156,6 +185,10 @@ void CHW::CreateD3D()
 			}
 			a->Release();
 		}
+
+		Msg("* adapter preference: '%s' -> %s",
+			PreferredAdapter[0] ? PreferredAdapter : "(none)",
+			chosen ? "matched" : "not matched, using default");
 
 		// PerfHUD wins over the preference, it is a debugging override
 		if (chosen && !m_pAdapter)	m_pAdapter = chosen;
@@ -849,9 +882,9 @@ DXGI_RATIONAL CHW::selectRefresh(u32 dwWidth, u32 dwHeight, DXGI_FORMAT fmt)
 	{
 		xr_vector<DXGI_MODE_DESC>	modes;
 
-		IDXGIOutput *pOutput;
-		m_pAdapter->EnumOutputs(0, &pOutput);
-		VERIFY(pOutput);
+		IDXGIOutput *pOutput = hw_FirstOutput(m_pAdapter);
+		// headless session - just keep 60Hz
+		if (!pOutput)	return res;
 
 		UINT num = 0;
 		DXGI_FORMAT format = fmt;
@@ -1082,10 +1115,10 @@ void fill_vid_mode_list(CHW* _hw)
 	xr_vector<LPCSTR>	_tmp;
 	xr_vector<DXGI_MODE_DESC>	modes;
 
-	IDXGIOutput *pOutput;
-	//_hw->m_pSwapChain->GetContainingOutput(&pOutput);
-	_hw->m_pAdapter->EnumOutputs(0, &pOutput);
-	VERIFY(pOutput);
+	IDXGIOutput *pOutput = hw_FirstOutput(_hw->m_pAdapter);
+	// nothing to enumerate on a headless session; the token list stays empty
+	// and the resolution UI simply offers nothing
+	if (!pOutput)	return;
 
 	UINT num = 0;
 	DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM;

@@ -26,9 +26,12 @@ void CLevelPreferences::Load(CInifile* I)
     }
     {
         // an empty value reads back as a null pointer, not as "" - assigning that
-        // to a string is what made the editor die on startup
-        LPCSTR gpu = I->line_exist("render", "gpu_adapter") ? I->r_string("render", "gpu_adapter") : 0;
-        GpuAdapter = gpu ? gpu : "";
+        // to a string is what made the editor die on startup.
+        // r_string_wb, not r_string: adapter names contain spaces, and the ini
+        // parser eats spaces in unquoted values - the value is stored quoted,
+        // same as recent_files.
+        shared_str gpu = I->line_exist("render", "gpu_adapter") ? I->r_string_wb("render", "gpu_adapter") : shared_str("");
+        GpuAdapter = gpu.size() ? gpu.c_str() : "";
         // hand it to the render layer before the device is created
         SetPreferredGpu(GpuAdapter.c_str());
     }
@@ -49,9 +52,14 @@ void CLevelPreferences::Save(CInifile* I)
     I->w_bool("windows", "world_outliner", OpenWorldOutliner);
     I->w_u32("windows", "content_browser_tree_width", ContentBrowserTreeWidth);
     // only write a real choice: a key with an empty value is what the reader
-    // above chokes on, and "no key" already means "system default"
+    // above chokes on, and "no key" already means "system default".
+    // quoted on disk - the ini parser eats spaces in unquoted values, and
+    // adapter names are full of them
     if (!GpuAdapter.empty())
-        I->w_string("render", "gpu_adapter", GpuAdapter.c_str());
+    {
+        xr_string quoted; quoted.sprintf("\"%s\"", GpuAdapter.c_str());
+        I->w_string("render", "gpu_adapter", quoted.c_str());
+    }
     SceneToolsMapPairIt _I 	= Scene->FirstTool();
     SceneToolsMapPairIt _E 	= Scene->LastTool();
     for (; _I!=_E; _I++)
