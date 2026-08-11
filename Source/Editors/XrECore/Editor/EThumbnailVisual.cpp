@@ -265,9 +265,16 @@ namespace
 		// queue exists in the first place.
 		SDX11Target	target;
 		if (!target.create(w, h))	return false;
+
+		// Invalidate, NOT OnFrameEnd: under D3D11 OnFrameEnd calls ClearState(),
+		// which also drops the viewport - and nothing sets one again before the
+		// draw, so every triangle was clipped away and the thumbnail came back
+		// as bare background. Invalidate only forgets the cache; the device
+		// keeps the target and viewport bind() sets right after.
+		RCache.Invalidate();
 		target.bind();
 		target.clear(s_BackgroundColor);
-		// RCache still holds whatever views the caller bound
+		// and now tell the cache what the device is actually bound to
 		RCache.set_RT(target.rtv);
 		RCache.set_ZB(target.dsv);
 
@@ -308,7 +315,10 @@ namespace
 #endif
 			// state behind RCache's back - clear the cache so our draw sets
 			// everything up itself instead of trusting stale entries
+			// (the D3D11 path already did this above, before binding)
+#if !defined(USE_DX11)
 			RCache.OnFrameEnd	();
+#endif
 			SetupThumbnailStates();
 			SetupThumbnailLights();
 

@@ -74,6 +74,7 @@ UIContentBrowser::UIContentBrowser()
 	m_NeedRefresh	= true;
 	m_TileSize		= 96.f;
 	m_Tick			= 0;
+	m_ClipSource	= -1;
 	// preferences may not exist yet when the browser is constructed at startup
 	if (CLevelPreferences* prefs = dynamic_cast<CLevelPreferences*>(EPrefs))
 		m_TreeWidth	= float(prefs->ContentBrowserTreeWidth);
@@ -225,7 +226,7 @@ void UIContentBrowser::SwitchSource(int src)
 	if (m_Source == src) return;
 	m_Source		= src;
 	m_CurFolder		= "";
-	m_Selected		= "";
+	ClearSelection();
 	m_NeedRefresh	= true;
 	m_WantOverwrite	= false;
 	m_CopyPending.clear();
@@ -517,20 +518,30 @@ void UIContentBrowser::OpenAsset(LPCSTR name)
 	ELog.Msg(mtInformation, "No viewer for this asset kind yet: '%s'", name);
 }
 
+// depth-first lookup by full path; null when the path is not in the tree
+UIContentBrowser::SFolder* UIContentBrowser::FindFolder(LPCSTR path)
+{
+	if (!path || !path[0]) return &m_Root;
+
+	xr_vector<SFolder*> stack; stack.push_back(&m_Root);
+	while (!stack.empty())
+	{
+		SFolder* f = stack.back(); stack.pop_back();
+		if (f->path == path) return f;
+		for (u32 i = 0; i < f->children.size(); ++i) stack.push_back(&f->children[i]);
+	}
+	return 0;
+}
+
 void UIContentBrowser::DrawTiles()
 {
 	// resolve the selected folder, falling back to root
-	SFolder* cur = &m_Root;
-	if (!m_CurFolder.empty())
-	{
-		xr_vector<SFolder*> stack; stack.push_back(&m_Root);
-		while (!stack.empty())
-		{
-			SFolder* f = stack.back(); stack.pop_back();
-			if (f->path == m_CurFolder) { cur = f; break; }
-			for (u32 i = 0; i < f->children.size(); ++i) stack.push_back(&f->children[i]);
-		}
-	}
+	SFolder* cur = FindFolder(m_CurFolder.c_str());
+	if (!cur) cur = &m_Root;
+
+	// rebuilt every frame: a Shift-range means "everything between these two in
+	// the order they are on screen", which only this pass knows
+	m_DrawnOrder.clear();
 
 	xr_vector<int> ids;
 	// with an active search the whole subtree is scanned, otherwise just this folder
@@ -558,7 +569,7 @@ void UIContentBrowser::DrawTiles()
 				LPCSTR cut = strrchr(m_CurFolder.c_str(), '\\');
 				if (cut)	m_CurFolder.erase(size_t(cut - m_CurFolder.c_str()));
 				else		m_CurFolder.clear();
-				m_Selected	= "";
+				ClearSelection();
 			}
 			if (ImGui::IsItemHovered()) ImGui::SetTooltip("up one folder");
 			ImGui::PopID();
@@ -575,16 +586,17 @@ void UIContentBrowser::DrawTiles()
 			ImGui::BeginGroup();
 			// folders read as folders through colour: there is no icon atlas here
 			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.30f, 0.27f, 0.14f, 1.f));
-			const bool enter = ImGui::Button("[ ]", ImVec2(m_TileSize, m_TileSize));
+			ImGui::Button("[ ]", ImVec2(m_TileSize, m_TileSize));
 			ImGui::PopStyleColor();
-			// single click enters as well: a folder has nothing else to do, and
-			// requiring a double click here just makes the grid feel dead
-			if (enter || (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)))
+			// Double click to enter, like Unreal - a single click must not
+			// navigate, or selecting a folder is impossible.
+			if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 			{
 				m_CurFolder = sub.path;
-				m_Selected	= "";
+				ClearSelection();
 			}
 			if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", sub.path.c_str());
+			DrawFolderContextMenu(sub.path.c_str());
 
 			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + m_TileSize);
 			ImGui::TextUnformatted(sub.name.c_str());
@@ -601,8 +613,9 @@ void UIContentBrowser::DrawTiles()
 		if (!m_Filter.PassFilter(full)) continue;
 		++matched;
 		// a game install can match tens of thousands of files at once; drawing
-		// them all would stall the frame, so the rest waits for a tighter search
-		if (IsReadOnlySource() && drawn >= kDarfMaxTiles) continue;
+		// them all would stall the frame, so the rest waits for a tighter search.
+		// Only the game tree is that big - the SDK library draws in full.
+		if (IsGameSource() && drawn >= kDarfMaxTiles) continue;
 
 		LPCSTR leaf		= strrchr(full, '\\');
 		leaf			= leaf ? leaf + 1 : full;
@@ -613,8 +626,11 @@ void UIContentBrowser::DrawTiles()
 		ImGui::PushID(ids[k]);
 		ImGui::BeginGroup();
 
+		// the grid order is what a Shift-range means by "everything between"
+		m_DrawnOrder.push_back(full);
+
 		ImTextureID tex	= GetThumb(full);
-		const bool sel	= (m_Selected == full);
+		const bool sel	= IsSelected(full);
 		if (sel) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
 
 		bool clicked;
@@ -622,16 +638,25 @@ void UIContentBrowser::DrawTiles()
 		else		clicked = ImGui::Button(leaf, ImVec2(m_TileSize + 8.f, m_TileSize + 8.f));
 
 		if (sel) ImGui::PopStyleColor();
-		if (clicked) m_Selected = full;
-
-		// drag source — the viewport is the drop target (shared library only:
-		// project-asset placement needs a two-root library lookup, next step)
-		if (m_Source == 1 && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+		if (clicked)
 		{
+			const ImGuiIO& io = ImGui::GetIO();
+			SelectItem(full, io.KeyCtrl, io.KeyShift);
+		}
+
+		// Drag source for every source, not just the SDK library: dropping a
+		// game or project asset on the viewport has to work the same way.
+		// Dragging an unselected tile selects it first, as Unreal does, so the
+		// payload always matches what is highlighted.
+		if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+		{
+			if (!IsSelected(full)) SelectItem(full, false, false);
 			m_Dragged = full;
 			ImGui::SetDragDropPayload(CB_DND_PAYLOAD, full, xr_strlen(full) + 1);
 			if (tex) ImGui::Image(tex, ImVec2(48, 48));
 			ImGui::TextUnformatted(leaf);
+			if (m_Selection.size() > 1)
+				ImGui::Text("and %d more", int(m_Selection.size()) - 1);
 			ImGui::EndDragDropSource();
 		}
 
@@ -643,15 +668,14 @@ void UIContentBrowser::DrawTiles()
 			// and nothing else - a stray double click must not edit the scene.
 			if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 			{
-				m_Selected = full;
+				SelectItem(full, false, false);
 				OpenAsset(full);
 			}
 		}
 
-		// read-only source: the context menu is the ONLY action surface, and it
-		// offers nothing that could touch the game folder. Drawn last so the
-		// popup contents never become the "last item" the hover check reads.
-		if (IsReadOnlySource()) DrawDarfContextMenu(full);
+		// Right-click surface. Drawn last so the popup contents never become the
+		// "last item" the hover check above reads.
+		DrawItemContextMenu(full);
 
 		// caption under the tile, clipped to tile width
 		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + m_TileSize);
@@ -661,6 +685,21 @@ void UIContentBrowser::DrawTiles()
 		ImGui::EndGroup();
 		ImGui::PopID();
 	}
+
+	// Shift-click needed the whole grid order, so it is resolved here
+	ApplyPendingRange();
+
+	// empty-space right-click and the Ctrl shortcuts, both of which need the
+	// drawn order the loop above just produced
+	DrawGridContextMenu();
+	HandleShortcuts();
+
+	// clicking empty space clears the selection, as every file browser does.
+	// IsWindowHovered + !IsAnyItemHovered keeps tiles and popups out of it.
+	if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
+		!ImGui::IsAnyItemHovered() &&
+		ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+		ClearSelection();
 
 	if (!drawn) ImGui::TextDisabled(m_Filter.IsActive() ? "nothing matches the search" : "empty folder");
 	else if (matched > drawn)
@@ -679,30 +718,296 @@ void UIContentBrowser::DrawTiles()
 // goes through EditorGameContent::CopyToProject, whose destination is always
 // below <project>\gamedata\.
 //------------------------------------------------------------------------------
-void UIContentBrowser::DrawDarfContextMenu(LPCSTR full)
+void UIContentBrowser::DrawItemContextMenu(LPCSTR full)
 {
-	if (!ImGui::BeginPopupContextItem("darf_ctx")) return;
+	if (!ImGui::BeginPopupContextItem("cb_item_ctx")) return;
 
-	m_Selected = full;
-	ImGui::TextDisabled("%s", full);
+	// right-clicking outside the selection moves it here, as Unreal does;
+	// right-clicking inside keeps the multi-selection intact
+	if (!IsSelected(full)) SelectItem(full, false, false);
+
+	const int count = int(m_Selection.size());
+	if (count > 1)	ImGui::TextDisabled("%d items selected", count);
+	else			ImGui::TextDisabled("%s", full);
 	ImGui::Separator();
 
-	if (ImGui::MenuItem("Copy to project")) RequestCopy(full);
+	if (ImGui::MenuItem("Open")) OpenAsset(full);
+
+	if (IsGameSource())
+	{
+		if (ImGui::MenuItem(count > 1 ? "Copy selection to project" : "Copy to project"))
+			CopySelection();
+	}
+	else if (m_Source == 1)
+	{
+		// Editor Content is read-only too, but its items are library refs
+		// rather than files under a root the copier understands
+		ImGui::MenuItem("Copy to project", "", false, false);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("not wired up yet for Editor Content");
+	}
 
 	string_path ref;
-	const bool placeable = EditorGameContent::ResolvePlaceable(full, ref);
-	if (ImGui::MenuItem("Place in scene", "", false, placeable) && placeable)
-		ExecCommand(COMMAND_CB_PLACE_ASSET, xr_string(ref), u32(0));
-	if (!placeable)
+	const bool placeable = IsGameSource()
+		? EditorGameContent::ResolvePlaceable(full, ref)
+		: false;
+	if (IsGameSource())
 	{
-		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("only .object references the editor library can load are placeable");
+		if (ImGui::MenuItem("Place in scene", "", false, placeable) && placeable)
+			ExecCommand(COMMAND_CB_PLACE_ASSET, xr_string(ref), u32(0));
+	}
+	else if (ImGui::MenuItem("Place in scene"))
+		ExecCommand(COMMAND_CB_PLACE_ASSET, xr_string(full), u32(0));
+
+	ImGui::Separator();
+	if (ImGui::MenuItem("Copy", "Ctrl+C")) ClipboardCopy();
+	{
+		const bool can = CanPaste();
+		if (ImGui::MenuItem("Paste", "Ctrl+V", false, can) && can) ClipboardPaste();
+		if (!can && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("%s", PasteBlockedReason());
+	}
+	if (ImGui::MenuItem("Copy name")) ImGui::SetClipboardText(full);
+	if (IsGameSource() && !placeable)
 		ImGui::TextDisabled("  not a library object reference");
+
+	if (IsReadOnlySource())
+	{
+		ImGui::Separator();
+		ImGui::TextDisabled("read-only source");
+	}
+	ImGui::EndPopup();
+}
+
+//------------------------------------------------------------------------------
+// Folder right-click. Copying a whole folder needs a recursive copier the
+// backend does not have yet, so the entry is present but disabled rather than
+// silently missing - it says what it will do and why it cannot yet.
+//------------------------------------------------------------------------------
+void UIContentBrowser::DrawFolderContextMenu(LPCSTR path)
+{
+	if (!ImGui::BeginPopupContextItem("cb_folder_ctx")) return;
+
+	ImGui::TextDisabled("%s", path);
+	ImGui::Separator();
+
+	if (ImGui::MenuItem("Open"))
+	{
+		m_CurFolder = path;
+		ClearSelection();
+	}
+	if (ImGui::MenuItem("Select contents"))
+	{
+		// selects what this folder holds, so the item copy can take it
+		if (SFolder* f = FindFolder(path))
+		{
+			xr_vector<int> ids;
+			CollectItems(*f, ids, true);
+			m_Selection.clear();
+			for (u32 i = 0; i < ids.size(); ++i)
+				m_Selection.push_back(m_Items[ids[i]].name.c_str());
+			if (!m_Selection.empty()) m_Anchor = m_Selection.back();
+		}
 	}
 
 	ImGui::Separator();
-	ImGui::TextDisabled("read-only source");
+	ImGui::MenuItem("Copy folder to project", "", false, false);
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		ImGui::SetTooltip("recursive folder copy is not implemented yet - use \"Select contents\" and copy the items");
+
+	if (ImGui::MenuItem("Copy path")) ImGui::SetClipboardText(path);
+
+	if (IsReadOnlySource())
+	{
+		ImGui::Separator();
+		ImGui::TextDisabled("read-only source");
+	}
 	ImGui::EndPopup();
+}
+
+//------------------------------------------------------------------------------
+// selection
+//------------------------------------------------------------------------------
+bool UIContentBrowser::IsSelected(LPCSTR full) const
+{
+	for (u32 i = 0; i < m_Selection.size(); ++i)
+		if (m_Selection[i] == full)	return true;
+	return false;
+}
+
+void UIContentBrowser::ClearSelection()
+{
+	m_Selection.clear();
+	m_Anchor.clear();
+	m_PendingRange.clear();
+}
+
+void UIContentBrowser::SelectItem(LPCSTR full, bool additive, bool range)
+{
+	if (range && !m_Anchor.empty())
+	{
+		// resolved after the grid, where the drawn order is known
+		m_PendingRange = full;
+		return;
+	}
+
+	if (additive)
+	{
+		for (u32 i = 0; i < m_Selection.size(); ++i)
+			if (m_Selection[i] == full)
+			{
+				m_Selection.erase(m_Selection.begin() + i);
+				// the anchor must stay on something that is still selected
+				if (m_Anchor == full)
+					m_Anchor = m_Selection.empty() ? xr_string("") : m_Selection.back();
+				return;
+			}
+		m_Selection.push_back(full);
+		m_Anchor = full;
+		return;
+	}
+
+	m_Selection.clear();
+	m_Selection.push_back(full);
+	m_Anchor = full;
+}
+
+void UIContentBrowser::ApplyPendingRange()
+{
+	if (m_PendingRange.empty())	return;
+
+	int from = -1, to = -1;
+	for (u32 i = 0; i < m_DrawnOrder.size(); ++i)
+	{
+		if (m_DrawnOrder[i] == m_Anchor)		from = int(i);
+		if (m_DrawnOrder[i] == m_PendingRange)	to	 = int(i);
+	}
+	m_PendingRange.clear();
+	if (from < 0 || to < 0)	return;
+	if (from > to)			std::swap(from, to);
+
+	m_Selection.clear();
+	for (int i = from; i <= to; ++i)
+		m_Selection.push_back(m_DrawnOrder[i]);
+	// the anchor stays put so dragging the range back and forth works
+}
+
+//------------------------------------------------------------------------------
+// clipboard
+//
+// Ordinary file-manager semantics: copy marks what is selected and where it
+// came from, paste materialises it in the folder you are looking at. Only the
+// project's own Content can receive a paste - the SDK library and the game
+// install are sources, never destinations.
+//------------------------------------------------------------------------------
+void UIContentBrowser::ClipboardCopy()
+{
+	if (m_Selection.empty()) return;
+	m_Clipboard		= m_Selection;
+	m_ClipSource	= m_Source;
+	ELog.Msg(mtInformation, "Copied %d item(s).", int(m_Clipboard.size()));
+}
+
+bool UIContentBrowser::CanPaste() const
+{
+	if (m_Clipboard.empty())		return false;
+	if (m_Source != 0)				return false;	// destination must be writable
+	if (m_ClipSource != 2)			return false;	// only the game copier exists so far
+	return true;
+}
+
+LPCSTR UIContentBrowser::PasteBlockedReason() const
+{
+	if (m_Clipboard.empty())	return "clipboard is empty";
+	if (m_Source != 0)			return "paste only into the project's Content - this source is read-only";
+	if (m_ClipSource != 2)		return "copying out of Editor Content is not wired up yet";
+	return "";
+}
+
+void UIContentBrowser::ClipboardPaste()
+{
+	if (!CanPaste()) return;
+
+	// CopyToProject mirrors the item's own relative path under the project's
+	// gamedata, so the paste lands where the engine expects to find it rather
+	// than in whatever folder happens to be open.
+	for (u32 i = 0; i < m_Clipboard.size(); ++i)
+	{
+		if (m_WantOverwrite) break;		// a conflict popup owns the rest
+		RequestCopy(m_Clipboard[i].c_str());
+	}
+	m_NeedRefresh = true;
+}
+
+void UIContentBrowser::HandleShortcuts()
+{
+	// only when this panel owns the keyboard, or Ctrl+C in the viewport would
+	// end up copying assets
+	if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) return;
+
+	const ImGuiIO& io = ImGui::GetIO();
+	if (!io.KeyCtrl) return;
+
+	if (ImGui::IsKeyPressed(ImGuiKey_C, false))	ClipboardCopy();
+	if (ImGui::IsKeyPressed(ImGuiKey_V, false))	ClipboardPaste();
+	if (ImGui::IsKeyPressed(ImGuiKey_A, false))
+	{
+		m_Selection.clear();
+		for (u32 i = 0; i < m_DrawnOrder.size(); ++i)
+			m_Selection.push_back(m_DrawnOrder[i]);
+		if (!m_Selection.empty()) m_Anchor = m_Selection.back();
+	}
+}
+
+void UIContentBrowser::DrawGridContextMenu()
+{
+	// "Window" variant: fires on empty space, not over a tile
+	if (!ImGui::BeginPopupContextWindow("cb_grid_ctx", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+		return;
+
+	const bool can = CanPaste();
+	if (ImGui::MenuItem("Paste", "Ctrl+V", false, can) && can)
+		ClipboardPaste();
+	if (!can && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		ImGui::SetTooltip("%s", PasteBlockedReason());
+
+	if (!m_Clipboard.empty())
+		ImGui::TextDisabled("%d item(s) on the clipboard", int(m_Clipboard.size()));
+
+	ImGui::Separator();
+	if (ImGui::MenuItem("Select all", "Ctrl+A"))
+	{
+		m_Selection.clear();
+		for (u32 i = 0; i < m_DrawnOrder.size(); ++i)
+			m_Selection.push_back(m_DrawnOrder[i]);
+		if (!m_Selection.empty()) m_Anchor = m_Selection.back();
+	}
+	if (ImGui::MenuItem("Clear selection", "", false, !m_Selection.empty()))
+		ClearSelection();
+	if (ImGui::MenuItem("Refresh")) m_NeedRefresh = true;
+
+	ImGui::EndPopup();
+}
+
+void UIContentBrowser::CopySelection()
+{
+	if (!IsGameSource())
+	{
+		// Editor Content items are library references, not files with a path
+		// under the game root, so the DARF copier cannot take them yet.
+		ELog.DlgMsg(mtInformation,
+			"Copying from Editor Content is not wired up yet - use DARF Content for now.");
+		return;
+	}
+	if (m_Selection.empty())	return;
+
+	// one confirmation per run: RequestCopy queues the first conflict and the
+	// popup drives the rest on the next frames
+	for (u32 i = 0; i < m_Selection.size(); ++i)
+	{
+		if (m_WantOverwrite)	break;
+		RequestCopy(m_Selection[i].c_str());
+	}
 }
 
 void UIContentBrowser::RequestCopy(LPCSTR rel)
@@ -844,7 +1149,7 @@ void UIContentBrowser::Draw()
 				{
 					m_Category		= i;
 					m_CurFolder		= "";
-					m_Selected		= "";
+					ClearSelection();
 					m_NeedRefresh	= true;
 				}
 			ImGui::EndCombo();
@@ -863,19 +1168,32 @@ void UIContentBrowser::Draw()
 	if (IsReadOnlySource())
 	{
 		ImGui::SameLine(0, 16);
-		ImGui::BeginDisabled(m_Selected.empty());
-		if (ImGui::Button("Copy to project")) RequestCopy(m_Selected.c_str());
-		ImGui::EndDisabled();
-		ImGui::SameLine();
+		if (IsGameSource())
+		{
+			ImGui::BeginDisabled(m_Selection.empty());
+			if (ImGui::Button(m_Selection.size() > 1 ? "Copy selection to project" : "Copy to project"))
+				CopySelection();
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+		}
 		ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "READ ONLY");
 		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("the linked game install is never modified: browse, preview and copy into the project only");
+			ImGui::SetTooltip(IsGameSource()
+				? "the linked game install is never modified: browse, preview and copy into the project only"
+				: "the shared editor library is never modified: browse and preview only");
+	}
+	if (!m_Selection.empty())
+	{
+		ImGui::SameLine(0, 16);
+		ImGui::TextDisabled("%d selected", int(m_Selection.size()));
 	}
 
 	ImGui::Separator();
 
-	// no project / no game link: one explaining line instead of an empty tree
-	if (IsReadOnlySource() && !m_DarfReady)
+	// no project / no game link: one explaining line instead of an empty tree.
+	// IsGameSource, not IsReadOnlySource: the SDK library is read-only too but
+	// has nothing to do with the game install being linked.
+	if (IsGameSource() && !m_DarfReady)
 	{
 		ImGui::TextWrapped("%s", m_DarfStatus.c_str());
 		ImGui::TextDisabled("Open a project and link a game install (fsgame.ltx + database\\) to browse it here.");

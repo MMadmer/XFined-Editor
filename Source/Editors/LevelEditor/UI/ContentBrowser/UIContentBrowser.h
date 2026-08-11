@@ -75,8 +75,19 @@ private:
 	// persisted in the editor preferences
 	float							m_TreeWidth;
 	ImGuiTextFilter					m_Filter;
-	xr_string						m_Selected;
+	// UE-style multi-selection: click replaces, Ctrl toggles, Shift takes the
+	// range from the anchor. The range needs the order tiles were drawn in, so
+	// the grid records it and a shift-click is resolved after the loop.
+	xr_vector<xr_string>			m_Selection;
+	xr_string						m_Anchor;
+	xr_vector<xr_string>			m_DrawnOrder;
+	xr_string						m_PendingRange;
 	xr_string						m_Dragged;
+
+	// Copy/paste clipboard. Holds names plus the source they came from, because
+	// where an item lives decides how it is fetched on paste.
+	xr_vector<xr_string>			m_Clipboard;
+	int								m_ClipSource;
 
 	// DARF source state
 	bool							m_DarfReady;	// mounted and browsable
@@ -92,6 +103,7 @@ private:
 	void			DrawFolder			(SFolder& f);
 	void			DrawTiles			();
 	void			CollectItems		(SFolder& f, xr_vector<int>& out, bool recursive);
+	SFolder*		FindFolder			(LPCSTR path);
 	ImTextureID		GetThumb			(LPCSTR name);
 	// queues an offscreen model render; the result is picked up on a later frame
 	void			RequestModelThumbnail(LPCSTR name);
@@ -101,9 +113,36 @@ private:
 	void			SwitchSource		(int src);
 	// vertical splitter between the folder tree and the tile grid
 	void			DrawSplitter		(float height);
-	// read-only sources reject every mutation; DARF content is one of them
-	IC bool			IsReadOnlySource	() const { return m_Source == 2; }
+	// The project's own Content is the only writable root. Editor Content is a
+	// shared SDK library and the game install is someone else's install - both
+	// are browse-and-copy-out sources, never edited in place.
+	IC bool			IsReadOnlySource	() const { return m_Source != 0; }
+	// the linked game install specifically: it owns the copy machinery and the
+	// per-frame tile budget its size demands
+	IC bool			IsGameSource		() const { return m_Source == 2; }
+
+	// selection
+	bool			IsSelected			(LPCSTR full) const;
+	void			SelectItem			(LPCSTR full, bool additive, bool range);
+	void			ClearSelection		();
+	void			ApplyPendingRange	();
+
 	void			RequestCopy			(LPCSTR rel);
+	void			CopySelection		();
 	void			DrawCopyConfirm		();
-	void			DrawDarfContextMenu	(LPCSTR full);
+
+	// clipboard
+	void			ClipboardCopy		();
+	void			ClipboardPaste		();
+	// true when the current source/folder can receive a paste
+	bool			CanPaste			() const;
+	LPCSTR			PasteBlockedReason	() const;
+	// Ctrl+C / Ctrl+V while the grid has focus
+	void			HandleShortcuts		();
+	// right-click on empty grid space
+	void			DrawGridContextMenu	();
+	// right-click surface for a tile; contents depend on the source
+	void			DrawItemContextMenu	(LPCSTR full);
+	// right-click surface for a folder tile / tree node
+	void			DrawFolderContextMenu(LPCSTR path);
 };

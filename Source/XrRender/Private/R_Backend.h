@@ -189,8 +189,13 @@ private:
 	CMatrix*						matrices	[8	];	// matrices are supported only for FFP
 #endif
 
-	void							Invalidate	();
 public:
+	// Public because the editor's offscreen passes (thumbnails, the model
+	// preview) need to forget the cached state WITHOUT the ClearState() that
+	// OnFrameEnd does on D3D11 - that one also drops the viewport, and they
+	// bind their own. Visibility only; the layout is untouched.
+	void							Invalidate	();
+
 	struct _stats
 	{
 		u32								polys;

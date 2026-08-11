@@ -587,10 +587,16 @@ void UIVisualPreview::RenderToTarget(u32 w, u32 h)
 
 	SPreviewStateGuard	guard;
 
+	// Invalidate, NOT OnFrameEnd: under D3D11 OnFrameEnd calls ClearState(),
+	// which also drops the viewport, and nothing would set one again before the
+	// draw - everything gets clipped and the preview stays empty. Invalidate
+	// only forgets the cache, so the bind below is what the device ends up with.
+	RCache.Invalidate();
+
 	// bind() also sets a full-size viewport, so w/h come from the target itself
 	m_Target.bind	();
 	m_Target.clear	(s_BackgroundColor);
-	// RCache still points at the backbuffer views it handed out last
+	// and now tell the cache what the device is actually bound to
 	RCache.set_RT	(m_Target.rtv);
 	RCache.set_ZB	(m_Target.dsv);
 #else
@@ -609,7 +615,10 @@ void UIVisualPreview::RenderToTarget(u32 w, u32 h)
 
 	// imgui (or the scene pass) may have written device state behind RCache's
 	// back - clear the cache so our draw sets everything up itself
+	// (the D3D11 path already did this above, before binding)
+#if !defined(USE_DX11)
 	RCache.OnFrameEnd		();
+#endif
 	SetupPreviewStates		(m_Wireframe);
 	SetupPreviewLights		();
 
