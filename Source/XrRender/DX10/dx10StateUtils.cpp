@@ -169,10 +169,15 @@ void ResetDescription( D3D_RASTERIZER_DESC &desc )
 	desc.SlopeScaledDepthBias = 0.0f;
 	desc.DepthClipEnable = TRUE;
 	desc.ScissorEnable = FALSE;
+#ifdef REDITOR
+	// the editor never multisamples - its CRender has no MSAA options at all
+	desc.MultisampleEnable = FALSE;
+#else
    if( RImplementation.o.dx10_msaa )
 	   desc.MultisampleEnable = TRUE;
    else
 	   desc.MultisampleEnable = FALSE;
+#endif
 	desc.AntialiasedLineEnable = FALSE;
 }
 
@@ -183,6 +188,11 @@ void ResetDescription( D3D_DEPTH_STENCIL_DESC &desc )
 	desc.DepthWriteMask = D3D_DEPTH_WRITE_MASK_ALL;
 	desc.DepthFunc = D3D_COMPARISON_LESS;
 	desc.StencilEnable = TRUE;
+#ifdef REDITOR
+	// no MSAA in the editor, so the full stencil range stays available
+	desc.StencilReadMask = 0xFF;
+	desc.StencilWriteMask = 0xFF;
+#else
    if( !RImplementation.o.dx10_msaa )
    {
 	   desc.StencilReadMask = 0xFF;
@@ -193,6 +203,7 @@ void ResetDescription( D3D_DEPTH_STENCIL_DESC &desc )
 	   desc.StencilReadMask = 0x7F;
 	   desc.StencilWriteMask = 0x7F;
    }
+#endif
 
 	desc.FrontFace.StencilFailOp = D3D_STENCIL_OP_KEEP;
 	desc.FrontFace.StencilDepthFailOp = D3D_STENCIL_OP_KEEP;

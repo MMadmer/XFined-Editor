@@ -3,6 +3,7 @@
 
 #include "EThumbnail.h"
 #include "xrImage_Resampler.h"
+#include "EDX11Utils.h"
 #pragma package(smart_init)
 //------------------------------------------------------------------------------
 // Custom Thumbnail
@@ -92,9 +93,26 @@ void EImageThumbnail::Update(ImTextureID& Texture)
     {
         if(Texture)
         Texture->Release();
-        Texture == nullptr;
+        // was a comparison, which left the caller holding a released pointer
+        Texture = nullptr;
         return;
     }
+#if defined(USE_DX11)
+    // An immutable texture cannot be mapped, so an "update" is a new texture.
+    // A thumbnail is 128x128, the copy is nothing - but the previous view has to
+    // be dropped here or every refresh leaks one.
+    if (Texture)
+    {
+        Texture->Release();
+        Texture = nullptr;
+    }
+    // EImageThumbnail keeps its rows bottom-up (the D3D9 path copied them in
+    // reverse); DX11TextureFromPixels copies as is, so flip explicitly.
+    U32Vec flipped(THUMB_SIZE);
+    for (u32 y = 0; y < THUMB_HEIGHT; ++y)
+        CopyMemory(&flipped[y * THUMB_WIDTH], Pixels() + THUMB_WIDTH * (THUMB_HEIGHT - 1 - y), THUMB_WIDTH * sizeof(u32));
+    Texture = DX11TextureFromPixels(flipped.data(), THUMB_WIDTH, THUMB_HEIGHT);
+#else
     ID3DTexture2D* pTexture = nullptr;
     if (Texture != nullptr)
     {
@@ -116,7 +134,8 @@ void EImageThumbnail::Update(ImTextureID& Texture)
         }
         R_CHK(pTexture->UnlockRect(0));
     }
-    
+#endif
+
 }
 
 

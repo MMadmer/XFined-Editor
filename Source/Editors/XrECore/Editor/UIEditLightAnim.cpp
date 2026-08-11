@@ -2,7 +2,15 @@
 #include "UIEditLightAnim.h"
 #include "LightAnimLibrary.h"
 #include "ui_main.h"
+#include "EDX11Utils.h"
 #define POINTER_HEIGHT 35
+#if defined(USE_DX11)
+// The two picture members of this form are typed for the D3D9 path
+// (ID3DTexture2D*), and ImGui binds a view, not a texture. The form is a
+// singleton, so the views it does bind live here; the destructor clears them.
+static ID3D11ShaderResourceView*	s_ItemView		= nullptr;
+static ID3D11ShaderResourceView*	s_PointerView	= nullptr;
+#endif
 UIEditLightAnim* UIEditLightAnim::Form = nullptr;
 UIEditLightAnim::UIEditLightAnim()
 {
@@ -24,10 +32,17 @@ UIEditLightAnim::UIEditLightAnim()
     m_PointerWeight = -1;
     m_PointerResize = true;
     m_PointerTexture = nullptr;
+    m_PointerRawImage = nullptr;
     m_PointerValue = 0;
     m_RenderAlpha = false;
+#if defined(USE_DX11)
+    // Nothing to create up front: D3D11 has no LockRect, so the swatch is built
+    // from pixels on every render and the member stays unused.
+    m_ItemTexture = nullptr;
+#else
      R_CHK(HW.pDevice->CreateTexture(32, 32, 1, D3DUSAGE_DYNAMIC, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &m_ItemTexture, 0));
-       
+#endif
+
 
     InitializeItems();
 }
@@ -45,8 +60,15 @@ UIEditLightAnim::~UIEditLightAnim()
             LALib.Reload();
         }
     }
+#if defined(USE_DX11)
+    if (s_ItemView)		{ s_ItemView->Release();	s_ItemView = nullptr; }
+    if (s_PointerView)	{ s_PointerView->Release();	s_PointerView = nullptr; }
+    // xr_alloc'ed, so it goes back through xr_free
+    if (m_PointerRawImage) { xr_free(m_PointerRawImage); }
+#else
     m_ItemTexture->Release();
     if (m_PointerTexture) { m_PointerTexture->Release(); xr_delete(m_PointerRawImage); }
+#endif
     if (m_Texture) { m_Texture->Release(); }
     m_TextureNull.destroy();
     xr_delete(m_Props);
@@ -109,7 +131,11 @@ void UIEditLightAnim::Draw()
 
                 }
                 RenderPointer();
+#if defined(USE_DX11)
+                ImGui::Image(s_PointerView, ImVec2(m_PointerWeight,POINTER_HEIGHT));
+#else
                 ImGui::Image(m_PointerTexture, ImVec2(m_PointerWeight,POINTER_HEIGHT));
+#endif
             }
             m_Props->Draw();
         }
@@ -232,7 +258,12 @@ void UIEditLightAnim::Draw()
        
             RenderItem();
         }
+#if defined(USE_DX11)
+        // surface_get() is the resource; ImGui needs the view over it
+        ImGui::Image(m_CurrentItem?s_ItemView:m_TextureNull->get_SRView(), ImGui::CalcItemSize(ImVec2(-1,-1), 32, 32));
+#else
         ImGui::Image(m_CurrentItem?m_ItemTexture:m_TextureNull->surface_get(), ImGui::CalcItemSize(ImVec2(-1,-1), 32, 32));
+#endif
        
  
     }
@@ -311,6 +342,20 @@ void UIEditLightAnim::RenderItem()
         if(!m_RenderAlpha)
             Color = subst_alpha(Color, 0xFF);
     }
+#if defined(USE_DX11)
+    // 32x32 of a single colour: rebuilding the immutable texture is cheaper than
+    // keeping a dynamic one around, but the old view has to be released here or
+    // the swatch leaks one per frame.
+    if (s_ItemView)
+    {
+        s_ItemView->Release();
+        s_ItemView = nullptr;
+    }
+    u32 pixels[32 * 32];
+    for (u32 i = 0; i < 32 * 32; i++)
+        pixels[i] = Color;
+    s_ItemView = DX11TextureFromPixels(pixels, 32, 32);
+#else
     {
         D3DLOCKED_RECT rect;
         R_CHK(m_ItemTexture->LockRect(0, &rect, 0, 0));
@@ -326,6 +371,7 @@ void UIEditLightAnim::RenderItem()
         }
         R_CHK(m_ItemTexture->UnlockRect(0));
     }
+#endif
 }
 
 void UIEditLightAnim::OnCreateKeyClick()
@@ -409,11 +455,18 @@ void UIEditLightAnim::RenderPointer()
 {
     if (m_PointerResize)
     {
+#if defined(USE_DX11)
+        // No persistent texture on this path - the view is built from the raw
+        // image at the end of the function, so only the scratch buffer resizes.
+        if (m_PointerRawImage) { xr_free(m_PointerRawImage); }
+        m_PointerRawImage = xr_alloc<u32>(POINTER_HEIGHT* m_PointerWeight);
+#else
         if (m_PointerTexture) {
             m_PointerTexture->Release(); xr_delete(m_PointerRawImage);
         }
         R_CHK(HW.pDevice->CreateTexture(m_PointerWeight, POINTER_HEIGHT, 1, D3DUSAGE_DYNAMIC, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &m_PointerTexture, 0));
         m_PointerRawImage = xr_alloc<u32>(POINTER_HEIGHT* m_PointerWeight);
+#endif
     }
     for (int x = 0; x < m_PointerWeight; x++)
     {
@@ -507,6 +560,17 @@ void UIEditLightAnim::RenderPointer()
             }
         }
     }
+#if defined(USE_DX11)
+    // The bar is redrawn into m_PointerRawImage every frame and an immutable
+    // texture cannot be mapped, so it becomes a fresh texture; drop the previous
+    // view first, otherwise the timeline leaks one per frame.
+    if (s_PointerView)
+    {
+        s_PointerView->Release();
+        s_PointerView = nullptr;
+    }
+    s_PointerView = DX11TextureFromPixels(m_PointerRawImage, u32(m_PointerWeight), POINTER_HEIGHT);
+#else
     {
         D3DLOCKED_RECT rect;
         R_CHK(m_PointerTexture->LockRect(0, &rect, 0, 0));
@@ -522,7 +586,8 @@ void UIEditLightAnim::RenderPointer()
         }
         R_CHK(m_PointerTexture->UnlockRect(0));
     }
-    
+#endif
+
 }
 
 void UIEditLightAnim::FillRectPointer(const ImVec4& rect, u32 color, bool plus_one)

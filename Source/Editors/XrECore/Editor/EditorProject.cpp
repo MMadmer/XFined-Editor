@@ -7,6 +7,12 @@
 #include "ui_main.h"
 #include "UI_MainCommand.h"
 #include "../XrEngine/XR_IOConsole.h"
+#if defined(USE_DX11)
+#include "EDX11Utils.h"
+// the png encoder itself is compiled into RedImageTool, which XrECore links -
+// this only pulls the declarations
+#include "StbImage\stb_image_write.h"
+#endif
 #include <shobjidl.h>
 #include <shellapi.h>
 #pragma comment(lib, "ole32.lib")
@@ -21,7 +27,12 @@ struct SRecentProject
 {
 	string_path				path;
 	string_path				name;
+#if defined(USE_DX11)
+	// the tile is drawn by ImGui, and ImGui binds a view, not a texture
+	ID3D11ShaderResourceView*	preview;
+#else
 	IDirect3DTexture9*		preview;
+#endif
 	bool					preview_tried;
 };
 
@@ -525,6 +536,22 @@ void EditorProject::SavePreview()
 	// viewport render target only — the full backbuffer drags the tool panels
 	// into the tile and looks like a screenshot of a spreadsheet
 	if (!UI || !UI->RT->pSurface) return;
+#if defined(USE_DX11)
+	// staging copy instead of GetRenderTargetData; rows come back top-down, which
+	// is the order the encoder wants
+	U32Vec	px;
+	u32		w = 0, h = 0;
+	if (DX11ReadbackBGRA(UI->RT->pSurface, px, w, h))
+	{
+		// stb writes bytes in memory order: swap R and B, force the tile opaque
+		for (u32& c : px)
+			c = 0xff000000 | (c & 0x0000ff00) | ((c & 0x00ff0000) >> 16) | ((c & 0x000000ff) << 16);
+
+		char p[MAX_PATH];
+		sprintf_s(p, "%s\\preview.png", s_Project);
+		stbi_write_png(p, int(w), int(h), 4, px.data(), int(w * sizeof(u32)));
+	}
+#else
 	IDirect3DSurface9* surf = 0;
 	if (SUCCEEDED(((IDirect3DTexture9*)UI->RT->pSurface)->GetSurfaceLevel(0, &surf)) && surf)
 	{
@@ -533,8 +560,18 @@ void EditorProject::SavePreview()
 		D3DXSaveSurfaceToFileA(p, D3DXIFF_PNG, surf, NULL, NULL);
 		surf->Release();
 	}
+#endif
 }
 
+#if defined(USE_DX11)
+static ID3D11ShaderResourceView* LoadPreview(const char* project)
+{
+	char p[MAX_PATH];
+	sprintf_s(p, "%s\\preview.png", project);
+	if (::GetFileAttributesA(p) == INVALID_FILE_ATTRIBUTES) return 0;
+	return DX11TextureFromFile(p);
+}
+#else
 static IDirect3DTexture9* LoadPreview(const char* project)
 {
 	char p[MAX_PATH];
@@ -546,6 +583,7 @@ static IDirect3DTexture9* LoadPreview(const char* project)
 		return 0;
 	return tex;
 }
+#endif
 
 void EditorProject::ReleasePreviews()
 {

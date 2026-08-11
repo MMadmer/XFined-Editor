@@ -176,6 +176,7 @@ namespace
 	}
 
 	//--------------------------------------------------------------------------
+#if !defined(USE_DX11)
 	bool ReadBackThumbnail(IDirect3DSurface9* src, IDirect3DSurface9* sys, U32Vec& out)
 	{
 		if (FAILED(HW.pDevice->GetRenderTargetData(src,sys)))	return false;
@@ -202,6 +203,7 @@ namespace
 		for (u32 i=0; i<out.size(); i++)	out[i] |= 0xff000000;
 		return true;
 	}
+#endif	//	!USE_DX11
 
 	//--------------------------------------------------------------------------
 	// Draws either an engine visual or a library object - everything around the
@@ -257,6 +259,9 @@ namespace
 		if (!target.create(w, h))	return false;
 		target.bind();
 		target.clear(s_BackgroundColor);
+		// RCache still holds whatever views the caller bound
+		RCache.set_RT(target.rtv);
+		RCache.set_ZB(target.dsv);
 
 		bool drawn = false;
 		{

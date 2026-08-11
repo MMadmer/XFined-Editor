@@ -1,5 +1,9 @@
 #include "stdafx.h"
+#if defined(USE_DX11)
+#include "imgui_impl_dx11.h"
+#else
 #include "imgui_impl_dx9.h"
+#endif
 #include "imgui_impl_win32.h"
 #include "imgui_internal.h"	// DockBuilder* for the default layout
 #include "spectrum.h"
@@ -104,7 +108,11 @@ inline void Style()
     }
 #endif
 }
+#if defined(USE_DX11)
+void XrUIManager::Initialize(HWND hWnd, ID3D11Device* device, ID3D11DeviceContext* context, const char* ini_path)
+#else
 void XrUIManager::Initialize(HWND hWnd, IDirect3DDevice9* device, const char* ini_path)
+#endif
 {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -130,26 +138,42 @@ void XrUIManager::Initialize(HWND hWnd, IDirect3DDevice9* device, const char* in
     if (dpi_scale != 1.f)
         ImGui::GetStyle().ScaleAllSizes(dpi_scale);
     ImGui_ImplWin32_Init(hWnd);
+    #if defined(USE_DX11)
+    ImGui_ImplDX11_Init(device, context);
+#else
     ImGui_ImplDX9_Init(device);
+#endif
 
 }
 
 void XrUIManager::Destroy()
 {
+    #if defined(USE_DX11)
+    ImGui_ImplDX11_Shutdown();
+#else
     ImGui_ImplDX9_Shutdown();
+#endif
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
 }
 
 void XrUIManager::ResetBegin()
 {
+    #if defined(USE_DX11)
+    ImGui_ImplDX11_InvalidateDeviceObjects();
+#else
     ImGui_ImplDX9_InvalidateDeviceObjects();
+#endif
 
 }
 
 void XrUIManager::ResetEnd()
 {
+    #if defined(USE_DX11)
+    ImGui_ImplDX11_CreateDeviceObjects();
+#else
     ImGui_ImplDX9_CreateDeviceObjects();
+#endif
 }
 
 
@@ -294,7 +318,11 @@ void XrUIManager::DockLayoutEnd()
 
 void XrUIManager::Draw()
 {
+    #if defined(USE_DX11)
+    ImGui_ImplDX11_NewFrame();
+#else
     ImGui_ImplDX9_NewFrame();
+#endif
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
    // ImGui::DockSpaceOverViewport();
@@ -340,7 +368,11 @@ void XrUIManager::Draw()
     OnDrawUI();
     ImGui::EndFrame();
     ImGui::Render();
+    #if defined(USE_DX11)
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+#else
     ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+#endif
 	for (size_t i = m_UIArray.size(); i > 0; i--)
 	{
 		if (m_UIArray[i - 1]->IsClosed())

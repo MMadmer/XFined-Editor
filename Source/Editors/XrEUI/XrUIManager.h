@@ -21,7 +21,12 @@ public:
 	virtual ~XrUIManager();
 
 	LRESULT WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+#if defined(USE_DX11)
+	// D3D11 splits device and context; the ImGui backend needs both
+	void Initialize(HWND hWnd, ID3D11Device* device, ID3D11DeviceContext* context, const char* ini_path);
+#else
 	void Initialize(HWND hWnd, IDirect3DDevice9* device,const char*ini_path);
+#endif
 	void Destroy();
 
 	void ResetBegin();

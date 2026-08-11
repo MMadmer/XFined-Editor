@@ -15,6 +15,7 @@
 #include	"luabind/return_reference_to_policy.hpp"
 
 #include	"../Private/dxRenderDeviceRender.h"
+#include	"../../XrCore/doug_lea_allocator.h"
 
 
 
@@ -482,13 +483,13 @@ ShaderElement*		CBlender_Compile::_lua_Compile	(LPCSTR namesp, LPCSTR name)
 	LPCSTR				t_0		= *L_textures[0]			? *L_textures[0] : "null";
 	LPCSTR				t_1		= (L_textures.size() > 1)	? *L_textures[1] : "null";
 	LPCSTR				t_d		= detail_texture			? detail_texture : "null" ;
-	lua_State*			LSVM	= dxRenderDeviceRender::Instance().Resources->LSVM;
+	lua_State*			LSVM	= DEV->LSVM;
 	object				shader	= get_globals(LSVM)[namesp];
 	functor<void>		element	= object_cast<functor<void> >(shader[name]);
 	bool				bFirstPass = false;
 	adopt_compiler		ac		= adopt_compiler(this, bFirstPass);
 	element						(ac,t_0,t_1,t_d);
 	r_End				();
-	ShaderElement*	_r	= dxRenderDeviceRender::Instance().Resources->_CreateElement(E);
+	ShaderElement*	_r	= DEV->_CreateElement(E);
 	return			_r;
 }

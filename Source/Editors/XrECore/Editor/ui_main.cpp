@@ -433,12 +433,25 @@ void TUI::Redraw()
             {
                
                 m_Flags.set(flRedraw, FALSE);
+#if defined(USE_DX10) || defined(USE_DX11)
+                // a depth target carries its own DSV, pRT stays null for it
+                RCache.set_RT(RT->pRT);
+                RCache.set_ZB(ZB->pZRT);
+                EDevice->Statistic->RenderDUMP_RT.Begin();
+                {
+                    Fcolor cc;
+                    cc.set(EPrefs ? EPrefs->scene_clear_color : 0x0);
+                    HW.pContext->ClearRenderTargetView(RT->pRT, &cc.r);
+                    HW.pContext->ClearDepthStencilView(ZB->pZRT, D3D_CLEAR_DEPTH, 1.f, 0);
+                }
+#else
                 RCache.set_RT(RT->pRT);
                 RCache.set_ZB(ZB->pRT);
                 EDevice->Statistic->RenderDUMP_RT.Begin();
                 {
                     CHK_DX(HW.pDevice->Clear(0, 0, D3DCLEAR_ZBUFFER | D3DCLEAR_TARGET, EPrefs ? EPrefs->scene_clear_color : 0x0, 1, 0));
                 }
+#endif
                 EDevice->UpdateView();
                 EDevice->ResetMaterial();
 

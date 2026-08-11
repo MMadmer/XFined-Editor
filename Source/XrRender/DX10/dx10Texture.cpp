@@ -133,7 +133,11 @@ void				TW_Save	(ID3DTexture2D* T, LPCSTR name, LPCSTR prefix, LPCSTR postfix)
 		if ('\\'==fn[it])	fn[it]	= '_';
 	string256		fn2;	strconcat	(sizeof(fn2),fn2,"debug\\",fn,".dds");
 	Log						("* debug texture save: ",fn2);
-#ifdef USE_DX11
+#if defined(REDITOR)
+	// D3DX11 is a dead SDK component and the editor does not ship it. This is a
+	// debug-only dump path, so it just reports instead of pulling the library in.
+	Log						("~ texture dump is not available in the editor");
+#elif defined(USE_DX11)
 	R_CHK					(D3DX11SaveTextureToFile(HW.pContext, T, D3DX11_IFF_DDS, fn2));
 #else
 	R_CHK					(D3DX10SaveTextureToFile(T, D3DX10_IFF_DDS, fn2));
@@ -350,18 +354,18 @@ DXGI_FORMAT Convert(RedImage&Image)
 		break;
 	case RedTexturePixelFormat::BC6:
 #ifndef USE_DX11
-		R_ASSERT(!"BC6 DX10 не поддерживает");
+		R_ASSERT(!"BC6 DX10 пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ");
 #endif
 		return DXGI_FORMAT::DXGI_FORMAT_BC6H_SF16;
 		break;
 	case RedTexturePixelFormat::BC7:
 #ifndef USE_DX11
-		R_ASSERT(!"BC7 DX10 не поддерживает");
+		R_ASSERT(!"BC7 DX10 пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ");
 #endif
 		return DXGI_FORMAT::DXGI_FORMAT_BC7_UNORM;
 		break;
 	default:
-		R_ASSERT(!"Неизвестный формат текстуры");
+		R_ASSERT(!"пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ");
 		return DXGI_FORMAT::DXGI_FORMAT_UNKNOWN;
 		break;
 	}

@@ -125,7 +125,12 @@ void UIObjectTool::Draw()
     if (ImGui::TreeNode("Preview"))
     {
         ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+#if defined(USE_DX11)
+        // ImGui binds a shader resource view, not the texture object behind it
+        ImGui::Image(m_RealTexture ? m_RealTexture : m_TextureNull->get_SRView(), ImVec2(128, 128));
+#else
         ImGui::Image(m_RealTexture? m_RealTexture:( m_TextureNull->surface_get()), ImVec2(128, 128));
+#endif
         ImGui::SameLine();
         ImGui::BeginChild("Props", ImVec2(0,128));
         m_Props->Draw();

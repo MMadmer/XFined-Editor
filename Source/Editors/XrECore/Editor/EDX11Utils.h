@@ -56,8 +56,22 @@ struct ECORE_API SDX11TargetGuard
 // `flip` mirrors vertically, which the old screenshot path did implicitly.
 ECORE_API bool	DX11ReadbackToPixels(ID3D11Texture2D* src, u32 w, u32 h, U32Vec& out, bool flip);
 
+// Same readback, but it takes the size from the texture and normalises the
+// channel order to B8G8R8A8 - the layout every pixel buffer in the editor uses
+// (thumbnails, the old D3DFMT_X8R8G8B8 surfaces). Rows stay top-down, exactly
+// what the D3D9 GetRenderTargetData path handed to the png encoder.
+ECORE_API bool	DX11ReadbackBGRA(ID3D11Texture2D* src, U32Vec& out, u32& w, u32& h);
+
 // Uploads a pixel block into a fresh immutable texture + SRV. Caller owns the
 // view and releases it; the texture is released here once the view holds it.
 ECORE_API ID3D11ShaderResourceView* DX11TextureFromPixels(const u32* pixels, u32 w, u32 h);
+
+// Decodes a picture (DDS incl. BC1-BC7, plus TGA/PNG/JPG/BMP through the stb
+// fallback) into a texture + SRV - the D3DX9 replacement for the editor's
+// "show me this file" paths. It lives here because RedImageTool is linked
+// privately into XrECore; LevelEditor reaches the decoder only through this
+// export. Caller owns the returned view.
+ECORE_API ID3D11ShaderResourceView* DX11TextureFromFile		(LPCSTR full_path);
+ECORE_API ID3D11ShaderResourceView* DX11TextureFromMemory	(const void* data, u32 size);
 
 #endif	//	USE_DX11

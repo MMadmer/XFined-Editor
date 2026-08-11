@@ -3,6 +3,9 @@
 //----------------------------------------------------
 
 #include "stdafx.h"
+#if defined(USE_DX10) || defined(USE_DX11)
+#include "../../../XrRender/DX10/dx10BufferUtils.h"
+#endif
 #pragma hdrstop
 
 //#include "EditMeshVLight.h"
@@ -81,12 +84,21 @@ void CEditableMesh::GenerateRenderBuffers()
             int buf_size = D3DXGetFVFVertexSize(_S->_FVF()) * rb.dwNumVertex;
             R_ASSERT2(buf_size, "Empty buffer size or bad FVF.");
             u8* bytes = 0;
-            IDirect3DVertexBuffer9* pVB = 0;
+            ID3DVertexBuffer* pVB = 0;
+#if defined(USE_DX10) || defined(USE_DX11)
+            // immutable buffer: fill a scratch block first, then hand it over
+            u8* scratch = xr_alloc<u8>(buf_size);
+            FillRenderBuffer(face_lst, start_face, num_face, _S, scratch);
+            R_CHK(dx10BufferUtils::CreateVertexBuffer(&pVB, scratch, buf_size));
+            xr_free(scratch);
+            rb.pGeom.create(_S->_FVF(), pVB, 0);
+#else
             R_CHK(HW.pDevice->CreateVertexBuffer(buf_size, D3DUSAGE_WRITEONLY, 0, D3DPOOL_MANAGED, &pVB, 0));
             rb.pGeom.create(_S->_FVF(), pVB, 0);
             R_CHK(pVB->Lock(0, 0, (LPVOID*)&bytes, 0));
             FillRenderBuffer(face_lst, start_face, num_face, _S, bytes);
             pVB->Unlock();
+#endif
 
             start_face += (_S->m_Flags.is(CSurface::sf2Sided)) ? rb.dwNumVertex / 6 : rb.dwNumVertex / 3;
         }

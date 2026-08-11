@@ -185,7 +185,11 @@ bool CEditorRenderDevice::Create()
 		xr_strcat			(ini_name, "_imgui.ini");
 		FS.update_path(ini_path, "$local_root$", ini_name);
 		if (!FS.exist(ini_path))UI->ResetUI();
+#if defined(USE_DX11)
+		UI->Initialize(m_hWnd, HW.pDevice, HW.pContext, ini_path);
+#else
 		UI->Initialize(m_hWnd, HW.pDevice, ini_path);
+#endif
 	}
 	
 	// after creation
@@ -233,10 +237,14 @@ void CEditorRenderDevice::Destroy(){
 void CEditorRenderDevice::_SetupStates()
 {
 	HW.Caps.Update();
+#if !defined(USE_DX10) && !defined(USE_DX11)
 	for (u32 i=0; i<HW.Caps.raster.dwStages; i++){
 		float fBias = -1.f;
 		CHK_DX(HW.pDevice->SetSamplerState( i, D3DSAMP_MIPMAPLODBIAS, *((LPDWORD) (&fBias))));
 	}
+#endif
+	// SetRS/SetSS are editor wrappers - under D3D11 they only record state that
+	// the fixed-function emulation later folds into the shader constants
 	EDevice->SetRS(D3DRS_DITHERENABLE,	TRUE				);
     EDevice->SetRS(D3DRS_COLORVERTEX,		TRUE				);
     EDevice->SetRS(D3DRS_STENCILENABLE,	FALSE				);
@@ -325,11 +333,19 @@ void CEditorRenderDevice::Reset  	(bool )
     Resources->reset_begin	();
 	UI->ResetBegin();
     Memory.mem_compact		();
+#if defined(USE_DX10) || defined(USE_DX11)
+    HW.m_ChainDesc.BufferDesc.Width		= dwRealWidth;
+    HW.m_ChainDesc.BufferDesc.Height	= dwRealHeight;
+    HW.Reset				(m_hWnd);
+    dwRealWidth					= HW.m_ChainDesc.BufferDesc.Width;
+    dwRealHeight				= HW.m_ChainDesc.BufferDesc.Height;
+#else
     HW.DevPP.BackBufferWidth= dwRealWidth;
     HW.DevPP.BackBufferHeight= dwRealHeight;
     HW.Reset				(m_hWnd);
     dwRealWidth					= HW.DevPP.BackBufferWidth;
     dwRealHeight				= HW.DevPP.BackBufferHeight;
+#endif
 //		fWidth_2			= float(dwRealWidth/2);
 //		fHeight_2			= float(dwRealHeight/2);
     Resources->reset_end	();
@@ -348,6 +364,22 @@ bool CEditorRenderDevice::Begin	()
 	mView_saved = mView;
 	vCameraPosition_saved = vCameraPosition;
 	HW.Validate		();
+#if defined(USE_DX10) || defined(USE_DX11)
+	// D3D11 has no lost-device protocol and no scene begin/end: bind the
+	// backbuffer for this frame and clear it directly.
+    VERIFY 					(FALSE==g_bRendering);
+	RCache.set_RT			(HW.pBaseRT);
+	RCache.set_ZB			(HW.pBaseZB);
+
+	u32			clr			= EPrefs ? EPrefs->scene_clear_color : 0x0;
+	// Fcolor lays out r,g,b,a as four consecutive floats - exactly the
+	// FLOAT[4] ClearRenderTargetView wants
+	Fcolor		cc4;
+	cc4.set					(clr);
+	HW.pContext->ClearRenderTargetView	(HW.pBaseRT, &cc4.r);
+	HW.pContext->ClearDepthStencilView	(HW.pBaseZB,
+		D3D_CLEAR_DEPTH | (HW.Caps.bStencil ? D3D_CLEAR_STENCIL : 0), 1.0f, 0);
+#else
 	HRESULT	_hr		= HW.pDevice->TestCooperativeLevel();
     if (FAILED(_hr))
 	{
@@ -371,6 +403,7 @@ bool CEditorRenderDevice::Begin	()
 		(HW.Caps.bStencil?D3DCLEAR_STENCIL:0),
 		EPrefs?EPrefs->scene_clear_color:0x0,1,0
 		));
+#endif
 	RCache.OnFrameBegin		();
 	g_bRendering = 	TRUE;
 	return		TRUE;
@@ -384,9 +417,13 @@ void CEditorRenderDevice::End()
 	g_bRendering = 	FALSE;
 	// end scene
 	RCache.OnFrameEnd();
+#if defined(USE_DX10) || defined(USE_DX11)
+	HW.m_pSwapChain->Present( 0, 0 );
+#else
     CHK_DX(HW.pDevice->EndScene());
 
 	CHK_DX(HW.pDevice->Present( NULL, NULL, NULL, NULL ));
+#endif
 
 }
 
@@ -427,6 +464,23 @@ void CEditorRenderDevice::FrameMove()
 	seqFrame.Process(rp_Frame);
 }
 
+#if defined(USE_DX11)
+void CEditorRenderDevice::ApplyFFConstants()
+{
+	// TEXTUREFACTOR used to tint fixed-function output through a texture stage;
+	// the editor shaders take it as a uniform instead. Named lookups miss
+	// silently when a shader has no such constant, so this is safe for all of them.
+	const u32 tf	= ff.render_state[u32(D3DRS_TEXTUREFACTOR) & (SEditorFixedFunc::RS_MAX-1)];
+	Fcolor c;		c.set(tf);
+	RCache.set_c	("tfactor", c.r, c.g, c.b, c.a);
+
+	// Pre-transformed (POSITIONT) geometry has no fixed-function T&L left to
+	// divide by the viewport, so the vertex shader does it from these.
+	const float w	= float(dwWidth), h = float(dwHeight);
+	RCache.set_c	("screen_res", w, h, w>0.f?1.f/w:0.f, h>0.f?1.f/h:0.f);
+}
+#endif
+
 void CEditorRenderDevice::DP(D3DPRIMITIVETYPE pt, ref_geom geom, u32 vBase, u32 pc)
 {
 	ref_shader S 			= m_CurrentShader?m_CurrentShader:m_WireShader;
@@ -434,6 +488,9 @@ void CEditorRenderDevice::DP(D3DPRIMITIVETYPE pt, ref_geom geom, u32 vBase, u32 
     RCache.set_Geometry		(geom);
     for (u32 dwPass = 0; dwPass<dwRequired; dwPass++){
     	RCache.set_Shader	(S,dwPass);
+#if defined(USE_DX11)
+		ApplyFFConstants	();
+#endif
 		RCache.Render		(pt,vBase,pc);
     }
 }
@@ -445,6 +502,9 @@ void CEditorRenderDevice::DIP(D3DPRIMITIVETYPE pt, ref_geom geom, u32 baseV, u32
     RCache.set_Geometry		(geom);
     for (u32 dwPass = 0; dwPass<dwRequired; dwPass++){
     	RCache.set_Shader	(S,dwPass);
+#if defined(USE_DX11)
+		ApplyFFConstants	();
+#endif
 		RCache.Render		(pt,baseV,startV,countV,startI,PC);
     }
 }
@@ -538,11 +598,20 @@ LPCSTR GetActiveGpuName()
 	static string256 name = {};
 	if (!name[0])
 	{
+#if defined(USE_DX10) || defined(USE_DX11)
+		// DXGI reports the description as wide chars, so it has to be narrowed
+		DXGI_ADAPTER_DESC desc = {};
+		if (HW.m_pAdapter && SUCCEEDED(HW.m_pAdapter->GetDesc(&desc)))
+			::WideCharToMultiByte(CP_ACP, 0, desc.Description, -1, name, sizeof(name), NULL, NULL);
+		else
+			xr_strcpy(name, "unknown");
+#else
 		D3DADAPTER_IDENTIFIER9 id = {};
 		if (HW.pD3D && SUCCEEDED(HW.pD3D->GetAdapterIdentifier(HW.DevAdapter, 0, &id)))
 			xr_strcpy(name, id.Description);
 		else
 			xr_strcpy(name, "unknown");
+#endif
 	}
 	return name;
 }

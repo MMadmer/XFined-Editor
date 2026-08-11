@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "UIMinimapEditorForm.h"
+#include "EDX11Utils.h"
 UIMinimapEditorForm*    UIMinimapEditorForm::Form = nullptr;
 bool                    UIMinimapEditorForm::bOpen = false;
 UIMinimapEditorForm::UIMinimapEditorForm()
@@ -23,7 +24,19 @@ void UIMinimapEditorForm::Draw()
     if (m_Texture == nullptr)
     {
         u32 mem = 0;
+#if defined(USE_DX11)
+        // texture_load hands back the resource; ImGui binds a view, so make one
+        // and drop the resource - the view keeps its own reference to it.
+        if (ID3DBaseTexture* res = RImplementation.texture_load("ed\\ed_nodata", mem))
+        {
+            ID3D11ShaderResourceView* view = nullptr;
+            if (SUCCEEDED(HW.pDevice->CreateShaderResourceView(res, nullptr, &view)))
+                m_Texture = view;
+            _RELEASE(res);
+        }
+#else
         m_Texture = RImplementation.texture_load("ed\\ed_nodata", mem);
+#endif
     }
     ImGui::Image(m_Texture, ImVec2(330, 530));
     if (ImGui::Button("Load"))LoadClick();
@@ -72,7 +85,13 @@ void UIMinimapEditorForm::LoadClick()
     {
         if (Stbi_Load(fn.c_str(), m_ImageData, m_ImageW, m_ImageH, m_ImageA))
         {
+            // the previous picture is handed to m_TextureRemove and released on
+            // the next Draw, so replacing m_Texture here does not leak
             m_TextureRemove = m_Texture;
+#if defined(USE_DX11)
+            // rows go out in load order, exactly like the D3D9 copy below did
+            m_Texture = DX11TextureFromPixels(m_ImageData.data(), m_ImageW, m_ImageH);
+#else
             ID3DTexture2D* pTexture = nullptr;
             {
                 R_CHK(HW.pDevice->CreateTexture(m_ImageW, m_ImageH, 1, 0, D3DFMT_X8R8G8B8, D3DPOOL_MANAGED, &pTexture, 0));
@@ -90,6 +109,7 @@ void UIMinimapEditorForm::LoadClick()
                     R_CHK(pTexture->UnlockRect(0));
                 }
             }
+#endif
             /*LPCSTR _mark = "_[";
             if (fn.find(_mark) != fn.npos)
             {

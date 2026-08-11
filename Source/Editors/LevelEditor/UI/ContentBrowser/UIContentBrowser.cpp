@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "..\..\..\XrECore\Editor\EditorGameContent.h"
 #include "..\..\..\XrECore\Editor\EThumbnailVisual.h"
+#include "..\..\..\XrECore\Editor\EDX11Utils.h"
 
 // image formats the thumbnail path can decode directly
 static bool IsImageExt(LPCSTR name)
@@ -143,7 +144,12 @@ void UIContentBrowser::DropCache()
 {
 	for (ThumbMapIt it = m_Thumbs.begin(); it != m_Thumbs.end(); ++it)
 		if (it->second.tex)
+#if defined(USE_DX11)
+			// ImTextureID is already the view type here - no cast needed
+			it->second.tex->Release();
+#else
 			((IDirect3DBaseTexture9*)it->second.tex)->Release();
+#endif
 	m_Thumbs.clear();
 }
 
@@ -373,11 +379,15 @@ ImTextureID UIContentBrowser::GetThumb(LPCSTR name)
 		u8* bytes = (idx >= 0) ? EditorGameContent::ReadBytes(idx, sz) : 0;
 		if (bytes && sz)
 		{
+#if defined(USE_DX11)
+			tex = DX11TextureFromMemory(bytes, sz);
+#else
 			IDirect3DTexture9* t = 0;
 			if (SUCCEEDED(D3DXCreateTextureFromFileInMemoryEx(HW.pDevice, bytes, sz,
 				D3DX_DEFAULT, D3DX_DEFAULT, 1, 0, D3DFMT_X8R8G8B8, D3DPOOL_MANAGED,
 				D3DX_FILTER_LINEAR, D3DX_FILTER_NONE, 0, NULL, NULL, &t)))
 				tex = (ImTextureID)t;
+#endif
 		}
 		EditorGameContent::FreeBytes(bytes);
 		m_ThumbsThisFrame++;
@@ -386,13 +396,17 @@ ImTextureID UIContentBrowser::GetThumb(LPCSTR name)
 	{
 		if (IsImageExt(name))
 		{
-			// project files: direct image load for the formats D3DX understands
+			// project files: direct image load for the formats the decoder knows
 			char abs[MAX_PATH];
 			sprintf_s(abs, "%s\\%s", EditorProject::Root(), name);
+#if defined(USE_DX11)
+			tex = DX11TextureFromFile(abs);
+#else
 			IDirect3DTexture9* t = 0;
 			if (SUCCEEDED(D3DXCreateTextureFromFileExA(HW.pDevice, abs, D3DX_DEFAULT, D3DX_DEFAULT, 1, 0,
 				D3DFMT_X8R8G8B8, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_NONE, 0, NULL, NULL, &t)))
 				tex = (ImTextureID)t;
+#endif
 		}
 	}
 	else
@@ -425,7 +439,11 @@ ImTextureID UIContentBrowser::GetThumb(LPCSTR name)
 			if (i->second.last_used <= oldest) { oldest = i->second.last_used; victim = i; }
 		if (victim != m_Thumbs.end())
 		{
+#if defined(USE_DX11)
+			if (victim->second.tex) victim->second.tex->Release();
+#else
 			if (victim->second.tex) ((IDirect3DBaseTexture9*)victim->second.tex)->Release();
+#endif
 			m_Thumbs.erase(victim);
 		}
 	}

@@ -27,7 +27,11 @@ void UIDOShuffle::Draw()
 	ImGui::Columns(2);
 	ImGui::BeginChild("Left");
 	{
+#if defined(USE_DX11)
+		VERIFY(m_TextureNull->get_SRView());
+#else
 		VERIFY(m_TextureNull->surface_get());
+#endif
 		if (m_RealTexture != m_Texture)
 		{
 			if (m_RealTexture)m_RealTexture->Release();
@@ -36,7 +40,12 @@ void UIDOShuffle::Draw()
 
 
 		}
+#if defined(USE_DX11)
+		// ImGui binds a shader resource view, not the texture object behind it
+		ImGui::Image(m_RealTexture ? m_RealTexture : m_TextureNull->get_SRView(), ImVec2(128, 128));
+#else
 		ImGui::Image(m_RealTexture ? m_RealTexture :m_TextureNull->surface_get(), ImVec2(128, 128));
+#endif
 
 		{
 			int selected = m_list_selected;

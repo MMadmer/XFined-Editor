@@ -3,6 +3,12 @@
 #include "EditorProject.h"
 #include "UI_ToolsCustom.h"
 #include "ui_main.h"
+#if defined(USE_DX11)
+#include "EDX11Utils.h"
+// the png encoder itself is compiled into RedImageTool, which XrECore links -
+// this only pulls the declarations
+#include "StbImage\stb_image_write.h"
+#endif
 // windows.h in the PCH already pulled the legacy winsock.h — its 1.1 API is
 // all we need, and including winsock2.h on top would clash with it
 #pragma comment(lib, "ws2_32.lib")
@@ -78,6 +84,48 @@ static void JsonEscapePath(const char* src, char* dst, u32 dst_size)
 	dst[o] = 0;
 }
 
+#if defined(USE_DX11)
+// stb hands the encoded stream over in chunks
+static void PngSink(void* ctx, void* data, int size)
+{
+	xr_vector<u8>* buf = (xr_vector<u8>*)ctx;
+	buf->insert(buf->end(), (const u8*)data, (const u8*)data + size);
+}
+
+// Encodes a B8G8R8A8 block - the layout the readback and the thumbnail renderers
+// produce - as a base64 png. Row order is left alone: the D3D9 encoder was fed
+// top-down rows as well.
+static bool PixelsToPngBase64(const u32* px, u32 w, u32 h, xr_string& out)
+{
+	if (!px || !w || !h)	return false;
+
+	// stb writes bytes in memory order, so R and B trade places; alpha is forced
+	// opaque because the old X8R8G8B8 surfaces carried no meaningful alpha either
+	U32Vec rgba(size_t(w) * size_t(h));
+	for (size_t i = 0, n = rgba.size(); i < n; ++i)
+	{
+		const u32 c = px[i];
+		rgba[i] = 0xff000000 | (c & 0x0000ff00) | ((c & 0x00ff0000) >> 16) | ((c & 0x000000ff) << 16);
+	}
+
+	xr_vector<u8> png;
+	if (!stbi_write_png_to_func(&PngSink, &png, int(w), int(h), 4, rgba.data(), int(w * sizeof(u32))) || png.empty())
+		return false;
+
+	Base64(png.data(), u32(png.size()), out);
+	return true;
+}
+
+// Reads a texture back and encodes it. MSAA targets cannot be copied straight
+// into a staging texture, but nothing in the editor renders previews multisampled.
+static bool TextureToPngBase64_DX11(ID3D11Texture2D* tex, xr_string& out)
+{
+	U32Vec	px;
+	u32		w = 0, h = 0;
+	if (!DX11ReadbackBGRA(tex, px, w, h))	return false;
+	return PixelsToPngBase64(px.data(), w, h, out);
+}
+#else
 static bool SurfaceToPngBase64(IDirect3DSurface9* surf, xr_string& out)
 {
 	ID3DXBuffer* buf = 0;
@@ -87,9 +135,30 @@ static bool SurfaceToPngBase64(IDirect3DSurface9* surf, xr_string& out)
 	buf->Release();
 	return true;
 }
+#endif
 
 bool XFinedMCP::TextureToPngBase64(void* texture, xr_string& out)
 {
+#if defined(USE_DX11)
+	// callers hand over what ImGui draws, i.e. a shader resource view - walk back
+	// to the texture behind it
+	ID3D11ShaderResourceView* view = (ID3D11ShaderResourceView*)texture;
+	if (!view) return false;
+
+	ID3D11Resource* res = 0;
+	view->GetResource(&res);
+	if (!res) return false;
+
+	ID3D11Texture2D* tex = 0;
+	bool ok = false;
+	if (SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&tex)) && tex)
+	{
+		ok = TextureToPngBase64_DX11(tex, out);
+		_RELEASE(tex);
+	}
+	_RELEASE(res);
+	return ok;
+#else
 	IDirect3DTexture9* tex = (IDirect3DTexture9*)texture;
 	if (!tex) return false;
 	IDirect3DSurface9* surf = 0;
@@ -98,6 +167,7 @@ bool XFinedMCP::TextureToPngBase64(void* texture, xr_string& out)
 	const bool ok = SurfaceToPngBase64(surf, out);
 	surf->Release();
 	return ok;
+#endif
 }
 
 void* XFinedMCP::PixelsToTexture(const U32Vec& pixels)
@@ -105,6 +175,11 @@ void* XFinedMCP::PixelsToTexture(const U32Vec& pixels)
 	if (pixels.size() != u32(THUMB_WIDTH) * u32(THUMB_HEIGHT))
 		return 0;
 
+#if defined(USE_DX11)
+	// what the caller wants is something ImGui can draw and Release, and that is
+	// a view; the helper drops the texture as soon as the view owns it
+	return DX11TextureFromPixels(pixels.data(), THUMB_WIDTH, THUMB_HEIGHT);
+#else
 	IDirect3DTexture9* tex = 0;
 	if (FAILED(HW.pDevice->CreateTexture(THUMB_WIDTH, THUMB_HEIGHT, 1, 0, D3DFMT_X8R8G8B8,
 										 D3DPOOL_MANAGED, &tex, 0)) || !tex)
@@ -121,6 +196,7 @@ void* XFinedMCP::PixelsToTexture(const U32Vec& pixels)
 		memcpy((u8*)rect.pBits + rect.Pitch * y, &pixels[u32(y) * THUMB_WIDTH], THUMB_WIDTH * sizeof(u32));
 	tex->UnlockRect(0);
 	return tex;
+#endif
 }
 
 // captures the editor window through GDI — works even when fully covered
@@ -151,6 +227,11 @@ static bool WindowToPngBase64(HWND wnd, xr_string& out)
 		::SelectObject(mem_dc, old);
 		if (ok)
 		{
+#if defined(USE_DX11)
+			// the DIB is already 32bpp B8G8R8X8 in top-down rows, which is what
+			// the encoder takes - the D3D detour existed only for D3DX
+			ok = PixelsToPngBase64((const u32*)bits, u32(w), u32(h), out);
+#else
 			// wrap the pixels into a D3D surface so D3DX encodes the png
 			IDirect3DSurface9* surf = 0;
 			if (SUCCEEDED(HW.pDevice->CreateOffscreenPlainSurface(w, h, D3DFMT_X8R8G8B8, D3DPOOL_SYSTEMMEM, &surf, NULL)) && surf)
@@ -167,6 +248,7 @@ static bool WindowToPngBase64(HWND wnd, xr_string& out)
 				surf->Release();
 			}
 			else ok = false;
+#endif
 		}
 	}
 	if (bmp) ::DeleteObject(bmp);
@@ -204,12 +286,18 @@ static void Execute(SMCPRequest& r)
 		bool ok = false;
 		if (UI && UI->RT->pSurface)
 		{
+#if defined(USE_DX11)
+			// no surface to fetch under D3D11 - the render target texture itself
+			// is what gets copied into a staging texture and mapped
+			ok = TextureToPngBase64_DX11(UI->RT->pSurface, b64);
+#else
 			IDirect3DSurface9* surf = 0;
 			if (SUCCEEDED(((IDirect3DTexture9*)UI->RT->pSurface)->GetSurfaceLevel(0, &surf)) && surf)
 			{
 				ok = SurfaceToPngBase64(surf, b64);
 				surf->Release();
 			}
+#endif
 		}
 		if (ok)	{ r.response = "{\"ok\":true,\"png_base64\":\""; r.response += b64; r.response += "\"}"; }
 		else	r.response = "{\"ok\":false,\"error\":\"viewport RT unavailable\"}";

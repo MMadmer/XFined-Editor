@@ -2,7 +2,10 @@
 #define	dx10StateManager_included
 #pragma once
 
-class dx10StateManager
+// ECORE_API: in the editor the render layer lives in XrECore.dll while
+// LevelEditor.exe inlines backend calls that reach this cache - both must talk
+// to the SAME instance. Expands to nothing outside the editor build.
+class ECORE_API dx10StateManager
 {
 public:
 	dx10StateManager();
@@ -90,6 +93,6 @@ private:
    UINT                 m_uiSampleMask;
 };
 
-extern	dx10StateManager	StateManager;
+extern	ECORE_API dx10StateManager	StateManager;
 
 #endif	//	dx10StateManager_included

@@ -10,6 +10,9 @@
 #include "ParticleGroup.h"
 #include "defines.h"
 #include "EditObject.h"
+#if defined(USE_DX11)
+#include "EDX11Utils.h"
+#endif
 ref_sound* choose_snd;
 
 namespace ChoseEvents
@@ -186,7 +189,19 @@ namespace ChoseEvents
         CLAItem* item = LALib.FindItem(name);
         if (item)
         {
-
+#if defined(USE_DX11)
+            // The swatch is one flat colour that moves with the animation. An
+            // immutable texture cannot be re-mapped, so it is rebuilt each call;
+            // the old view must go first or the preview leaks one per frame.
+            if (Texture)
+            {
+                Texture->Release();
+                Texture = nullptr;
+            }
+            const u32 clr = subst_alpha(item->CalculateBGR(EDevice->fTimeGlobal, frame), 0xFF);
+            U32Vec pixels(THUMB_SIZE, clr);
+            Texture = DX11TextureFromPixels(pixels.data(), THUMB_WIDTH, THUMB_HEIGHT);
+#else
             ID3DTexture2D* pTexture = nullptr;
             if (Texture != nullptr)
             {
@@ -213,7 +228,7 @@ namespace ChoseEvents
                 }
                 R_CHK(pTexture->UnlockRect(0));
             }
-
+#endif
         }
     }
     //---------------------------------------------------------------------------
@@ -408,9 +423,18 @@ void FillChooseEvents()
         ref_texture texture_null;
         texture_null.create("ed\\ed_nodata");
         texture_null->Load();
+#if defined(USE_DX11)
+        // ImGui binds a shader resource view; surface_get() gives the resource
+        // behind it, which the backend cannot bind. The AddRef still keeps the
+        // view alive after the local ref_texture goes out of scope.
+        VERIFY(texture_null->get_SRView());
+        texture_null->get_SRView()->AddRef();
+        UIChooseForm::SetNullTexture(texture_null->get_SRView());
+#else
         VERIFY(texture_null->surface_get());
         texture_null->surface_get()->AddRef();
         UIChooseForm::SetNullTexture(texture_null->surface_get());
+#endif
     }
     UIChooseForm::AppendEvents(smSoundSource, "Select Sound Source", ChoseEvents::FillSoundSource, ChoseEvents::SelectSoundSource, 0, ChoseEvents::CloseSoundSource, 0);
     UIChooseForm::AppendEvents(smSoundEnv, "Select Sound Environment", ChoseEvents::FillSoundEnv, 0, 0, 0, 0);

@@ -1,6 +1,9 @@
 // file: D3DUtils.cpp
 
 #include "stdafx.h"
+#if defined(USE_DX10) || defined(USE_DX11)
+#include "../../../XrRender/DX10/dx10BufferUtils.h"
+#endif
 #pragma hdrstop
 
 #include "gamefont.h"
@@ -21,7 +24,7 @@
 
 ECORE_API CDrawUtilities DU_impl;
 
-#define LINE_DIVISION  32  // не меньше 6!!!!!
+#define LINE_DIVISION  32  // пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ 6!!!!!
 // for drawing sphere
 static Fvector circledef1[LINE_DIVISION];
 static Fvector circledef2[LINE_DIVISION];
@@ -100,26 +103,38 @@ void 			 SPrimitiveBuffer::RenderDIP() { DU_DRAW_DIP(p_type, pGeom, 0, 0, v_cnt,
 void 			 SPrimitiveBuffer::RenderDP() { DU_DRAW_DP(p_type, pGeom, 0, p_cnt); }
 void SPrimitiveBuffer::CreateFromData(D3DPRIMITIVETYPE _pt, u32 _p_cnt, u32 FVF, LPVOID vertices, u32 _v_cnt, u16* indices, u32 _i_cnt)
 {
-	IDirect3DVertexBuffer9*	pVB=0;
-	IDirect3DIndexBuffer9*	pIB=0;
+	ID3DVertexBuffer*	pVB=0;
+	ID3DIndexBuffer*	pIB=0;
 	p_cnt				= _p_cnt;
 	p_type				= _pt;
 	v_cnt				= _v_cnt;
 	i_cnt				= _i_cnt;
 	u32 stride			= D3DXGetFVFVertexSize(FVF);
-	R_CHK(HW.pDevice->CreateVertexBuffer(v_cnt*stride, D3DUSAGE_WRITEONLY, 0, D3DPOOL_MANAGED, &pVB, 0));
-	u8* 				bytes;
-	R_CHK				(pVB->Lock(0,0,(LPVOID*)&bytes,0));
+
+	// The vertex block is built in system memory either way; D3D11 buffers are
+	// immutable and want the data up front instead of a Lock/Unlock pair.
 	FLvertexVec	verts	(v_cnt);
 	for (u32 k=0; k<v_cnt; ++k)
 		verts[k].set	(((Fvector*)vertices)[k],0xFFFFFFFF);
+
+#if defined(USE_DX10) || defined(USE_DX11)
+	R_CHK(dx10BufferUtils::CreateVertexBuffer(&pVB, &*verts.begin(), v_cnt*stride));
+	if (i_cnt)
+		R_CHK(dx10BufferUtils::CreateIndexBuffer(&pIB, indices, i_cnt*sizeof(u16)));
+#else
+	u8* 				bytes;
+	R_CHK(HW.pDevice->CreateVertexBuffer(v_cnt*stride, D3DUSAGE_WRITEONLY, 0, D3DPOOL_MANAGED, &pVB, 0));
+	R_CHK				(pVB->Lock(0,0,(LPVOID*)&bytes,0));
 	Memory.mem_copy		(bytes,&*verts.begin(),v_cnt*stride);
 	R_CHK				(pVB->Unlock());
-	if (i_cnt){ 
+	if (i_cnt){
 		R_CHK(HW.pDevice->CreateIndexBuffer(i_cnt*sizeof(u16),D3DUSAGE_WRITEONLY,D3DFMT_INDEX16,D3DPOOL_MANAGED,&pIB,NULL));
 		R_CHK			(pIB->Lock(0,0,(LPVOID*)&bytes,0));
 		Memory.mem_copy	(bytes,indices,i_cnt*sizeof(u16));
 		R_CHK			(pIB->Unlock());
+	}
+#endif
+	if (i_cnt){
 		OnRender.bind	(this,&SPrimitiveBuffer::RenderDIP);
 	}else{
 		OnRender.bind	(this,&SPrimitiveBuffer::RenderDP);

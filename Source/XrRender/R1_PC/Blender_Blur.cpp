@@ -30,6 +30,15 @@ void	CBlender_Blur::Load	( IReader& fs, u16 version	)
 void CBlender_Blur::Compile	(CBlender_Compile& C)
 {
 	IBlender::Compile		(C);
+#if defined(USE_DX10) || defined(USE_DX11)
+	// Screen blur is a game post effect - the editor never runs it. Emit a
+	// single textured pass so the shader still compiles under D3D11, where the
+	// two-stage TFACTOR blend below has no equivalent.
+	C.r_Pass		("model_def_hq","model_def_hq",FALSE,FALSE,FALSE);
+	C.r_dx10Texture	("s_base",	"$base0");
+	C.r_dx10Sampler	("smp_base");
+	C.r_End			();
+#else
 	C.PassBegin		();
 	{
 		C.PassSET_ZB		(FALSE, FALSE);
@@ -58,4 +67,5 @@ void CBlender_Blur::Compile	(CBlender_Compile& C)
 		C.R().SetRS			(D3DRS_TEXTUREFACTOR,color_rgba(127,127,127,127));
 	}
 	C.PassEnd			();
+#endif
 }

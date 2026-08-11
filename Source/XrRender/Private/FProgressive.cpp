@@ -69,7 +69,9 @@ void FProgressive::Load		(const char* N, IReader *data, u32 dwFlags)
 
 void FProgressive::Render	(float LOD)
 {
-#if RENDER!=R_R1
+// Same story as Fvisual: the editor builds as R_R4 but keeps the R1 CRender,
+// which has no shadow phase.
+#if RENDER!=R_R1 && !defined(REDITOR)
 	if (m_fast && RImplementation.phase==CRender::PHASE_SMAP)
 	{
 		int lod_id			= iFloor((1.f-clampr(LOD,0.f,1.f))*float(xSWI->count-1)+0.5f);

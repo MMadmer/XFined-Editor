@@ -29,6 +29,11 @@ void	free_render_mode_list		()			{}
 
 CHW			HW;
 
+// GPU picking. Shared with the D3D9 path through CHW, so the definitions live
+// in whichever HW implementation is actually compiled.
+string256			CHW::PreferredAdapter = {};
+xr_vector<xr_string>	CHW::AdapterNames;
+
 //	DX10: Don't neeed this?
 /*
 #ifdef DEBUG
@@ -106,6 +111,36 @@ void CHW::CreateD3D()
 		++i;
 	}
 #endif	//	MASTER_GOLD
+
+	// Build the adapter list and honour the user's pick. Matching by description
+	// rather than index survives adapters being reordered between runs.
+	AdapterNames.clear();
+	{
+		IDXGIAdapter*	a		= 0;
+		IDXGIAdapter*	chosen	= 0;
+		for (UINT n = 0; pFactory->EnumAdapters(n, &a) != DXGI_ERROR_NOT_FOUND; ++n)
+		{
+			DXGI_ADAPTER_DESC	d	= {};
+			string256			name;
+			if (SUCCEEDED(a->GetDesc(&d)))
+				::WideCharToMultiByte(CP_ACP, 0, d.Description, -1, name, sizeof(name), NULL, NULL);
+			else
+				xr_strcpy(name, "unknown");
+
+			AdapterNames.push_back(xr_string(name));
+
+			if (!chosen && PreferredAdapter[0] && 0 == _stricmp(name, PreferredAdapter))
+			{
+				chosen	= a;
+				continue;			// keep the reference, it becomes m_pAdapter
+			}
+			a->Release();
+		}
+
+		// PerfHUD wins over the preference, it is a debugging override
+		if (chosen && !m_pAdapter)	m_pAdapter = chosen;
+		else if (chosen)			chosen->Release();
+	}
 
 	if (!m_pAdapter)
 		pFactory->EnumAdapters(0, &m_pAdapter);
@@ -283,7 +318,11 @@ void CHW::CreateDevice( HWND m_hWnd, bool move_window )
 	//	TODO: DX10: implement dynamic format selection
 	//sd.BufferDesc.Format		= fTarget;
 	sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-	sd.BufferCount = 1;
+	// Flip model: the compositor takes the back buffer directly instead of the
+	// driver blitting it every frame. On a hybrid laptop the old blit model also
+	// forced a cross-adapter copy, which is what made the discrete GPU slower
+	// than the integrated one. Needs >=2 buffers and no MSAA on the chain.
+	sd.BufferCount = 2;
 
 	// Multisample
 	sd.SampleDesc.Count = 1;
@@ -293,7 +332,7 @@ void CHW::CreateDevice( HWND m_hWnd, bool move_window )
 	//P.SwapEffect			= bWindowed?D3DSWAPEFFECT_COPY:D3DSWAPEFFECT_DISCARD;
 	//P.hDeviceWindow			= m_hWnd;
 	//P.Windowed				= bWindowed;
-	sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+	sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 	sd.OutputWindow = m_hWnd;
 	sd.Windowed = bWindowed;
 
@@ -343,8 +382,14 @@ void CHW::CreateDevice( HWND m_hWnd, bool move_window )
 //        D3D_FEATURE_LEVEL_10_0,
     };
 
-   R =  D3D11CreateDeviceAndSwapChain(   0,//m_pAdapter,//What wrong with adapter??? We should use another version of DXGI?????
-                                          m_DriverType,
+   // Passing an explicit adapter REQUIRES DriverType == UNKNOWN - that is what
+   // used to make this call fail and why the adapter was dropped here. Without
+   // it the device always lands on DXGI's default GPU and the picker does
+   // nothing; on a hybrid machine that also means presenting across adapters.
+   D3D_DRIVER_TYPE	driverType	= m_pAdapter ? D3D_DRIVER_TYPE_UNKNOWN : m_DriverType;
+
+   R =  D3D11CreateDeviceAndSwapChain(   m_pAdapter,
+                                          driverType,
                                           NULL,
                                           createDeviceFlags,
 										  pFeatureLevels,
@@ -353,8 +398,49 @@ void CHW::CreateDevice( HWND m_hWnd, bool move_window )
                                           &sd,
                                           &m_pSwapChain,
 		                                  &pDevice,
-										  &FeatureLevel,		
+										  &FeatureLevel,
 										  &pContext);
+
+   // Degrade rather than refuse to start. Two things can go wrong here and both
+   // must leave the user with a working editor: the flip model can be rejected
+   // (very old Windows, odd remote-desktop stacks), and the preferred adapter
+   // can be stale or below feature level 11.
+   if (FAILED(R))
+   {
+	   Msg	("! flip-model swap chain refused (0x%08x), falling back to the blit model", R);
+	   sd.SwapEffect	= DXGI_SWAP_EFFECT_DISCARD;
+	   sd.BufferCount	= 1;
+	   R =  D3D11CreateDeviceAndSwapChain(   m_pAdapter,
+											  driverType,
+											  NULL,
+											  createDeviceFlags,
+											  pFeatureLevels,
+											  sizeof(pFeatureLevels)/sizeof(pFeatureLevels[0]),
+											  D3D11_SDK_VERSION,
+											  &sd,
+											  &m_pSwapChain,
+											  &pDevice,
+											  &FeatureLevel,
+											  &pContext);
+   }
+
+   if (FAILED(R) && m_pAdapter)
+   {
+	   Msg	("! device creation on the selected adapter failed (0x%08x), falling back to the default one", R);
+	   _RELEASE	(m_pAdapter);
+	   R =  D3D11CreateDeviceAndSwapChain(   0,
+											  m_DriverType,
+											  NULL,
+											  createDeviceFlags,
+											  pFeatureLevels,
+											  sizeof(pFeatureLevels)/sizeof(pFeatureLevels[0]),
+											  D3D11_SDK_VERSION,
+											  &sd,
+											  &m_pSwapChain,
+											  &pDevice,
+											  &FeatureLevel,
+											  &pContext);
+   }
    if (GDebugRender)
    {
 	   ID3D11InfoQueue* InfoQueue = nullptr;

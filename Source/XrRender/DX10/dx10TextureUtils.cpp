@@ -13,8 +13,11 @@ TextureFormatPairs	TextureFormatList[] =
 {
 	{ D3DFMT_UNKNOWN,		DXGI_FORMAT_UNKNOWN },
 		//D3DFMT_R8G8B8 Not available 
-	{ D3DFMT_A8R8G8B8,		DXGI_FORMAT_R8G8B8A8_UNORM },	// Not available 
-		//D3DFMT_X8R8G8B8 Not available 
+	{ D3DFMT_A8R8G8B8,		DXGI_FORMAT_R8G8B8A8_UNORM },	// Not available
+	// DXGI has no X8 variant; the alpha channel simply goes unused. Needed
+	// because HW.Caps.fTarget is X8R8G8B8 and the editor creates its viewport
+	// render target with it - without this the RT cannot be created at all.
+	{ D3DFMT_X8R8G8B8,		DXGI_FORMAT_R8G8B8A8_UNORM },
 	//	TODO: DX10: Remove. Need only for nullrt
 	//{ D3DFMT_R5G6B5,		DXGI_FORMAT_B5G6R5_UNORM },		// Not available 
 	{ D3DFMT_R5G6B5,		DXGI_FORMAT_R8G8B8A8_UNORM },		// Not available 

@@ -204,7 +204,19 @@ void ETextureThumbnail::Update(ImTextureID& Texture)
 
             fn_img = EFS.ChangeFileExt(m_Name.c_str(), ".dds");
             u32	mem = 0;
+#if defined(USE_DX11)
+            // texture_load hands back the resource; ImGui binds a view, so make
+            // one and drop the resource - the view keeps its own reference.
+            if (ID3DBaseTexture* res = ::RImplementation.texture_load(fn_img.c_str(), mem))
+            {
+                ID3D11ShaderResourceView* view = nullptr;
+                if (SUCCEEDED(HW.pDevice->CreateShaderResourceView(res, nullptr, &view)))
+                    Texture = view;
+                _RELEASE(res);
+            }
+#else
             Texture = ::RImplementation.texture_load(fn_img.c_str(), mem);
+#endif
             if (!Texture)
                 ELog.Msg(mtError, "Can't make preview for texture '%s'.", m_Name.c_str());
 

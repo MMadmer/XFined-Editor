@@ -65,7 +65,13 @@ void UIRenderForm::Draw()
 		UI->RTSize.set(canvas_size.x, canvas_size.y);
 
 		ImGui::SetCursorScreenPos(canvas_pos);
+#if defined(USE_DX11)
+		// the RT texture is not drawable on its own - CRT keeps a CTexture around
+		// it, and that is where the shader resource view ImGui wants lives
+		draw_list->AddImage(UI->RT->pTexture->get_SRView(), canvas_pos, ImVec2(canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y));
+#else
 		draw_list->AddImage(UI->RT->pSurface, canvas_pos, ImVec2(canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y));
+#endif
 
 		if(m_OnToolBar)
 			m_OnToolBar(canvas_size);

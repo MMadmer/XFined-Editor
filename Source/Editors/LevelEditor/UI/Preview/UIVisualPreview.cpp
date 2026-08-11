@@ -29,10 +29,17 @@ namespace
 	//--------------------------------------------------------------------------
 	struct SPreviewStateGuard
 	{
+#if defined(USE_DX11)
+		// D3D11 has no state blocks: SDX11TargetGuard captures the render target,
+		// depth view and viewport, and the shader state is re-applied per draw
+		// anyway once RCache is invalidated below.
+		SDX11TargetGuard		m_Views;
+#else
 		IDirect3DStateBlock9*	m_Block;
 		IDirect3DSurface9*		m_OldRT;
 		IDirect3DSurface9*		m_OldZB;
 		D3DVIEWPORT9			m_OldViewport;
+#endif
 		Fmatrix					m_OldWorld;
 		Fmatrix					m_OldView;
 		Fmatrix					m_OldProject;
@@ -45,6 +52,7 @@ namespace
 
 		SPreviewStateGuard()
 		{
+#if !defined(USE_DX11)
 			m_Block				= 0;
 			m_OldRT				= 0;
 			m_OldZB				= 0;
@@ -54,6 +62,7 @@ namespace
 			HW.pDevice->GetRenderTarget		(0,&m_OldRT);
 			HW.pDevice->GetDepthStencilSurface(&m_OldZB);
 			HW.pDevice->GetViewport			(&m_OldViewport);
+#endif
 			// transforms travel through RCache, which mirrors them into the
 			// device, so save/restore has to go through RCache as well
 			m_OldWorld			= RCache.get_xform_world	();
@@ -72,6 +81,7 @@ namespace
 
 		~SPreviewStateGuard()
 		{
+#if !defined(USE_DX11)
 			if (m_Block)		m_Block->Apply();
 			// render targets are not part of a D3D9 state block - restore by
 			// hand, and only then the viewport, since SetRenderTarget resets it
@@ -79,6 +89,7 @@ namespace
 			if (m_OldRT)	HW.pDevice->SetRenderTarget(0,m_OldRT);
 			HW.pDevice->SetDepthStencilSurface	(m_OldZB);
 			HW.pDevice->SetViewport				(&m_OldViewport);
+#endif
 			RCache.set_xform_world				(m_OldWorld);
 			RCache.set_xform_view				(m_OldView);
 			RCache.set_xform_project			(m_OldProject);
@@ -92,9 +103,13 @@ namespace
 			// about - OnFrameEnd is the public way to drop the cache, so the
 			// next draw re-applies everything
 			RCache.OnFrameEnd					();
+#if !defined(USE_DX11)
 			_RELEASE							(m_Block);
 			_RELEASE							(m_OldRT);
 			_RELEASE							(m_OldZB);
+#endif
+			// on D3D11 m_Views puts the render target, depth view and viewport
+			// back when it goes out of scope, right after this body
 		}
 	};
 
@@ -133,12 +148,14 @@ namespace
 	{
 		// states the shader passes do not own themselves: the editor may sit in
 		// wireframe/flat/fog mode and that must not leak into the preview
-		HW.pDevice->SetRenderState(D3DRS_COLORWRITEENABLE,	D3DCOLORWRITEENABLE_ALPHA|D3DCOLORWRITEENABLE_BLUE|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_RED);
-		HW.pDevice->SetRenderState(D3DRS_FILLMODE,			wireframe?D3DFILL_WIREFRAME:D3DFILL_SOLID);
-		HW.pDevice->SetRenderState(D3DRS_SHADEMODE,			D3DSHADE_GOURAUD);
-		HW.pDevice->SetRenderState(D3DRS_FOGENABLE,			FALSE);
-		HW.pDevice->SetRenderState(D3DRS_AMBIENT,			0x30303030);
-		HW.pDevice->SetRenderState(D3DRS_TEXTUREFACTOR,		0xffffffff);
+		// through the device wrapper: on D3D9 it writes the state right away, on
+		// D3D11 it records it for the fixed-function emulation
+		EDevice->SetRS(D3DRS_COLORWRITEENABLE,	D3DCOLORWRITEENABLE_ALPHA|D3DCOLORWRITEENABLE_BLUE|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_RED);
+		EDevice->SetRS(D3DRS_FILLMODE,			wireframe?D3DFILL_WIREFRAME:D3DFILL_SOLID);
+		EDevice->SetRS(D3DRS_SHADEMODE,			D3DSHADE_GOURAUD);
+		EDevice->SetRS(D3DRS_FOGENABLE,			FALSE);
+		EDevice->SetRS(D3DRS_AMBIENT,			0x30303030);
+		EDevice->SetRS(D3DRS_TEXTUREFACTOR,		0xffffffff);
 		for (u32 k=0; k<HW.Caps.raster.dwStages; k++)
 		{
 			EDevice->SetSS(k,D3DSAMP_MAGFILTER,D3DTEXF_LINEAR);
@@ -303,9 +320,11 @@ UIVisualPreview::UIVisualPreview()
 	m_Wireframe		= false;
 	m_ShowBones		= false;
 	m_Focus			= true;
+#if !defined(USE_DX11)
 	m_RTTex			= nullptr;
 	m_RTSurf		= nullptr;
 	m_ZBSurf		= nullptr;
+#endif
 	m_RTW			= 0;
 	m_RTH			= 0;
 	m_RTFailed		= false;
@@ -458,9 +477,13 @@ void UIVisualPreview::ReleaseVisual()
 //------------------------------------------------------------------------------
 void UIVisualPreview::ReleaseTarget()
 {
+#if defined(USE_DX11)
+	m_Target.release();
+#else
 	_RELEASE	(m_ZBSurf);
 	_RELEASE	(m_RTSurf);
 	_RELEASE	(m_RTTex);
+#endif
 	m_RTW		= 0;
 	m_RTH		= 0;
 	m_RTFailed	= false;
@@ -468,7 +491,11 @@ void UIVisualPreview::ReleaseTarget()
 
 bool UIVisualPreview::EnsureTarget(u32 w, u32 h)
 {
+#if defined(USE_DX11)
+	if (m_Target.valid()&&(m_RTW==w)&&(m_RTH==h))				return true;
+#else
 	if (m_RTTex&&m_RTSurf&&m_ZBSurf&&(m_RTW==w)&&(m_RTH==h))	return true;
+#endif
 	// a refused size must not be retried every frame
 	if (m_RTFailed&&(m_RTW==w)&&(m_RTH==h))						return false;
 
@@ -476,17 +503,26 @@ bool UIVisualPreview::EnsureTarget(u32 w, u32 h)
 	m_RTW	= w;
 	m_RTH	= h;
 
+#if defined(USE_DX11)
+	// with_srv: ImGui samples the result straight from this texture
+	bool ok = m_Target.create(w,h,true);
+	if (!ok)	m_Target.release();
+#else
 	// D3DPOOL_DEFAULT is the only pool a render target may live in - hence the
 	// device-reset hook, see OnDeviceResetBegin()
 	bool ok = SUCCEEDED(HW.pDevice->CreateTexture(w,h,1,D3DUSAGE_RENDERTARGET,D3DFMT_A8R8G8B8,D3DPOOL_DEFAULT,&m_RTTex,0))&&(0!=m_RTTex);
 	if (ok)	ok = SUCCEEDED(m_RTTex->GetSurfaceLevel(0,&m_RTSurf))&&(0!=m_RTSurf);
 	if (ok)	ok = SUCCEEDED(HW.pDevice->CreateDepthStencilSurface(w,h,HW.Caps.bStencil?D3DFMT_D24S8:D3DFMT_D24X8,D3DMULTISAMPLE_NONE,0,FALSE,&m_ZBSurf,0))&&(0!=m_ZBSurf);
-
 	if (!ok)
 	{
 		_RELEASE	(m_ZBSurf);
 		_RELEASE	(m_RTSurf);
 		_RELEASE	(m_RTTex);
+	}
+#endif
+
+	if (!ok)
+	{
 		// keep the size cached so the latch above can compare against it
 		m_RTW		= w;
 		m_RTH		= h;
@@ -539,6 +575,18 @@ void UIVisualPreview::ResetCamera()
 void UIVisualPreview::RenderToTarget(u32 w, u32 h)
 {
 	if (!m_Visual||!IsDeviceUsable())	return;
+#if defined(USE_DX11)
+	if (!m_Target.valid())				return;
+
+	SPreviewStateGuard	guard;
+
+	// bind() also sets a full-size viewport, so w/h come from the target itself
+	m_Target.bind	();
+	m_Target.clear	(s_BackgroundColor);
+	// RCache still points at the backbuffer views it handed out last
+	RCache.set_RT	(m_Target.rtv);
+	RCache.set_ZB	(m_Target.dsv);
+#else
 	if (!m_RTSurf||!m_ZBSurf)			return;
 
 	SPreviewStateGuard	guard;
@@ -550,6 +598,7 @@ void UIVisualPreview::RenderToTarget(u32 w, u32 h)
 	vp.X = 0; vp.Y = 0; vp.Width = w; vp.Height = h; vp.MinZ = 0.f; vp.MaxZ = 1.f;
 	HW.pDevice->SetViewport	(&vp);
 	HW.pDevice->Clear		(0,0,D3DCLEAR_ZBUFFER|D3DCLEAR_TARGET|(HW.Caps.bStencil?D3DCLEAR_STENCIL:0),s_BackgroundColor,1.f,0);
+#endif
 
 	// imgui (or the scene pass) may have written device state behind RCache's
 	// back - clear the cache so our draw sets everything up itself
@@ -694,7 +743,11 @@ void UIVisualPreview::DrawViewport()
 	{
 		RenderToTarget			(w,h);
 		ImGui::SetCursorScreenPos(canvas_pos);
+#if defined(USE_DX11)
+		ImGui::Image			(m_Target.srv,canvas_size);
+#else
 		ImGui::Image			(m_RTTex,canvas_size);
+#endif
 	}
 	else
 	{

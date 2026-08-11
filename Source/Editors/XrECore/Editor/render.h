@@ -137,8 +137,15 @@ public:
 		void* ppErrorMsgs,
 		void* ppConstantTable);
 
-	virtual IDirect3DBaseTexture9* texture_load(LPCSTR	fname, u32& mem_size);
-	virtual IDirect3DBaseTexture9* texture_load_software(LPCSTR	fname, u32& mem_size);
+	// ID3DBaseTexture switches with the API through xrD3dDefs.h. The DX11 loader
+	// lives in XrRender/DX10/dx10Texture.cpp and takes an extra staging flag;
+	// the D3D9 one does not know about staging at all.
+#if defined(USE_DX10) || defined(USE_DX11)
+	virtual ID3DBaseTexture* texture_load(LPCSTR	fname, u32& mem_size, bool bStaging = false);
+#else
+	virtual ID3DBaseTexture* texture_load(LPCSTR	fname, u32& mem_size);
+#endif
+	virtual ID3DBaseTexture* texture_load_software(LPCSTR	fname, u32& mem_size);
 	virtual HRESULT					shader_compile(
 		LPCSTR							name,
 		LPCSTR                          pSrcData,
@@ -151,6 +158,19 @@ public:
 		void* ppShader,
 		void* ppErrorMsgs,
 		void* ppConstantTable);
+
+	// The one CResourceManager actually calls. On D3D11 it runs D3DCompile with
+	// the editor's own include handler and skinning defines, then builds the
+	// shader object and lets the constant table parse it back by reflection.
+	// Declared unconditionally so the vtable keeps matching IRender_interface.
+	virtual HRESULT					shader_compile(
+		LPCSTR							name,
+		DWORD const*                    pSrcData,
+		UINT                            SrcDataLen,
+		LPCSTR                          pFunctionName,
+		LPCSTR                          pTarget,
+		DWORD                           Flags,
+		void*&							result);
 
 	virtual DWORD					get_dx_level();
 
@@ -217,17 +237,6 @@ public:
 
 protected:
 	virtual	void					ScreenshotImpl(ScreenshotMode mode, LPCSTR name, CMemoryWriter* memory_writer) {};
-	virtual HRESULT					shader_compile(
-		LPCSTR							name,
-		DWORD const* pSrcData,
-		UINT                            SrcDataLen,
-		LPCSTR                          pFunctionName,
-		LPCSTR                          pTarget,
-		DWORD                           Flags,
-		void*& result
-	) {
-		return E_FAIL;
-	}
 	private:
 		xr_vector<ISpatial*> lstRenderables;
 };

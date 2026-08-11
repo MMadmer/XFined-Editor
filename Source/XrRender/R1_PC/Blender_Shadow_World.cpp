@@ -30,6 +30,14 @@ void	CBlender_ShWorld::Load	( IReader& fs, u16 version	)
 void CBlender_ShWorld::Compile	(CBlender_Compile& C)
 {
 	IBlender::Compile		(C);
+#if defined(USE_DX10) || defined(USE_DX11)
+	// R1 projected shadows: game-only, but it still has to compile. One
+	// textured pass keeps the shader valid under D3D11.
+	C.r_Pass		("model_def_hq","model_def_hq",FALSE,TRUE,FALSE);
+	C.r_dx10Texture	("s_base",	"$base0");
+	C.r_dx10Sampler	("smp_base");
+	C.r_End			();
+#else
 	C.PassBegin		();
 	{
 		C.PassSET_ZB		(TRUE, FALSE);
@@ -46,4 +54,5 @@ void CBlender_ShWorld::Compile	(CBlender_Compile& C)
 		C.StageEnd			();
 	}
 	C.PassEnd			();
+#endif
 }

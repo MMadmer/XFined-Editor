@@ -31,13 +31,16 @@ public:
 	// helper for handlers: extracts a string field from the raw request line
 	static bool		GetArg		(LPCSTR raw, LPCSTR field, char* dst, u32 dst_size);
 
-	// helper for handlers: encodes a D3D texture (IDirect3DTexture9*, passed as
-	// void* so this header stays free of d3d) as a base64 PNG
+	// helper for handlers: encodes a picture as a base64 PNG. The pointer is
+	// whatever ImGui draws in this build - an ID3D11ShaderResourceView* under
+	// D3D11, an IDirect3DTexture9* otherwise - passed as void* so this header
+	// stays free of d3d.
 	static bool		TextureToPngBase64(void* texture, xr_string& out);
 
 	// helper for handlers: wraps a THUMB_WIDTH x THUMB_HEIGHT X8R8G8B8 pixel
-	// buffer (what the thumbnail renderers produce) into a fresh managed D3D
-	// texture. Caller owns the result and must Release it. Returns null on
-	// failure or on a wrongly sized buffer.
+	// buffer (what the thumbnail renderers produce) into a fresh drawable
+	// object - a shader resource view under D3D11, a managed texture otherwise.
+	// Caller owns the result and must Release it. Returns null on failure or on
+	// a wrongly sized buffer.
 	static void*	PixelsToTexture(const U32Vec& pixels);
 };

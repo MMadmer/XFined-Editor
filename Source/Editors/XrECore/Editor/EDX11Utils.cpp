@@ -6,6 +6,8 @@
 
 #if defined(USE_DX11)
 
+#include "RedImageTool/RedImage.hpp"
+
 //------------------------------------------------------------------------------
 SDX11Target::SDX11Target()
 {
@@ -155,6 +157,33 @@ bool DX11ReadbackToPixels(ID3D11Texture2D* src, u32 w, u32 h, U32Vec& out, bool 
 }
 
 //------------------------------------------------------------------------------
+bool DX11ReadbackBGRA(ID3D11Texture2D* src, U32Vec& out, u32& w, u32& h)
+{
+	out.clear();
+	w = h = 0;
+	if (!src)	return false;
+
+	D3D11_TEXTURE2D_DESC d = {};
+	src->GetDesc(&d);
+	// the copy is byte for byte, so only the 32bpp colour layouts make sense
+	const bool is_bgra	= (d.Format == DXGI_FORMAT_B8G8R8A8_UNORM) || (d.Format == DXGI_FORMAT_B8G8R8X8_UNORM) ||
+						  (d.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB);
+	const bool is_rgba	= (d.Format == DXGI_FORMAT_R8G8B8A8_UNORM) || (d.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+	if (!is_bgra && !is_rgba)	return false;
+
+	if (!DX11ReadbackToPixels(src, d.Width, d.Height, out, false))	return false;
+
+	// swapping R and B is its own inverse, so one branch covers the conversion
+	if (is_rgba)
+		for (u32& c : out)
+			c = (c & 0xff00ff00) | ((c & 0x00ff0000) >> 16) | ((c & 0x000000ff) << 16);
+
+	w = d.Width;
+	h = d.Height;
+	return true;
+}
+
+//------------------------------------------------------------------------------
 ID3D11ShaderResourceView* DX11TextureFromPixels(const u32* pixels, u32 w, u32 h)
 {
 	if (!pixels || !w || !h || !HW.pDevice)	return 0;
@@ -181,6 +210,41 @@ ID3D11ShaderResourceView* DX11TextureFromPixels(const u32* pixels, u32 w, u32 h)
 	// the view holds its own reference now
 	_RELEASE(tex);
 	return SUCCEEDED(hr) ? view : 0;
+}
+
+//------------------------------------------------------------------------------
+// Same decoder the DX11 texture_load path already runs on, just pointed at an
+// arbitrary picture instead of a game .dds.
+static ID3D11ShaderResourceView* DX11ViewFromRedImage(RedImageTool::RedImage& img)
+{
+	// mips are dead weight for a preview tile, and the pixels have to end up in
+	// the B8G8R8A8 order DX11TextureFromPixels uploads - the very layout the old
+	// D3DFMT_X8R8G8B8 path produced
+	img.ClearMipLevels();
+	img.Convert	(RedImageTool::RedTexturePixelFormat::R8G8B8A8);
+	img.SwapRB	();
+
+	const u32 w = u32(img.GetWidth());
+	const u32 h = u32(img.GetHeight());
+	if (!w || !h)	return 0;
+	return DX11TextureFromPixels((const u32*)*img, w, h);
+}
+
+ID3D11ShaderResourceView* DX11TextureFromFile(LPCSTR full_path)
+{
+	if (!full_path || !full_path[0])	return 0;
+	RedImageTool::RedImage img;
+	if (!img.LoadFromFile(full_path))	return 0;
+	return DX11ViewFromRedImage(img);
+}
+
+ID3D11ShaderResourceView* DX11TextureFromMemory(const void* data, u32 size)
+{
+	if (!data || !size)	return 0;
+	RedImageTool::RedImage img;
+	// the block is only read; the missing const on the loader is its own problem
+	if (!img.LoadFromMemory(const_cast<void*>(data), size))	return 0;
+	return DX11ViewFromRedImage(img);
 }
 
 #endif	//	USE_DX11

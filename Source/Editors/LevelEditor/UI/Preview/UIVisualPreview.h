@@ -8,6 +8,10 @@
 // The model is drawn straight into a D3D9 render-target texture from inside
 // the editor's already open scene: no BeginScene/EndScene, no readback.
 
+#if defined(USE_DX11)
+#include "../../../XrECore/Editor/EDX11Utils.h"
+#endif
+
 class IRenderVisual;
 
 class UIVisualPreview : public XrUI
@@ -63,11 +67,16 @@ private:
 	bool			m_ShowBones;
 	bool			m_Focus;		// pull the window to front on the next draw
 
-	// Render target, recreated only when the viewport size changes. Raw D3D9:
-	// the resource manager's CRT lives inside XrECore and is not exported.
+	// Render target, recreated only when the viewport size changes. Raw device
+	// objects: the resource manager's CRT lives inside XrECore and is not exported.
+#if defined(USE_DX11)
+	// texture + RTV + depth + SRV in one; the SRV is what ImGui::Image gets
+	SDX11Target		m_Target;
+#else
 	IDirect3DTexture9*	m_RTTex;		// what ImGui::Image gets
 	IDirect3DSurface9*	m_RTSurf;		// mip 0 of the above, bound as RT
 	IDirect3DSurface9*	m_ZBSurf;
+#endif
 	u32				m_RTW;
 	u32				m_RTH;
 	bool			m_RTFailed;		// creation refused - stop retrying every frame

@@ -27,7 +27,9 @@ file(GLOB XREPROPS_SRC CONFIGURE_DEPENDS
     "${ED}/XrEProps/Tree/Properties/*.cpp")
 add_library(XrEProps SHARED ${XREPROPS_SRC})
 xray_common(XrEProps NO_MBCS PCH "${ED}/XrEProps/stdafx.h")  # CharacterSet not set
-target_compile_definitions(XrEProps PRIVATE XREPROPS_EXPORTS _WINDOWS _USRDLL)
+# USE_DX11 has to match XrEUI's: ImTextureID is part of the exported ImGui
+# signatures, so a mismatch here is a link error, not a compile one
+target_compile_definitions(XrEProps PRIVATE XREPROPS_EXPORTS _WINDOWS _USRDLL USE_DX11)
 target_include_directories(XrEProps PRIVATE "${ED}/XrEProps")
 target_link_libraries(XrEProps PRIVATE XrCore XrEngine XrEUI)
 
@@ -61,6 +63,9 @@ set(XRECORE_PRIVATE_EXCLUDE
     r__occlusion r__pixel_calculator r__screenshot r__sector r__sector_traversal uber_deffer
     VertexCache WallmarksEngine xr_effgamma xrStripify)
 xray_glob(XRECORE_RPRIV "${SRC}/XrRender/Private")
+# xray_glob is flat; Private/Utils holds dxHashHelper, which the DX11 state
+# cache hashes its descriptors with
+list(APPEND XRECORE_RPRIV "${SRC}/XrRender/Private/Utils/dxHashHelper.cpp")
 set(_priv_excl "")
 foreach(_e IN LISTS XRECORE_PRIVATE_EXCLUDE)
     list(APPEND _priv_excl "${_e}.cpp")
@@ -85,6 +90,12 @@ endforeach()
 # builds on. Game-only translation units are excluded.
 xray_glob(XRECORE_DX11 "${SRC}/XrRender/DX10")
 xray_exclude(XRECORE_DX11 "dx10DetailManager_VS.cpp")
+# Sub-directories the flat glob misses. StateManager is the whole D3D11 state
+# cache the backend runs on; 3DFluid / Rain / MSAA are game-only and stay out.
+file(GLOB XRECORE_DX11_STATE CONFIGURE_DEPENDS "${SRC}/XrRender/DX10/StateManager/*.cpp")
+list(APPEND XRECORE_DX11 ${XRECORE_DX11_STATE})
+# R_LOD lives with the R4 renderer but is plain backend code the editor needs
+list(APPEND XRECORE_DX11 "${SRC}/XrRender/R4_PC/R_Backend_LOD.cpp")
 
 set(XRECORE_EXTERNAL
     "${SRC}/XrCPU_Pipe/xrSkin2W.cpp"
@@ -119,6 +130,9 @@ set(LE_EXTERNAL
     "${SRC}/XrRender/Private/DetailManager_Decompress.cpp"
     "${SRC}/XrRender/Private/DetailManager_soft.cpp"
     "${SRC}/XrRender/Private/DetailManager_VS.cpp"
+    # hw_Load_Shaders/hw_Render for the D3D11 detail path - the shared
+    # DetailManager_VS.cpp only declares them
+    "${SRC}/XrRender/DX10/dx10DetailManager_VS.cpp"
     "${SRC}/XrRender/Private/stats_manager.cpp")
 add_executable(LevelEditor WIN32 ${LE_SRC} ${LE_EXTERNAL})
 xray_common(LevelEditor)

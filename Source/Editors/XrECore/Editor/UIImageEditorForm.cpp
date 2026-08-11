@@ -43,7 +43,19 @@ void UIImageEditorForm::Draw()
         if (m_Texture == nullptr)
         {
             u32 mem = 0;
+#if defined(USE_DX11)
+            // texture_load hands back the resource; ImGui binds a view, so make
+            // one and drop the resource - the view keeps its own reference.
+            if (ID3DBaseTexture* res = RImplementation.texture_load("ed\\ed_nodata", mem))
+            {
+                ID3D11ShaderResourceView* view = nullptr;
+                if (SUCCEEDED(HW.pDevice->CreateShaderResourceView(res, nullptr, &view)))
+                    m_Texture = view;
+                _RELEASE(res);
+            }
+#else
             m_Texture = RImplementation.texture_load("ed\\ed_nodata", mem);
+#endif
         }
         ImGui::Image(m_Texture, ImVec2(128, 128));
         m_ItemProps->Draw();
