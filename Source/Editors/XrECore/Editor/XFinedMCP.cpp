@@ -305,6 +305,21 @@ static void Execute(SMCPRequest& r)
 	else if (r.cmd == "screenshot_editor")
 	{
 		xr_string b64;
+#if defined(USE_DX11)
+		// Straight from the presented frame. GDI shows a flip-model swap chain
+		// as blank, so PrintWindow is not an option any more. Arming first means
+		// the very first request after an idle spell answers "not ready".
+		U32Vec	px;
+		u32		w = 0, h = 0;
+		DX11ArmFrameCapture();
+		if (DX11GetFrameCapture(px, w, h) && PixelsToPngBase64(px.data(), w, h, b64))
+		{
+			r.response = "{\"ok\":true,\"png_base64\":\"";
+			r.response += b64;
+			r.response += "\"}";
+		}
+		else r.response = "{\"ok\":false,\"error\":\"frame not mirrored yet, ask again\"}";
+#else
 		// resolved by window class — m_hWnd visibility varies across the tree
 		HWND wnd = ::FindWindowA("XFined Editor", NULL);
 		if (wnd && WindowToPngBase64(wnd, b64))
@@ -314,6 +329,7 @@ static void Execute(SMCPRequest& r)
 			r.response += "\"}";
 		}
 		else r.response = "{\"ok\":false,\"error\":\"PrintWindow capture failed\"}";
+#endif
 	}
 	else if (r.cmd == "list_projects")
 	{

@@ -41,7 +41,30 @@ IDirect3DStateBlock9*	dwDebugSB = 0;
 #endif
 */
 
-CHW::CHW() : 
+// HW is a global, so its constructor runs while the DLL is loading - long
+// before Device exists. Touching Device there killed the process with
+// STATUS_DLL_INIT_FAILED, so the activation hooks are attached on first use and
+// detached on device destruction instead.
+static bool	s_hw_hooked	= false;
+
+static void	hw_HookAppMessages(CHW* hw, bool attach)
+{
+	if (!Device)			return;
+	if (attach==s_hw_hooked)	return;
+	if (attach)
+	{
+		Device->seqAppActivate.Add		(hw);
+		Device->seqAppDeactivate.Add	(hw);
+	}
+	else
+	{
+		Device->seqAppActivate.Remove	(hw);
+		Device->seqAppDeactivate.Remove	(hw);
+	}
+	s_hw_hooked	= attach;
+}
+
+CHW::CHW() :
 //	hD3D(NULL),
 	//pD3D(NULL),
 	m_pAdapter(0),
@@ -50,14 +73,11 @@ CHW::CHW() :
 	//pBaseRT(NULL),
 	//pBaseZB(NULL)
 {
-	Device->seqAppActivate.Add(this);
-	Device->seqAppDeactivate.Add(this);
 }
 
 CHW::~CHW()
 {
-	Device->seqAppActivate.Remove(this);
-	Device->seqAppDeactivate.Remove(this);
+	hw_HookAppMessages(this, false);
 }
 //////////////////////////////////////////////////////////////////////
 // Construction/Destruction
@@ -169,6 +189,8 @@ void CHW::DestroyD3D()
 void CHW::CreateDevice( HWND m_hWnd, bool move_window )
 {
 	m_move_window			= move_window;
+	// Device is alive by now, so this is where the activate/deactivate hooks go
+	hw_HookAppMessages		(this, true);
 	CreateD3D();
 
 	/* Partially implemented dynamic load
@@ -358,6 +380,8 @@ void CHW::CreateDevice( HWND m_hWnd, bool move_window )
 
 	//	Additional set up
 	sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+	// spelled out because CHW::Reset has to hand ResizeBuffers the same value
+	sd.Flags = 0;
 
 	UINT createDeviceFlags = 0;
 	
@@ -446,8 +470,13 @@ void CHW::CreateDevice( HWND m_hWnd, bool move_window )
 	   ID3D11InfoQueue* InfoQueue = nullptr;
 	   if (SUCCEEDED(pDevice->QueryInterface(&InfoQueue)))
 	   {
-		   InfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, TRUE);
-		   InfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, TRUE);
+		   // Breaking is only useful with a debugger attached; without one it
+		   // just kills the process and hides the message that mattered. The
+		   // editor drains the queue into its own log instead - see
+		   // DrainDebugMessages(). Opt back in with -drenderbreak.
+		   const bool wants_break = !!strstr(GetCommandLineA(), "-drenderbreak");
+		   InfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, wants_break);
+		   InfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, wants_break);
 		   InfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_WARNING, FALSE);
 
 		   InfoQueue->Release();
@@ -556,6 +585,8 @@ void CHW::CreateDevice( HWND m_hWnd, bool move_window )
 
 void CHW::DestroyDevice()
 {
+	hw_HookAppMessages		(this, false);
+
 	//	Destroy state managers
 	StateManager.Reset();
 	RSManager.ClearStateArray();
@@ -633,14 +664,34 @@ void CHW::Reset (HWND hwnd)
 	_RELEASE(pBaseZB);
 	_RELEASE(pBaseRT);
 
+	// ResizeBuffers fails while anything still references a back buffer, and
+	// the pipeline itself counts: the render target is very much still bound at
+	// this point. Flush makes sure the deferred references are gone too.
+	// -no_clearstate: bring-up bisect switch, see device.cpp
+	static const bool s_no_clearstate = !!strstr(GetCommandLineA(), "-no_clearstate");
+	if (pContext)
+	{
+		pContext->OMSetRenderTargets(0, NULL, NULL);
+		if (!s_no_clearstate)	pContext->ClearState();
+		pContext->Flush();
+	}
+
+	// The flags MUST match the ones the chain was created with; a mismatch is a
+	// plain INVALID_CALL. This used to hardcode ALLOW_MODE_SWITCH while creation
+	// asked for nothing of the sort.
 	CHK_DX(m_pSwapChain->ResizeBuffers(
 		cd.BufferCount,
 		desc.Width,
 		desc.Height,
 		desc.Format,
-		DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH));
+		cd.Flags));
 
 	UpdateViews();
+
+	// ClearState wiped the device state the caches believe they own
+	StateManager.Reset();
+	SRVSManager.ResetDeviceState();
+	SSManager.ResetDeviceState();
 
 /*
 	// Windoze
@@ -1125,6 +1176,44 @@ void fill_vid_mode_list(CHW* _hw)
 #endif // DEBUG
 	}
 	*/
+}
+
+void CHW::DrainDebugMessages()
+{
+#ifdef USE_DX11
+	if (!pDevice)	return;
+
+	// QueryInterface fails outright unless the device carries the DEBUG flag,
+	// so this is a cheap no-op in a normal run.
+	static ID3D11InfoQueue*	queue		= 0;
+	static bool				resolved	= false;
+	if (!resolved)
+	{
+		resolved = true;
+		if (FAILED(pDevice->QueryInterface(__uuidof(ID3D11InfoQueue), (void**)&queue)))
+			queue = 0;
+	}
+	if (!queue)		return;
+
+	const UINT64 count = queue->GetNumStoredMessages();
+	for (UINT64 i=0; i<count; ++i)
+	{
+		SIZE_T len = 0;
+		if (FAILED(queue->GetMessage(i, NULL, &len)) || !len)	continue;
+
+		D3D11_MESSAGE* msg = (D3D11_MESSAGE*)xr_alloc<u8>(u32(len));
+		if (SUCCEEDED(queue->GetMessage(i, msg, &len)))
+		{
+			LPCSTR sev =
+				(msg->Severity==D3D11_MESSAGE_SEVERITY_CORRUPTION)	? "CORRUPTION" :
+				(msg->Severity==D3D11_MESSAGE_SEVERITY_ERROR)		? "ERROR"      :
+				(msg->Severity==D3D11_MESSAGE_SEVERITY_WARNING)		? "warning"    : "info";
+			Msg	("~ D3D11 %s [%d]: %.*s", sev, int(msg->ID), int(msg->DescriptionByteLength), msg->pDescription);
+		}
+		xr_free(msg);
+	}
+	queue->ClearStoredMessages();
+#endif
 }
 
 void CHW::UpdateViews()

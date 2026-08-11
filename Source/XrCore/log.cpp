@@ -59,6 +59,12 @@ void AddOne				(const char *split)
 	if (LogExecCB&&LogCB)LogCB(split);
 
 	logCS.Leave				();
+
+	// -flushlog: write every line straight to disk. The log is normally kept in
+	// memory and only spilled on exit, so a hard kill (heap corruption, fail-fast)
+	// loses everything - exactly when the log matters most. Slow by design, opt-in.
+	static const bool s_flush_each = !!strstr(GetCommandLineA(), "-flushlog");
+	if (s_flush_each)	FlushLog();
 }
 
 void Log				(const char *s) 

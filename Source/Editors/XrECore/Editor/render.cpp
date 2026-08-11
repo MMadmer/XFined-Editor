@@ -25,7 +25,11 @@ CRender::CRender	()
 {
 	val_bInvisible = FALSE;
 	::Render = &RImplementation;
-	m_skinning					= 0;
+	// SKIN_NONE, same default the R4 renderer uses. The editor never calls
+	// shader_option_skinning - it skins on the CPU - so every draw goes through
+	// the unskinned variant, and under D3D11 the skinned one would demand vertex
+	// semantics the editor's plain FVF geometry does not carry.
+	m_skinning					= -1;
 }
 
 CRender::~CRender	()

@@ -116,6 +116,10 @@ public:
 #endif
 #if defined(USE_DX10) || defined(USE_DX11)
 	void			UpdateViews();
+	// Empties the D3D11 debug layer's message queue into the engine log. Only
+	// does anything when the device was created with -debugrender; without it
+	// an API misuse shows up as a bare access violation with no explanation.
+	void			DrainDebugMessages();
 	DXGI_RATIONAL	selectRefresh(u32 dwWidth, u32 dwHeight, DXGI_FORMAT fmt);
 
 	virtual	void	OnAppActivate();

@@ -389,11 +389,23 @@ void TUI::PrepareRedraw()
     RCache.set_xform_world	(Fidentity);
 }
 extern ENGINE_API BOOL g_bRendering;
+
+// -trace: breadcrumbs through the first frames. With -flushlog every line hits
+// the disk immediately, so after a hard kill the last breadcrumb names the call
+// that died. D3D11 bring-up aid.
+namespace
+{
+	const bool	s_ui_trace		= !!strstr(GetCommandLineA(), "-trace");
+	u32			s_ui_trace_left	= 3;
+}
+#define UI_TRACE(x)	do { if (s_ui_trace && s_ui_trace_left) Msg("~ trace: " x); } while(0)
+
 void TUI::Redraw()
 {
 	PrepareRedraw();
     try{
-    
+        UI_TRACE("enter");
+
         if (u32(RTSize.x * EDevice->m_ScreenQuality) != RT->dwWidth || u32(RTSize.y * EDevice->m_ScreenQuality) != RT->dwHeight|| !RT->pSurface)
         {
             GetRenderWidth() = RTSize.x * EDevice->m_ScreenQuality;
@@ -423,10 +435,13 @@ void TUI::Redraw()
         // never run inside the ImGui pass below, which is wrapped in catch(...):
         // an exception escaping mid-render would leave the scene unbalanced and
         // kill the next Begin(). Here nothing is open yet, so it is free.
+        UI_TRACE("before thumbnails");
         FlushVisualThumbnailQueue(4);
+        UI_TRACE("before Begin");
 
         if (EDevice->Begin())
         {
+            UI_TRACE("after Begin");
             if (psDeviceFlags.is(rsRenderRealTime))
                 m_Flags.set(flRedraw, TRUE);
             if (m_Flags.is(flRedraw)||UI->IsPlayInEditor())
@@ -441,8 +456,11 @@ void TUI::Redraw()
                 {
                     Fcolor cc;
                     cc.set(EPrefs ? EPrefs->scene_clear_color : 0x0);
+                    UI_TRACE("before clear RT");
                     HW.pContext->ClearRenderTargetView(RT->pRT, &cc.r);
+                    UI_TRACE("before clear ZB");
                     HW.pContext->ClearDepthStencilView(ZB->pZRT, D3D_CLEAR_DEPTH, 1.f, 0);
+                    UI_TRACE("after clear");
                 }
 #else
                 RCache.set_RT(RT->pRT);
@@ -454,8 +472,10 @@ void TUI::Redraw()
 #endif
                 EDevice->UpdateView();
                 EDevice->ResetMaterial();
+                UI_TRACE("before RenderEnvironment");
 
                 Tools->RenderEnvironment();
+                UI_TRACE("after RenderEnvironment");
 
                 //. temporary reset filter (      )
                 for (u32 k = 0; k < HW.Caps.raster.dwStages; k++) {
@@ -473,12 +493,17 @@ void TUI::Redraw()
 
                 // draw grid
                 if (psDeviceFlags.is(rsDrawGrid)) {
+                    UI_TRACE("before DrawGrid");
                     DU_impl.DrawGrid();
+                    UI_TRACE("before DrawPivot");
                     DU_impl.DrawPivot(m_Pivot);
+                    UI_TRACE("after grid");
                 }
 
                 try {
+                    UI_TRACE("before Tools->Render");
                     Tools->Render();
+                    UI_TRACE("after Tools->Render");
                 }
                 catch (...) {
                     ELog.DlgMsg(mtError, "Please notify AlexMX!!! Critical error has occured in render routine!!! [Type B]");
@@ -488,16 +513,21 @@ void TUI::Redraw()
                 if (m_SelectionRect) 	DU_impl.DrawSelectionRect(m_SelStart, m_SelEnd);
 
                 // draw axis
+                UI_TRACE("before DrawAxis");
                 DU_impl.DrawAxis(EDevice->m_Camera.GetTransform());
+                UI_TRACE("after DrawAxis");
 
 
                 EDevice->Statistic->RenderDUMP_RT.End();
                 EDevice->EStatistic->Show(EDevice->pSystemFont);
                 UI->OnStats(EDevice->pSystemFont);
                 EDevice->SetRS(D3DRS_FILLMODE, D3DFILL_SOLID);
+                UI_TRACE("before font render");
                 EDevice->pSystemFont->OnRender();
+                UI_TRACE("after font render");
                 EDevice->SetRS(D3DRS_FILLMODE, EDevice->dwFillMode);
                 EDevice->seqRender.Process(rp_Render);
+                UI_TRACE("after seqRender");
                 if (g_pGamePersistent->OnRenderPPUI_query())
                 {
                     g_pGamePersistent->OnRenderPPUI_main();
@@ -509,10 +539,14 @@ void TUI::Redraw()
             try {
                 EDevice->SetRS(D3DRS_FILLMODE, D3DFILL_SOLID);
                 g_bRendering = FALSE;
+                UI_TRACE("before imgui Draw");
                 Draw();
+                UI_TRACE("after imgui Draw");
                 EDevice->SetRS(D3DRS_FILLMODE, EDevice->dwFillMode);
                 // end draw
                 EDevice->End();
+                UI_TRACE("after End");
+                if (s_ui_trace_left)	--s_ui_trace_left;
             }
             catch (...) {
                 ELog.DlgMsg(mtError, "Please notify AlexMX!!! Critical error has occured in render routine!!! [Type C]");

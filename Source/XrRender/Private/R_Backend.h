@@ -139,7 +139,11 @@ private:
 #	endif
 #endif	//	USE_DX10
 
-#ifdef DEBUG
+	// Unconditional on purpose. RCache is a single global shared by XrECore.dll
+	// and LevelEditor.exe, so anything that changes this struct's layout per
+	// translation unit makes the two disagree about member offsets - which
+	// corrupts the heap rather than failing to link. Six pointers are cheap; a
+	// build-flag-dependent layout is not.
 	LPCSTR							ps_name;
 	LPCSTR							vs_name;
 #if defined(USE_DX10) || defined(USE_DX11)
@@ -150,7 +154,6 @@ private:
 	LPCSTR							cs_name;
 #	endif
 #endif	//	USE_DX10
-#endif
 	u32								stencil_enable;
 	u32								stencil_func;
 	u32								stencil_ref;

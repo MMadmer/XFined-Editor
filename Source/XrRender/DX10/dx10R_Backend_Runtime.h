@@ -71,9 +71,7 @@ ICF void CBackend::set_PS(ID3DPixelShader* _ps, LPCSTR _n)
 		HW.pContext->PSSetShader(ps);
 #endif
 
-#ifdef DEBUG
 		ps_name			= _n;
-#endif
 	}
 }
 
@@ -91,9 +89,7 @@ ICF void CBackend::set_GS(ID3DGeometryShader* _gs, LPCSTR _n)
 		HW.pContext->GSSetShader(gs);
 #endif
 
-#ifdef DEBUG
 		gs_name			= _n;
-#endif
 	}
 }
 
@@ -108,9 +104,7 @@ ICF void CBackend::set_HS(ID3D11HullShader* _hs, LPCSTR _n)
 		hs				= _hs;
 		HW.pContext->HSSetShader(hs, 0, 0);
 
-#ifdef DEBUG
 		hs_name			= _n;
-#endif
 	}
 }
 
@@ -124,9 +118,7 @@ ICF void CBackend::set_DS(ID3D11DomainShader* _ds, LPCSTR _n)
 		ds				= _ds;
 		HW.pContext->DSSetShader(ds, 0, 0);
 
-#ifdef DEBUG
 		ds_name			= _n;
-#endif
 	}
 }
 
@@ -140,9 +132,7 @@ ICF void CBackend::set_CS(ID3D11ComputeShader* _cs, LPCSTR _n)
 		cs				= _cs;
 		HW.pContext->CSSetShader(cs, 0, 0);
 
-#ifdef DEBUG
 		cs_name			= _n;
-#endif
 	}
 }
 
@@ -167,9 +157,7 @@ ICF void CBackend::set_VS(ID3DVertexShader* _vs, LPCSTR _n)
 		HW.pContext->VSSetShader(vs);
 #endif
 
-#ifdef DEBUG
 		vs_name			= _n;
-#endif
 	}
 }
 
@@ -460,13 +448,30 @@ IC void CBackend::ApplyVertexLayout()
 	{
 		ID3DInputLayout* pLayout;
 
-		CHK_DX(HW.pDevice->CreateInputLayout(
+		HRESULT	_hr	= HW.pDevice->CreateInputLayout(
 			&decl->dx10_dcl_code[0],
 			decl->dx10_dcl_code.size()-1,
 			m_pInputSignature->GetBufferPointer(),
 			m_pInputSignature->GetBufferSize(),
 			&pLayout
-			));
+			);
+		if (FAILED(_hr))
+		{
+			// A layout mismatch says nothing on its own - name the shader and
+			// dump the semantics the declaration offers, otherwise every one of
+			// these looks identical in the log.
+			Msg	("! CreateInputLayout failed for vs[%s] ps[%s], %d element(s):",
+				vs_name ? vs_name : "?", ps_name ? ps_name : "?",
+				int(decl->dx10_dcl_code.size())-1);
+			for (u32 e=0; e+1<decl->dx10_dcl_code.size(); ++e)
+			{
+				const D3D_INPUT_ELEMENT_DESC& d = decl->dx10_dcl_code[e];
+				Msg	("!   [%d] %s%d fmt=%d slot=%d offset=%d",
+					e, d.SemanticName?d.SemanticName:"?", d.SemanticIndex,
+					int(d.Format), d.InputSlot, d.AlignedByteOffset);
+			}
+		}
+		CHK_DX(_hr);
 
 		it = decl->vs_to_layout.insert(
 			std::pair<ID3DBlob*, ID3DInputLayout*>(m_pInputSignature, pLayout)).first;

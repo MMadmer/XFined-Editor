@@ -21,13 +21,50 @@ void dxFontRender::Initialize(LPCSTR cShader, LPCSTR cTexture)
 }
 extern ENGINE_API BOOL g_bRendering;
 extern ENGINE_API Fvector2		g_current_font_scale;
+
+// -trace breadcrumbs, same switch ui_main.cpp uses. D3D11 bring-up aid.
+namespace
+{
+	const bool	s_font_trace	= !!strstr(GetCommandLineA(), "-trace");
+	u32			s_font_left		= 2;
+}
+#define FONT_TRACE(...)	do { if (s_font_trace && s_font_left) Msg(__VA_ARGS__); } while(0)
+
 void dxFontRender::OnRender(CGameFont &owner)
 {
 	VERIFY				(g_bRendering);
-	if (pShader)		RCache.set_Shader	(pShader);
+	FONT_TRACE("~ font: enter, shader=%d geom=%d strings=%d", !!pShader, !!pGeom, int(owner.strings.size()));
+	if (pShader)
+	{
+		FONT_TRACE("~ font: passes=%d", pShader->E[0] ? int(pShader->E[0]->passes.size()) : -1);
+		if (s_font_trace && s_font_left && pShader->E[0] && pShader->E[0]->passes.size())
+		{
+			SPass& P = *(pShader->E[0]->passes[0]);
+			Msg("~ font: pass state=%d vs=%d ps=%d ct=%d T=%d M=%d",
+				!!P.state._get(), !!P.vs._get(), !!P.ps._get(),
+				!!P.constants._get(), !!P.T._get(), !!P.M._get());
+		}
+		RCache.set_Shader	(pShader);
+	}
+	FONT_TRACE("~ font: shader set");
+	FONT_TRACE("~ font: stride=%d", pGeom ? int(pGeom.stride()) : -1);
 
 	if (!(owner.uFlags&CGameFont::fsValid)){
 		CTexture* T		= RCache.get_ActiveTexture(0);
+		// A font with no texture bound at stage 0 has nothing to measure itself
+		// against and nothing to draw. Under D3D11 this happens when the font's
+		// shader failed to compile and fell back to a stub, which used to be an
+		// instant null dereference instead of a diagnosable message.
+		if (!T)
+		{
+			static bool reported = false;
+			if (!reported)
+			{
+				reported = true;
+				Msg	("! font: no texture bound at stage 0, text will not be drawn");
+			}
+			return;
+		}
 		owner.vTS.set			((int)T->get_Width(),(int)T->get_Height());
 		owner.fTCHeight		= owner.fHeight/float(owner.vTS.y);
 		owner.uFlags			|= CGameFont::fsValid;
@@ -51,7 +88,9 @@ void dxFontRender::OnRender(CGameFont &owner)
 
 		// lock AGP memory
 		u32	vOffset;
+		FONT_TRACE("~ font: lock %d verts, stride %d", length*4, int(pGeom.stride()));
 		FVF::TL* v		= (FVF::TL*)RCache.Vertex.Lock	(length*4,pGeom.stride(),vOffset);
+		FONT_TRACE("~ font: locked ptr=%s offset=%d", v ? "ok" : "NULL", int(vOffset));
 		FVF::TL* start	= v;
 
 		// fill vertices
@@ -140,10 +179,14 @@ void dxFontRender::OnRender(CGameFont &owner)
 
 		// Unlock and draw
 		u32 vCount = (u32)(v-start);
+		FONT_TRACE("~ font: filled %d of %d verts", int(vCount), length*4);
 		RCache.Vertex.Unlock		(vCount,pGeom.stride());
 		if (vCount){
 			RCache.set_Geometry		(pGeom);
+			FONT_TRACE("~ font: before Render");
 			RCache.Render			(D3DPT_TRIANGLELIST,vOffset,0,vCount,0,vCount/2);
+			FONT_TRACE("~ font: after Render");
 		}
 	}
+	if (s_font_left)	--s_font_left;
 }

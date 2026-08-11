@@ -74,4 +74,21 @@ ECORE_API ID3D11ShaderResourceView* DX11TextureFromPixels(const u32* pixels, u32
 ECORE_API ID3D11ShaderResourceView* DX11TextureFromFile		(LPCSTR full_path);
 ECORE_API ID3D11ShaderResourceView* DX11TextureFromMemory	(const void* data, u32 size);
 
+//------------------------------------------------------------------------------
+// Whole-window capture.
+//
+// GDI cannot see a flip-model swap chain: PrintWindow returns blank or garbage
+// for the D3D-composited area. The only honest source is the back buffer, and
+// with FLIP_DISCARD its contents are undefined after Present - so it has to be
+// mirrored just before presenting.
+//
+// Mirroring costs a full-frame readback, so it only runs while armed: a capture
+// request arms it for a few seconds, and the first request usually answers "not
+// ready" because the arming frame has not been presented yet.
+//------------------------------------------------------------------------------
+ECORE_API void	DX11ArmFrameCapture		();
+ECORE_API bool	DX11GetFrameCapture		(U32Vec& out, u32& w, u32& h);
+// called from CEditorRenderDevice::End() right before Present
+ECORE_API void	DX11MirrorBackbuffer	();
+
 #endif	//	USE_DX11

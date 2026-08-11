@@ -116,6 +116,16 @@ void					CTexture::surface_set	(ID3DBaseTexture* surf )
 	}	
 }
 
+ID3DShaderResourceView*	CTexture::get_SRView()
+{
+	// same promotion Apply() and surface_get() do - without it the view is null
+	// until the texture happens to be drawn once
+	if (flags.bLoadedAsStaging)
+		ProcessStaging();
+
+	return m_pSRView;
+}
+
 ID3DBaseTexture*	CTexture::surface_get	()
 {
 	if (flags.bLoadedAsStaging)

@@ -53,7 +53,11 @@ public:
 	virtual ~CTexture					();
 	
 #if defined(USE_DX10) || defined(USE_DX11)
-	ID3DShaderResourceView*				get_SRView() {return m_pSRView;}
+	// Textures are loaded into a STAGING resource by default and only promoted
+	// to a real one on first use, so the view does not exist yet at that point.
+	// Anything that wants to bind the texture right away - the editor hands
+	// these straight to ImGui - has to go through here, not m_pSRView.
+	ID3DShaderResourceView*				get_SRView();
 #endif	//	USE_DX10
 
 private:

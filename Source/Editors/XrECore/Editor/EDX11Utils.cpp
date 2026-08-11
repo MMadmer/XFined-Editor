@@ -9,6 +9,61 @@
 #include "RedImageTool/RedImage.hpp"
 
 //------------------------------------------------------------------------------
+// whole-window capture state, see the header for why this has to exist
+namespace
+{
+	U32Vec	g_frame_px;
+	u32		g_frame_w		= 0;
+	u32		g_frame_h		= 0;
+	u32		g_armed_until	= 0;	// GetTickCount() stamp
+	u32		g_last_mirror	= 0;
+
+	// wall-clock, not frame counts: the arm window has to survive the seconds
+	// between the request that arms it and the follow-up that reads the frame
+	const u32	CAPTURE_ARM_MS		= 6000;
+	const u32	CAPTURE_PERIOD_MS	= 100;
+}
+
+void	DX11ArmFrameCapture()
+{
+	g_armed_until	= ::GetTickCount() + CAPTURE_ARM_MS;
+}
+
+bool	DX11GetFrameCapture(U32Vec& out, u32& w, u32& h)
+{
+	if (!g_frame_w || !g_frame_h || g_frame_px.empty())	return false;
+	out	= g_frame_px;
+	w	= g_frame_w;
+	h	= g_frame_h;
+	return true;
+}
+
+void	DX11MirrorBackbuffer()
+{
+	const u32 now = ::GetTickCount();
+	if (now > g_armed_until)						return;
+	// a full readback every frame would stall the loop for as long as capture
+	// stays armed, and nothing needs that rate
+	if (g_last_mirror && (now - g_last_mirror) < CAPTURE_PERIOD_MS)	return;
+	if (!HW.m_pSwapChain)							return;
+
+	ID3D11Texture2D* bb = 0;
+	if (FAILED(HW.m_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb)
+		return;
+
+	U32Vec	px;
+	u32		w = 0, h = 0;
+	if (DX11ReadbackBGRA(bb, px, w, h))
+	{
+		g_frame_px.swap(px);
+		g_frame_w		= w;
+		g_frame_h		= h;
+		g_last_mirror	= now;
+	}
+	bb->Release();
+}
+
+//------------------------------------------------------------------------------
 SDX11Target::SDX11Target()
 {
 	rt = 0; rtv = 0; ds = 0; dsv = 0; srv = 0; w = 0; h = 0;

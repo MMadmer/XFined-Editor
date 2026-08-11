@@ -6,7 +6,15 @@
 //////////////////////////////////////////////////////
 
 #ifdef 	SKIN_NONE
-SKIN_VF	main(v_model v) 		{ return _main(v); 		}
+// see v_model_min in common.h - the unskinned path must not demand tangents
+SKIN_VF	main(v_model_min v)
+{
+	v_model	m	= (v_model)0;
+	m.pos		= v.pos;
+	m.norm		= float3(0,1,0);
+	m.tc		= v.tc;
+	return _main(m);
+}
 #endif
 
 #ifdef 	SKIN_0
@@ -34,7 +42,15 @@ SKIN_VF	main(v_model_skinned_4 v) 	{ return _main(skinning_4lq(v)); }
 //////////////////////////////////////////////////////
 
 #ifdef 	SKIN_NONE
-SKIN_VF	main(v_model v) 		{ return _main(v); 		}
+// see v_model_min in common.h - the unskinned path must not demand tangents
+SKIN_VF	main(v_model_min v)
+{
+	v_model	m	= (v_model)0;
+	m.pos		= v.pos;
+	m.norm		= float3(0,1,0);
+	m.tc		= v.tc;
+	return _main(m);
+}
 #endif
 
 #ifdef 	SKIN_0

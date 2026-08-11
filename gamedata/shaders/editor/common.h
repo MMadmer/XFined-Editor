@@ -96,6 +96,17 @@ struct 	v_model
 	float3 	rgb_tint;
 #endif
 };
+// The editor pushes plain FVF geometry (position/normal/uv, sometimes only
+// position/uv) through the same shader as real OGF visuals. D3D11 rejects an
+// input layout that is missing a semantic the shader consumes, so the unskinned
+// entry point asks for the smallest set it can actually use. Extra streams in
+// the layout are fine; missing ones are not.
+struct	v_model_min
+{
+	float4 	pos	: POSITION;	// (float,float,float,1)
+	float2	tc	: TEXCOORD0;	// (u,v)
+};
+
 struct	v_detail
 {
 	float4 	pos	: POSITION;	// (float,float,float,1)

@@ -9,8 +9,19 @@
 #include "../Engine/XrGameMaterialLibraryEditors.h"
 #include "ResourceManager.h"
 #include "UI_ToolsCustom.h"
+#if defined(USE_DX11)
+#include "EDX11Utils.h"
+#endif
 
 CEditorRenderDevice 	*	EDevice;
+
+#if defined(USE_DX11)
+// Bisect switches for the D3D11 bring-up. Each disables one thing this port
+// added on top of the working baseline, so a crash can be localised with runs
+// instead of rebuilds. Remove once the port is stable.
+bool	g_dx11_no_ffconst	= !!strstr(GetCommandLineA(), "-no_ffconst");
+bool	g_dx11_no_rebind	= !!strstr(GetCommandLineA(), "-no_rebind");
+#endif
 
 extern int	rsDVB_Size;
 extern int	rsDIB_Size;
@@ -339,6 +350,14 @@ void CEditorRenderDevice::Reset  	(bool )
     HW.Reset				(m_hWnd);
     dwRealWidth					= HW.m_ChainDesc.BufferDesc.Width;
     dwRealHeight				= HW.m_ChainDesc.BufferDesc.Height;
+    // the swap chain handed out brand new views and HW.Reset cleared the device
+    // state - anything the backend still remembers points at freed objects
+    if (!g_dx11_no_rebind)
+    {
+        RCache.OnFrameEnd		();
+        RCache.set_RT			(HW.pBaseRT);
+        RCache.set_ZB			(HW.pBaseZB);
+    }
 #else
     HW.DevPP.BackBufferWidth= dwRealWidth;
     HW.DevPP.BackBufferHeight= dwRealHeight;
@@ -354,6 +373,9 @@ void CEditorRenderDevice::Reset  	(bool )
     _SetupStates			();
     u32 tm_end				= TimerAsync();
     Msg						("*** RESET [%d ms]",tm_end-tm_start);
+#if defined(USE_DX10) || defined(USE_DX11)
+    HW.DrainDebugMessages	();
+#endif
 }
 
 bool CEditorRenderDevice::Begin	()
@@ -365,6 +387,8 @@ bool CEditorRenderDevice::Begin	()
 	vCameraPosition_saved = vCameraPosition;
 	HW.Validate		();
 #if defined(USE_DX10) || defined(USE_DX11)
+	// whatever the previous frame did wrong is still sitting in the queue
+	HW.DrainDebugMessages	();
 	// D3D11 has no lost-device protocol and no scene begin/end: bind the
 	// backbuffer for this frame and clear it directly.
     VERIFY 					(FALSE==g_bRendering);
@@ -418,6 +442,10 @@ void CEditorRenderDevice::End()
 	// end scene
 	RCache.OnFrameEnd();
 #if defined(USE_DX10) || defined(USE_DX11)
+	HW.DrainDebugMessages	();
+	// last chance to read the finished frame: FLIP_DISCARD leaves the back
+	// buffer undefined once Present returns
+	DX11MirrorBackbuffer	();
 	HW.m_pSwapChain->Present( 0, 0 );
 #else
     CHK_DX(HW.pDevice->EndScene());
@@ -467,6 +495,8 @@ void CEditorRenderDevice::FrameMove()
 #if defined(USE_DX11)
 void CEditorRenderDevice::ApplyFFConstants()
 {
+	if (g_dx11_no_ffconst)	return;
+
 	// TEXTUREFACTOR used to tint fixed-function output through a texture stage;
 	// the editor shaders take it as a uniform instead. Named lookups miss
 	// silently when a shader has no such constant, so this is safe for all of them.
