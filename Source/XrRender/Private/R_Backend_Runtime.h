@@ -14,6 +14,11 @@
 #include "../DX9/dx9R_Backend_Runtime.h"
 #endif	//	USE_DX10
 
+#if defined(REDITOR) && defined(USE_DX11)
+// implemented in XrECore's device.cpp - see the note at the set_Element call
+ECORE_API void EDevice_PushFFConstants();
+#endif
+
 IC void		R_xforms::set_c_w			(R_constant* C)		{	c_w		= C;	RCache.set_c(C,m_w);	};
 IC void		R_xforms::set_c_invw		(R_constant* C)		{	c_invw	= C;	apply_invw();			};
 IC void		R_xforms::set_c_v			(R_constant* C)		{	c_v		= C;	RCache.set_c(C,m_v);	};
@@ -114,6 +119,12 @@ IC void CBackend::set_Element			(ShaderElement* S, u32	pass)
 #ifdef _EDITOR
 	Breadcrumb		("set_Element: matrices");
 	set_Matrices	(P.M);
+#endif
+#if defined(REDITOR) && defined(USE_DX11)
+	// feed the recorded fixed-function state (lights, tfactor) to whatever
+	// shader was just bound - the model pool renders through here, not
+	// through EDevice->DP/DIP
+	EDevice_PushFFConstants();
 #endif
 	Breadcrumb		("set_Element: done");
 }

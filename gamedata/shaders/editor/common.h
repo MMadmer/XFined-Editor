@@ -96,14 +96,16 @@ struct 	v_model
 	float3 	rgb_tint;
 #endif
 };
-// The editor pushes plain FVF geometry (position/normal/uv, sometimes only
-// position/uv) through the same shader as real OGF visuals. D3D11 rejects an
-// input layout that is missing a semantic the shader consumes, so the unskinned
-// entry point asks for the smallest set it can actually use. Extra streams in
-// the layout are fine; missing ones are not.
+// The editor pushes plain FVF geometry through the same shader as real OGF
+// visuals. D3D11 rejects an input layout that is missing a semantic the shader
+// consumes, so the unskinned entry point asks only for what every editor mesh
+// actually carries: position, normal, uv. Tangent frames exist solely in the
+// skinned OGF declarations - demanding them here is what used to kill the
+// layout. Extra streams in the layout are fine; missing ones are not.
 struct	v_model_min
 {
 	float4 	pos	: POSITION;	// (float,float,float,1)
+	float3	norm	: NORMAL;	// (nx,ny,nz)
 	float2	tc	: TEXCOORD0;	// (u,v)
 };
 
@@ -112,6 +114,32 @@ struct	v_detail
 	float4 	pos	: POSITION;	// (float,float,float,1)
 	int4 	misc	: TEXCOORD0;	// (u(Q),v(Q),frac,matrix-id)
 };
+
+//////////////////////////////////////////////////////////////////////////////////////////
+// Fixed-function lighting emulation. The engine records the editor's SetLight/
+// LightEnable/SetRS(AMBIENT) calls and feeds them here on every set_Element -
+// see EDevice_PushFFConstants. Zero enabled lights = the unlit path, which is
+// how the scene viewport always rendered; previews and thumbnails enable a rig
+// of directional lights, same as they did through D3D9's T&L.
+uniform float4		ffp_ambient;		// rgb, a=1
+uniform float4		ffp_params;			// x = enabled light count
+uniform float4		ffp_light_dir	[4];	// xyz = direction (world)
+uniform float4		ffp_light_color	[4];	// rgb = diffuse
+
+float3	calc_ffp_lighting	(float3 norm_w)
+{
+	int count	= int(ffp_params.x);
+	if (count <= 0)
+		return float3(1,1,1);
+
+	float3 acc	= ffp_ambient.rgb;
+	for (int i=0; i<4; i++)
+	{
+		if (i >= count)	break;
+		acc	+= ffp_light_color[i].rgb * max(0, dot(norm_w, -normalize(ffp_light_dir[i].xyz)));
+	}
+	return acc;
+}
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Pre-transformed (screen-space) geometry - FVF::F_TL / FVF::F_TL0uv.

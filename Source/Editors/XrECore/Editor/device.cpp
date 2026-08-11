@@ -496,6 +496,13 @@ void CEditorRenderDevice::FrameMove()
 void CEditorRenderDevice::ApplyFFConstants()
 {
 	if (g_dx11_no_ffconst)	return;
+	EDevice_PushFFConstants	();
+}
+
+void EDevice_PushFFConstants()
+{
+	if (!EDevice)			return;
+	SEditorFixedFunc& ff	= EDevice->ff;
 
 	// TEXTUREFACTOR used to tint fixed-function output through a texture stage;
 	// the editor shaders take it as a uniform instead. Named lookups miss
@@ -506,8 +513,36 @@ void CEditorRenderDevice::ApplyFFConstants()
 
 	// Pre-transformed (POSITIONT) geometry has no fixed-function T&L left to
 	// divide by the viewport, so the vertex shader does it from these.
-	const float w	= float(dwWidth), h = float(dwHeight);
+	const float w	= float(EDevice->dwWidth), h = float(EDevice->dwHeight);
 	RCache.set_c	("screen_res", w, h, w>0.f?1.f/w:0.f, h>0.f?1.f/h:0.f);
+
+	// Fixed-function lighting, the part D3D11 dropped outright. Only the
+	// directional lights the editor ever used are emulated. With zero enabled
+	// lights the shaders take their unlit path, which is exactly how the scene
+	// viewport always looked - only previews and thumbnails enable lights.
+	const u32 amb	= ff.render_state[u32(D3DRS_AMBIENT) & (SEditorFixedFunc::RS_MAX-1)];
+	Fcolor a;		a.set(amb);
+
+	Fvector4	dirs	[SEditorFixedFunc::LIGHTS];
+	Fvector4	colors	[SEditorFixedFunc::LIGHTS];
+	int			count	= 0;
+	for (u32 i=0; i<SEditorFixedFunc::LIGHTS && count<4; ++i)
+	{
+		if (!ff.light_enabled[i])					continue;
+		const Flight& L = ff.light[i];
+		if (L.type != D3DLIGHT_DIRECTIONAL)			continue;
+		dirs[count].set		(L.direction.x, L.direction.y, L.direction.z, 0.f);
+		colors[count].set	(L.diffuse.r,  L.diffuse.g,  L.diffuse.b,  0.f);
+		++count;
+	}
+
+	RCache.set_c	("ffp_ambient", a.r, a.g, a.b, 1.f);
+	RCache.set_c	("ffp_params",  float(count), 0.f, 0.f, 0.f);
+	for (int i=0; i<count; ++i)
+	{
+		RCache.set_ca	("ffp_light_dir",   u32(i), dirs[i]);
+		RCache.set_ca	("ffp_light_color", u32(i), colors[i]);
+	}
 }
 #endif
 

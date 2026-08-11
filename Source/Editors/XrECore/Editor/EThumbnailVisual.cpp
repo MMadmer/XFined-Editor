@@ -44,6 +44,10 @@ namespace
 		// only device state an offscreen pass here overwrites, and that is what
 		// SDX11TargetGuard restores; everything else the draw path sets itself.
 		SDX11TargetGuard		m_Targets;
+		// the D3D9 state block also covered lights and material - the recorded
+		// fixed-function block is that state now, and the lights this pass
+		// enables must not leak into the scene draw that follows
+		SEditorFixedFunc		m_FF;
 #else
 		IDirect3DStateBlock9*	m_Block;
 		IDirect3DSurface9*		m_OldRT;
@@ -62,7 +66,9 @@ namespace
 
 		SRenderStateGuard()
 		{
-#if !defined(USE_DX11)
+#if defined(USE_DX11)
+			m_FF				= EDevice->ff;
+#else
 			m_Block				= 0;
 			m_OldRT				= 0;
 			m_OldZB				= 0;
@@ -93,7 +99,9 @@ namespace
 
 		~SRenderStateGuard()
 		{
-#if !defined(USE_DX11)
+#if defined(USE_DX11)
+			EDevice->ff			= m_FF;
+#else
 			if (m_Block)		m_Block->Apply();
 			// render targets are not part of a D3D9 state block - restore by hand,
 			// and only then the viewport, since SetRenderTarget resets it

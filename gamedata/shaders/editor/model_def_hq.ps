@@ -3,11 +3,16 @@
 struct 	v2p
 {
  	float2 	tc0: 		TEXCOORD0;	// base
+	float4	c:		COLOR0;		// ffp lighting
 };
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Pixel
 float4 	main	( v2p I )	: SV_Target
 {
-	return   s_base.Sample	(smp_base, I.tc0);
+	float4	t	= s_base.Sample	(smp_base, I.tc0);
+	// saturate keeps a stacked light rig from blowing highlights out the way
+	// D3D9's fixed-function pipe clamped them
+	t.rgb		*= saturate(I.c.rgb);
+	return	t;
 }

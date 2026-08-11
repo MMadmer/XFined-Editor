@@ -11,7 +11,7 @@ SKIN_VF	main(v_model_min v)
 {
 	v_model	m	= (v_model)0;
 	m.pos		= v.pos;
-	m.norm		= float3(0,1,0);
+	m.norm		= v.norm;
 	m.tc		= v.tc;
 	return _main(m);
 }
@@ -47,7 +47,7 @@ SKIN_VF	main(v_model_min v)
 {
 	v_model	m	= (v_model)0;
 	m.pos		= v.pos;
-	m.norm		= float3(0,1,0);
+	m.norm		= v.norm;
 	m.tc		= v.tc;
 	return _main(m);
 }

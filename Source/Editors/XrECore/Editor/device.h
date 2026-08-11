@@ -238,6 +238,14 @@ public:
 
 extern ECORE_API CEditorRenderDevice* EDevice;
 
+#if defined(USE_DX11)
+// The engine backend calls this after every set_Element (REDITOR only), so the
+// recorded fixed-function state reaches shaders on EVERY draw path - the model
+// pool included, which never goes through EDevice->DP/DIP. A free function
+// because R_Backend_Runtime.h cannot see the class.
+ECORE_API void			EDevice_PushFFConstants();
+#endif
+
 // Device-reset notifications for code living outside XrECore. D3D9 refuses to
 // Reset() while any D3DPOOL_DEFAULT resource is alive, so a panel that owns a
 // render target of its own has to drop it here - CResourceManager only knows

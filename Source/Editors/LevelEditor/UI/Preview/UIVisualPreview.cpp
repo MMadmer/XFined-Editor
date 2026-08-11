@@ -34,6 +34,9 @@ namespace
 		// depth view and viewport, and the shader state is re-applied per draw
 		// anyway once RCache is invalidated below.
 		SDX11TargetGuard		m_Views;
+		// lights/material live in the recorded FF block now - restore it so the
+		// preview's light rig does not leak into the scene pass
+		SEditorFixedFunc		m_FF;
 #else
 		IDirect3DStateBlock9*	m_Block;
 		IDirect3DSurface9*		m_OldRT;
@@ -52,7 +55,9 @@ namespace
 
 		SPreviewStateGuard()
 		{
-#if !defined(USE_DX11)
+#if defined(USE_DX11)
+			m_FF				= EDevice->ff;
+#else
 			m_Block				= 0;
 			m_OldRT				= 0;
 			m_OldZB				= 0;
@@ -81,7 +86,9 @@ namespace
 
 		~SPreviewStateGuard()
 		{
-#if !defined(USE_DX11)
+#if defined(USE_DX11)
+			EDevice->ff			= m_FF;
+#else
 			if (m_Block)		m_Block->Apply();
 			// render targets are not part of a D3D9 state block - restore by
 			// hand, and only then the viewport, since SetRenderTarget resets it
