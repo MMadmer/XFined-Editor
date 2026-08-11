@@ -29,10 +29,12 @@ namespace
 	u32			s_font_left		= 2;
 }
 #define FONT_TRACE(...)	do { if (s_font_trace && s_font_left) Msg(__VA_ARGS__); } while(0)
+#define FONT_BC(x)		Breadcrumb("font: " x)
 
 void dxFontRender::OnRender(CGameFont &owner)
 {
 	VERIFY				(g_bRendering);
+	FONT_BC("enter");
 	FONT_TRACE("~ font: enter, shader=%d geom=%d strings=%d", !!pShader, !!pGeom, int(owner.strings.size()));
 	if (pShader)
 	{
@@ -46,6 +48,7 @@ void dxFontRender::OnRender(CGameFont &owner)
 		}
 		RCache.set_Shader	(pShader);
 	}
+	FONT_BC("shader set");
 	FONT_TRACE("~ font: shader set");
 	FONT_TRACE("~ font: stride=%d", pGeom ? int(pGeom.stride()) : -1);
 
@@ -88,8 +91,10 @@ void dxFontRender::OnRender(CGameFont &owner)
 
 		// lock AGP memory
 		u32	vOffset;
+		FONT_BC("before lock");
 		FONT_TRACE("~ font: lock %d verts, stride %d", length*4, int(pGeom.stride()));
 		FVF::TL* v		= (FVF::TL*)RCache.Vertex.Lock	(length*4,pGeom.stride(),vOffset);
+		FONT_BC("after lock");
 		FONT_TRACE("~ font: locked ptr=%s offset=%d", v ? "ok" : "NULL", int(vOffset));
 		FVF::TL* start	= v;
 
@@ -179,12 +184,16 @@ void dxFontRender::OnRender(CGameFont &owner)
 
 		// Unlock and draw
 		u32 vCount = (u32)(v-start);
+		FONT_BC("filled");
 		FONT_TRACE("~ font: filled %d of %d verts", int(vCount), length*4);
 		RCache.Vertex.Unlock		(vCount,pGeom.stride());
+		FONT_BC("unlocked");
 		if (vCount){
 			RCache.set_Geometry		(pGeom);
+			FONT_BC("before Render");
 			FONT_TRACE("~ font: before Render");
 			RCache.Render			(D3DPT_TRIANGLELIST,vOffset,0,vCount,0,vCount/2);
+			FONT_BC("after Render");
 			FONT_TRACE("~ font: after Render");
 		}
 	}

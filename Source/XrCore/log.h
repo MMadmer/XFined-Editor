@@ -20,6 +20,9 @@ void 	XRCORE_API				CreateLog	(BOOL no_log=FALSE);
 void 							InitLog		();
 void 							CloseLog	();
 void	XRCORE_API				FlushLog	();
+// Allocation-free progress marker, enabled by -bc, written to bc.txt next to the
+// exe. For bugs that move or vanish when the heap layout changes.
+void	XRCORE_API				Breadcrumb	(const char* where);
 
 extern 	XRCORE_API	xr_vector<shared_str>*		LogFile;
 extern 	XRCORE_API	BOOL						LogExecCB;

@@ -418,7 +418,8 @@ ID3DBaseTexture* CRender::texture_load(LPCSTR fRName, u32& ret_msize, bool bStag
 	}
 Load:
 	{
-	
+		Breadcrumb(fn);
+		Breadcrumb("texture_load: open");
 		S = FS.r_open(fn);
 		R_ASSERT2(S, fn);
 		RedImage Image;
@@ -534,6 +535,12 @@ Load:
 			}
 			xr_vector<D3D_SUBRESOURCE_DATA> SubResources;
 			u8* Pointer = (u8*)(*Image);
+			// The walk below trusts the arithmetic to match RedImage's actual
+			// buffer. If it does not, pSysMem for later mips points past the
+			// allocation and CreateTexture2D reads out of bounds - so verify
+			// against the real size and drop the tail mips instead of crashing.
+			const u8*	image_end	= (u8*)(*Image) + Image.GetSizeInMemory();
+			UINT		mips_ok		= 0;
 			for (UINT i = 0; i < Image.GetDepth(); i++)
 			{
 				for (UINT a = 0; a < Desc.MipLevels; a++)
@@ -545,10 +552,30 @@ Load:
 					SubResource.SysMemPitch = static_cast<UINT>(RedTextureUtils::GetSizeWidth(MipW, Image.GetFormat()));
 					SubResource.SysMemSlicePitch = static_cast<UINT>(RedTextureUtils::GetSizeDepth(MipW, MipH, Image.GetFormat()));
 					Pointer += SubResource.SysMemSlicePitch;
+					if (Pointer > image_end)
+					{
+						Msg("! texture '%s': mip %u ends %u byte(s) past the decoded image, chain truncated",
+							fn, a, u32(Pointer - image_end));
+						break;
+					}
 					SubResources.push_back(SubResource);
+					if (0==i)	mips_ok++;
 				}
 			}
+			// a shorter chain than declared must be reflected in the desc,
+			// otherwise the runtime reads init data for levels we never filled
+			if (mips_ok != Desc.MipLevels)
+			{
+				Desc.MipLevels = mips_ok ? mips_ok : 1;
+				if (!mips_ok)
+				{
+					Msg("! texture '%s': no valid mips, refusing", fn);
+					return 0;
+				}
+			}
+			Breadcrumb("texture_load: before CreateTexture2D");
 			R_CHK(HW.pDevice->CreateTexture2D(&Desc, SubResources.data(), &Texture2D));
+			Breadcrumb("texture_load: created");
 			return Texture2D;
 
 		}

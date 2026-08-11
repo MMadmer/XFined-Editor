@@ -226,7 +226,20 @@ void CBackend::set_Textures			(STextureList* _T)
 		if (load_id < CTexture::rstVertex)
 		{
 			//	Set up pixel shader resources
-			VERIFY(load_id<mtMaxPixelShaderTextures);
+			// rstVertex is 257, textures_ps holds 16. Anything in between used
+			// to scribble straight over the rest of CBackend, and VERIFY is
+			// compiled out of a release build - so the guard has to be real.
+			if (load_id>=mtMaxPixelShaderTextures)
+			{
+				static bool reported = false;
+				if (!reported)
+				{
+					reported = true;
+					Msg	("! texture bind slot %d is out of range (max %d), skipped - shader reflection is handing out bad indices",
+						load_id, int(mtMaxPixelShaderTextures));
+				}
+				continue;
+			}
 			// ordinary pixel surface
 			if ((int)load_id>_last_ps)		_last_ps	=	load_id;
 			if (textures_ps[load_id]!=load_surf)	
@@ -235,22 +248,36 @@ void CBackend::set_Textures			(STextureList* _T)
 #ifdef DEBUG
 				stat.textures			++;
 #endif
-				if (load_surf)			
+				if (load_surf)
 				{
 					PGO					(Msg("PGO:tex%d:%s",load_id,load_surf->cName.c_str()));
+					Breadcrumb			("set_Textures: before bind ps");
+					// shared_str::c_str() is a plain pointer read - no allocation
+					Breadcrumb			(load_surf->cName.c_str());
 					load_surf->bind		(load_id);
+					Breadcrumb			("set_Textures: after bind ps");
 //					load_surf->Apply	(load_id);
 				}
 			}
-		} else 
+		} else
 #if	defined(USE_DX10) || defined(USE_DX11)
 		if (load_id < CTexture::rstGeometry)
 #endif	//	UDE_DX10
 		{
 			//	Set up pixel shader resources
-			VERIFY(load_id < CTexture::rstVertex+mtMaxVertexShaderTextures);
+			// same story as the pixel branch above
+			if (load_id >= CTexture::rstVertex+mtMaxVertexShaderTextures)
+			{
+				static bool reported = false;
+				if (!reported)
+				{
+					reported = true;
+					Msg	("! vertex texture bind slot %d is out of range, skipped", load_id);
+				}
+				continue;
+			}
 
-			// vertex only //d-map or vertex	
+			// vertex only //d-map or vertex
 			u32		load_id_remapped	= load_id - CTexture::rstVertex;
 			if ((int)load_id_remapped>_last_vs)	_last_vs	=	load_id_remapped;
 			if (textures_vs[load_id_remapped]!=load_surf)	
@@ -364,6 +391,7 @@ void CBackend::set_Textures			(STextureList* _T)
 	}
 
 
+	Breadcrumb("set_Textures: clear ps");
 	// clear remaining stages (PS)
 	for (++_last_ps; _last_ps<mtMaxPixelShaderTextures; _last_ps++)
 	{
@@ -380,8 +408,9 @@ void CBackend::set_Textures			(STextureList* _T)
 		CHK_DX							(HW.pDevice->SetTexture(_last_ps,NULL));
 #endif	//	USE_DX10
 	}
+	Breadcrumb("set_Textures: clear vs");
 	// clear remaining stages (VS)
-	for (++_last_vs; _last_vs<mtMaxVertexShaderTextures; _last_vs++)		
+	for (++_last_vs; _last_vs<mtMaxVertexShaderTextures; _last_vs++)
 	{
 		if (!textures_vs[_last_vs])
 			continue;

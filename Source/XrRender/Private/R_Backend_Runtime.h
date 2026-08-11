@@ -92,8 +92,12 @@ IC void CBackend::set_Matrices			(SMatrixList*	_M)
 IC void CBackend::set_Element			(ShaderElement* S, u32	pass)
 {
 	SPass&	P		= *(S->passes[pass]);
+	// -bc breadcrumbs: no-ops unless the switch is on, and heap-free either way
+	Breadcrumb		("set_Element: states");
 	set_States		(P.state);
+	Breadcrumb		("set_Element: ps");
 	set_PS			(P.ps);
+	Breadcrumb		("set_Element: vs");
 	set_VS			(P.vs);
 #if defined(USE_DX10) || defined(USE_DX11)
 	set_GS			(P.gs);
@@ -103,11 +107,15 @@ IC void CBackend::set_Element			(ShaderElement* S, u32	pass)
 	set_CS			(P.cs);
 #endif
 #endif	//	USE_DX10
+	Breadcrumb		("set_Element: constants");
 	set_Constants	(P.constants);
+	Breadcrumb		("set_Element: textures");
 	set_Textures	(P.T);
 #ifdef _EDITOR
+	Breadcrumb		("set_Element: matrices");
 	set_Matrices	(P.M);
 #endif
+	Breadcrumb		("set_Element: done");
 }
 
 ICF void CBackend::set_Shader			(Shader* S, u32 pass)

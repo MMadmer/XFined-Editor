@@ -144,9 +144,12 @@ void CTexture::PostLoad	()
 }
 
 void CTexture::apply_load	(u32 dwStage)	{
+	Breadcrumb("apply_load: enter");
 	if (!flags.bLoaded)		Load			()	;
 	else					PostLoad		()	;
+	Breadcrumb("apply_load: loaded");
 	bind					(dwStage)			;
+	Breadcrumb("apply_load: bound");
 };
 
 void CTexture::ProcessStaging()

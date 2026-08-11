@@ -43,6 +43,9 @@ bool RedImage::LoadDDSFromMemory(void* pointer, size_t size)
 {
 	Clear();
 	u8* data = reinterpret_cast<u8*>(pointer);
+	// the local 'size' below shadows the argument, so the end of the file has
+	// to be captured while the real length is still visible
+	const u8* const file_end = data + size;
 	if (*reinterpret_cast<u32*>(data) == MAKEFOURCC('D', 'D', 'S', ' '))
 	{
 		data += sizeof(u32);
@@ -92,6 +95,24 @@ bool RedImage::LoadDDSFromMemory(void* pointer, size_t size)
 				std::swap(Header.ddspf.dwBitsMask[0], Header.ddspf.dwBitsMask[3]);
 			}
 
+			// The local 'data' here used to SHADOW the file cursor: the loop read
+			// pixels out of the destination buffer instead of the file, and the
+			// per-pixel advance combined with GetPixelUint8's own x indexing
+			// wrote roughly twice the image size past the allocation. Any
+			// uncompressed DDS corrupted the heap; the fourCC path never did,
+			// which is why only editor UI textures (fonts) ever triggered it.
+
+			// the payload must actually contain every mip it declares
+			size_t src_needed = 0;
+			for (size_t m = 0; m < m_Mips; m++)
+				src_needed += RedTextureUtils::GetMip(m_Width, m) * RedTextureUtils::GetMip(m_Height, m) * ByteSizePixel;
+			src_needed *= m_Depth;
+			if (data + src_needed > file_end)
+			{
+				Clear();
+				return false;
+			}
+
 			u32 pixel = 0;
 			Create(m_Width, m_Height, m_Mips, m_Depth, m_PixelFotmat,m_bCube);
 			for (size_t d = 0; d < m_Depth; d++)
@@ -100,14 +121,14 @@ bool RedImage::LoadDDSFromMemory(void* pointer, size_t size)
 				{
 					size_t h = RedTextureUtils::GetMip(m_Height, m);
 					size_t w = RedTextureUtils::GetMip(m_Width, m);
-					u8*data = RedTextureUtils::GetImage(m_ImageBuffer, m_Width, m_Height, m_Mips, d, m, m_PixelFotmat);
+					u8* dst = RedTextureUtils::GetImage(m_ImageBuffer, m_Width, m_Height, m_Mips, d, m, m_PixelFotmat);
 					for (size_t x = 0; x < w*h; x++)
 					{
 						memcpy(&pixel, data, ByteSizePixel);
 						data += ByteSizePixel;
 						for (size_t a = 0; a < coutComp; a++)
 						{
-							*RedTextureUtils::GetPixelUint8(x, 0, 0, coutComp, a, data)= static_cast<u8>(ConvertColor((pixel & Header.ddspf.dwBitsMask[a]) >> ShiftBit[a], SizeBit[a], 8));;
+							*RedTextureUtils::GetPixelUint8(x, 0, 0, coutComp, a, dst)= static_cast<u8>(ConvertColor((pixel & Header.ddspf.dwBitsMask[a]) >> ShiftBit[a], SizeBit[a], 8));
 						}
 					}
 				}

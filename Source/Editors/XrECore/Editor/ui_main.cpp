@@ -397,8 +397,27 @@ namespace
 {
 	const bool	s_ui_trace		= !!strstr(GetCommandLineA(), "-trace");
 	u32			s_ui_trace_left	= 3;
+
+	// -heapcheck: validate the process heap at the same points the breadcrumbs
+	// sit on. Deliberately silent on success - it must not allocate, or it would
+	// shift the heap the same way -trace does and hide the very bug we are after.
+	const bool	s_ui_heapchk	= !!strstr(GetCommandLineA(), "-heapcheck");
+
+	void ui_heapchk(LPCSTR where)
+	{
+		if (!s_ui_heapchk)								return;
+		if (::HeapValidate(::GetProcessHeap(), 0, NULL))	return;
+
+		Msg		("! HEAP CORRUPT detected at: %s", where);
+		FlushLog();
+	}
+
+	// Breadcrumbs go through the single writer in xrCore. A second local one
+	// would open bc.txt again with its own file position and silently overwrite
+	// what the other module had written.
+	IC void ui_breadcrumb(LPCSTR where)	{ Breadcrumb(where); }
 }
-#define UI_TRACE(x)	do { if (s_ui_trace && s_ui_trace_left) Msg("~ trace: " x); } while(0)
+#define UI_TRACE(x)	do { ui_breadcrumb(x); if (s_ui_trace && s_ui_trace_left) Msg("~ trace: " x); ui_heapchk(x); } while(0)
 
 void TUI::Redraw()
 {

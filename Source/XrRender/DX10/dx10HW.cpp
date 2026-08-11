@@ -688,10 +688,17 @@ void CHW::Reset (HWND hwnd)
 
 	UpdateViews();
 
-	// ClearState wiped the device state the caches believe they own
-	StateManager.Reset();
-	SRVSManager.ResetDeviceState();
-	SSManager.ResetDeviceState();
+	// ClearState wiped the device state the caches believe they own.
+	// -no_clearstate also skips this: StateManager::Reset runs UnmapConstants,
+	// and unmapping a buffer that is not mapped leaves the constant writer
+	// holding a pointer into freed memory - which shows up much later as heap
+	// corruption, not as an error here.
+	if (!s_no_clearstate)
+	{
+		StateManager.Reset();
+		SRVSManager.ResetDeviceState();
+		SSManager.ResetDeviceState();
+	}
 
 /*
 	// Windoze

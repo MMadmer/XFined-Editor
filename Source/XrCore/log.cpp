@@ -20,6 +20,35 @@ static BOOL 				no_log			= TRUE;
 xr_vector<shared_str>*		LogFile			= NULL;
 static LogCallback			LogCB			= 0;
 
+// -bc: breadcrumbs straight to a file through raw Win32. Msg() allocates, and a
+// heap-sensitive bug vanishes the moment the layout shifts, so this probe stays
+// out of the heap and out of the engine log entirely.
+static bool		bc_enabled	= false;
+static bool		bc_checked	= false;
+static HANDLE	bc_file		= INVALID_HANDLE_VALUE;
+
+void Breadcrumb			(const char* where)
+{
+	if (!bc_checked)
+	{
+		bc_checked	= true;
+		bc_enabled	= !!strstr(GetCommandLineA(), "-bc");
+	}
+	if (!bc_enabled || !where)	return;
+
+	if (INVALID_HANDLE_VALUE == bc_file)
+	{
+		bc_file = ::CreateFileA("bc.txt", GENERIC_WRITE, FILE_SHARE_READ, NULL,
+			CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
+		if (INVALID_HANDLE_VALUE == bc_file)	{ bc_enabled = false; return; }
+	}
+
+	DWORD written = 0;
+	::WriteFile	(bc_file, where, DWORD(::lstrlenA(where)), &written, NULL);
+	::WriteFile	(bc_file, "\r\n", 2, &written, NULL);
+	::FlushFileBuffers(bc_file);
+}
+
 void FlushLog			()
 {
 	if (!no_log){
