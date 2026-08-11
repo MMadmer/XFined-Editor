@@ -117,10 +117,13 @@ target_compile_definitions(XrECore PRIVATE XRECORE_EXPORTS _WINDOWS _USRDLL USE_
 target_include_directories(XrECore PRIVATE
     "${ED}/XrECore" "${SRC}/XrEngine" "${SRC}/XrRender/Private" "${SRC}/XrRender/Public"
     "${ED}/FreeMagic")
+# d3d9 is gone: under USE_DX11 nothing creates a D3D9 device any more.
+# d3dx9 stays for now - the editor still leans on its CPU math (D3DXMatrix*,
+# D3DXVec*, FVF declarator helpers); replacing those is the rest of S7.
 target_link_libraries(XrECore PRIVATE
     Luabind Ogg RedImageTool Theora Vorbis XrAPI XrCDB XrCore XrEngine XrParticles
     XrPhysics XrSound FreeMagic XrDXT XrEProps XrETools XrEUI
-    d3d11 dxgi d3dcompiler d3d9 d3dx9 vfw32 Winmm dxguid dinput8 Rpcrt4 lua51)
+    d3d11 dxgi d3dcompiler d3dx9 vfw32 Winmm dxguid dinput8 Rpcrt4 lua51)
 
 #-- LevelEditor ----------------------------------------------------------------
 file(GLOB_RECURSE LE_SRC CONFIGURE_DEPENDS "${ED}/LevelEditor/*.cpp")
@@ -141,10 +144,12 @@ target_compile_definitions(LevelEditor PRIVATE _WINDOWS USE_DX11)
 target_include_directories(LevelEditor PRIVATE
     "${ED}/LevelEditor" "${SRC}/XrEngine" "${SRC}/XrRender/Public" "${SRC}/XrRender/Private"
     "${ED}/LevelEditor/Engine")
+# the old d3dx9 line served the content browser's image loading, which now goes
+# through the RedImage decoder exported from XrECore
 target_link_libraries(LevelEditor PRIVATE
     XrAPI XrCDB XrCore XrEngine XrPhysics XrSound
     FreeMagic XrECore XrEProps XrETools XrEUI
-    d3dx9)  # content browser loads project image previews via D3DX
+    d3dx9)  # editor tool code still calls D3DX math directly (S7 tail)
 
 #-- XrSE_Factory family --------------------------------------------------------
 # Each factory has TWO precompiled headers in the vcxproj (stdafx.h + pch_script.h).
