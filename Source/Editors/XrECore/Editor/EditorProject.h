@@ -1,0 +1,74 @@
+#pragma once
+
+// Unreal-style project system.
+//
+// On startup the editor shows a fullscreen Project Browser (recent-project
+// tiles with previews + a create form) and nothing else; the actual editor UI
+// appears only after a project is opened. Opening a project REMOUNTS the
+// writable FS aliases ($maps$, $game_levels$, $game_spawn$, $import$, ...)
+// onto the project folder at runtime via FS_Path::_set_root, so scene saves
+// and compiled output can never touch the shared SDK data.
+//
+// Project = folder with project.ltx. Recents live in _projects.ini next to
+// the SDK root. preview.png (captured on project close) feeds the tiles.
+
+class ECORE_API EditorProject
+{
+public:
+	static bool		Active				();
+	static LPCSTR	Root				();		// project folder, no trailing slash
+	static LPCSTR	Name				();
+	static LPCSTR	BaseMapsDir			();		// SDK rawdata\levels (scene import source)
+
+	// fullscreen browser page; drawn INSTEAD of the editor UI until a project
+	// is opened. Returns true while the browser is on screen.
+	static bool		DrawBrowser			();
+
+	// ---- linked game install ------------------------------------------------
+	// A project points at one X-Ray game install ([project] game_root); the
+	// DARF Content browser reads that install, read-only, and nothing else in
+	// the editor is allowed to write into it.
+	static LPCSTR	GameRoot			();		// linked folder, no trailing slash
+	// non-empty + folder exists + fsgame.ltx present + a database or gamedata dir
+	static bool		GameLinked			();
+	// validates, stores in project.ltx, mounts the content; on failure returns
+	// false and leaves the human-readable cause in LinkError()
+	static bool		LinkGame			(LPCSTR folder);
+	static LPCSTR	LinkError			();
+	// BLOCKING modal, drawn INSTEAD of the editor UI whenever a project is open
+	// but its game link is missing or stale. Returns true while it owns the frame.
+	static bool		DrawGameLink		();
+	// MCP: report the link, or set it when the request carries a 'path'
+	static void		McpGameLink			(LPCSTR raw, xr_string& out);
+
+	// opens an existing project folder (must hold project.ltx unless create)
+	static bool		Open				(LPCSTR folder);
+	// creates <parent>\<name> (latin letters, digits, _ and - only) and opens it
+	static bool		Create				(LPCSTR parent, LPCSTR name);
+	// captures preview, stores last scene, unmounts and re-opens the browser
+	static void		Close				();
+
+	static bool		ValidateName		(LPCSTR name);
+
+	// in-editor helpers
+	static void		DrawUI				();		// import-scene modal
+	static void		RequestImportScene	();
+	static void		OpenProjectFolder	();
+	// deferred last-scene autoload: returns the path once, after the browser
+	// modal is fully closed (loading from inside the popup stack crashes)
+	static LPCSTR	PopPendingScene		();
+	// recent projects as a JSON array — for the MCP list_projects command
+	static void		ListRecentJson		(xr_string& out);
+
+private:
+	static void		Mount				();
+	static void		Unmount				();
+	static void		CreateLayout		();
+	static void		LoadManifest		();
+	static void		SaveManifest		();
+	static void		LoadRecent			();
+	static void		SaveRecent			();
+	static void		SavePreview			();
+	static void		ReleasePreviews		();
+	static bool		PickFolder			(char* dest, u32 dest_size, const wchar_t* title);
+};

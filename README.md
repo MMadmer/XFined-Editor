@@ -1,38 +1,53 @@
-XRayEngine [![Discord](https://img.shields.io/discord/530968529311367178?label=discord)](https://discord.gg/AyyCFs7)
-==========================
-It is open source version of the original XRay Engine 1.6, used in game S.T.A.L.K.E.R.:Call of Pripyat by GSC Game World.
+# XFined Editor
 
-### Supported Platform
-||Windows(x32/x64)|
-|---|---|
-|Engine(COP with Renders)|[![Build status](https://ci.appveyor.com/api/projects/status/l7x79iufq7n0mcs0/branch/master?svg=true)](https://ci.appveyor.com/project/BearIvan/xrayengine/branch/master)|
-|Editors|[![Build status](https://ci.appveyor.com/api/projects/status/rqhakafae4ljeo99?svg=true)](https://ci.appveyor.com/project/BearIvan/xrayengine-sdk)|
-|Clear Sky|[![Build status](https://ci.appveyor.com/api/projects/status/oxbuqwxa4shl3p8b?svg=true)](https://ci.appveyor.com/project/BearIvan/xrayengine-cs)|
+Level/SDK editor for **Dead Air: Refined** (S.T.A.L.K.E.R. X-Ray 1.6 family),
+built on the [RedPanda XRayEngine](https://github.com/RedPandaProjects/XRayEngine)
+port of the original GSC editors to x64 + ImGui.
 
-###  Особенности:
-* Оригинальный движок Зова припяти с минимальными изменениями
-* Полный порт Editors на  visual studio и x64
-* Прототип рендера на DX12 и Vulkan
-* Робочий ЧН на ЗП
+### What it adds on top of RedPanda
 
-### Features:
-* Original Call of Pripyat engine with minimal changes
-* Full port of Editors on visual studio and x64
-* Prototype render on DX12 and Vulkan
-* Working CS on COP Engine
+* **Mod projects** — pick/create a project folder on startup; all writes
+  (scenes, compiled spawns, imports, logs) land in the project, the shared SDK
+  data stays read-only. `File → Project → Import Base Scene` copies a stock
+  level into the project.
+* **Unreal-style viewport** — RMB fly + WASD/QE, MMB pan, wheel dolly/speed,
+  Alt orbit; Q/W/E/R gizmo modes, Space cycle, F focus, Esc deselect;
+  click-select across all object classes.
+* **Content Browser** — dockable asset browser with folder tree, thumbnail
+  grid, search, double-click placement and drag&drop into the viewport.
+* Per-monitor DPI awareness, GPU picker for hybrid laptops
+  (`Options → Render → GPU`), CoC/Dead Air data compatibility fixes.
 
-### More details
-This repository contains XRay Engine 1.6 sources based on T-6638
+### Building
 
-It is a place to share ideas on what to implement, gather people that want to work on the engine,
-and work on the source code.
+One command after a clean clone (needs Visual Studio 2022+ with the
+*Desktop development with C++* workload; CMake and Ninja ship with VS):
 
-If you find a bug or have an enhancement request, file an [Issue](https://github.com/TheBearProject/XRayEngine/issues).
+```powershell
+.\Build.ps1
+```
 
-Pull requests appreciated! However, the following things should be taken into consideration:
-* We want to keep the game as close as possible to the vanilla game, so instead of introducing new gameplay features,
-  consider adding non-gameplay features, fixing bugs, improving performance and code quality
-* Major changes should be discussed before implementation
+Binaries land in `Bin\x64\Release`. Useful variants: `-Target XrGame`,
+`-Clean`, `-Debug`. Optional targets: `XrLC`, `xrDO_Light` (level compilers).
 
-Be advised that this project is not sanctioned by GSC Game World in any way – and they remain the copyright holders
-of all the original source code.
+### AI integration (MCP)
+
+The editor hosts a local automation endpoint on `127.0.0.1:28016` from the
+first frame (project browser included). A dependency-free MCP stdio bridge
+lives at `tools/mcp/xfined_mcp.py`; tools include editor/viewport screenshots
+(working even when the window is covered) and editor state queries.
+
+Setup instructions for any AI agent — including a ready-to-paste prompt block —
+are in [`tools/mcp/AI_SETUP.md`](tools/mcp/AI_SETUP.md). Claude Code one-liner:
+
+```bash
+claude mcp add -s user xfined-editor -- python "<repo>/tools/mcp/xfined_mcp.py"
+```
+
+### Credits
+
+* GSC Game World — the original X-Ray engine and editors. This project is not
+  sanctioned by GSC Game World; they remain the copyright holders of the
+  original source code.
+* [RedPanda Projects](https://github.com/RedPandaProjects/XRayEngine) — the
+  x64/ImGui port this fork is based on.

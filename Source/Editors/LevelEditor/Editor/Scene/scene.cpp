@@ -372,6 +372,7 @@ void EScene::Modified()
     g_scene_physics.OnSceneModified();
     ExecCommand(COMMAND_UPDATE_CAPTION);
     UIObjectList::Refresh();
+    UIWorldOutliner::Refresh();
 }
 
 bool EScene::IsUnsaved()

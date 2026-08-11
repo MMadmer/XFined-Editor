@@ -99,6 +99,15 @@ public:
 	UINT					DevAdapter;
 	D3DDEVTYPE				DevT;
 	D3DPRESENT_PARAMETERS	DevPP;
+
+	// Adapter picked by the user, matched by description at device creation.
+	// Empty = whatever Windows calls the default one, i.e. the old behaviour.
+	// Matching by name rather than index survives adapters being reordered
+	// between runs (docking a laptop, enabling/disabling a GPU).
+	static string256		PreferredAdapter;
+	// Adapter list, filled during CreateDevice so the UI has real names to show
+	// instead of guessing at "integrated/discrete".
+	static xr_vector<xr_string>	AdapterNames;
 #endif	//	USE_DX10
 
 #ifndef _MAYA_EXPORT

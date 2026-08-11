@@ -26,6 +26,10 @@
 
  CHW			HW;
 
+// user's adapter choice + the list to choose from; see HW.h
+string256				CHW::PreferredAdapter	= {};
+xr_vector<xr_string>	CHW::AdapterNames;
+
 #ifdef DEBUG
 IDirect3DStateBlock9*	dwDebugSB = 0;
 #endif
@@ -238,6 +242,21 @@ void		CHW::CreateDevice		(HWND m_hWnd, bool move_window)
 
 	DevAdapter				= D3DADAPTER_DEFAULT;
 	DevT					= Caps.bForceGPU_REF?D3DDEVTYPE_REF:D3DDEVTYPE_HAL;
+
+	// Collect every adapter the runtime reports, and honour the user's pick.
+	// Without this the device always lands on the display adapter, which on a
+	// hybrid machine is the integrated one - and there is no way to say otherwise.
+	AdapterNames.clear();
+	for (UINT a=0; a<pD3D->GetAdapterCount(); ++a)
+	{
+		D3DADAPTER_IDENTIFIER9 ident;
+		if (FAILED(pD3D->GetAdapterIdentifier(a,0,&ident)))	continue;
+		AdapterNames.push_back(xr_string(ident.Description));
+		if (PreferredAdapter[0] && 0==xr_strcmp(ident.Description,PreferredAdapter))
+			DevAdapter = a;
+	}
+	if (PreferredAdapter[0] && DevAdapter==D3DADAPTER_DEFAULT)
+		Msg("! GPU '%s' is not present, falling back to the default adapter",PreferredAdapter);
 
 #ifndef	MASTER_GOLD
 	// Look for 'NVIDIA NVPerfHUD' adapter

@@ -21,9 +21,18 @@ UIMainForm::UIMainForm()
     m_WorldProperties = xr_new<UIWorldPropertiesFrom>();
     m_Render->SetContextMenuEvent(TOnRenderContextMenu(this, &UIMainForm::DrawContextMenu));
     m_Render->SetToolBarEvent(TOnRenderToolBar(this, &UIMainForm::DrawRenderToolBar));
+    m_Render->SetDropAssetEvent(TOnRenderDropAsset(this, &UIMainForm::DropAsset));
     if (dynamic_cast<CLevelPreferences*>(EPrefs)->OpenObjectList)
     {
         UIObjectList::Show();
+    }
+    if (dynamic_cast<CLevelPreferences*>(EPrefs)->OpenContentBrowser)
+    {
+        UIContentBrowser::Show();
+    }
+    if (dynamic_cast<CLevelPreferences*>(EPrefs)->OpenWorldOutliner)
+    {
+        UIWorldOutliner::Show();
     }
     if (!dynamic_cast<CLevelPreferences*>(EPrefs)->OpenProperties)
     {
@@ -47,6 +56,10 @@ UIMainForm::UIMainForm()
     m_tScaleGrid = EDevice->Resources->_CreateTexture("ed\\bar\\scale_grid");
     m_tAngle = EDevice->Resources->_CreateTexture("ed\\bar\\angle");
 
+    extern bool XFinedInspector(LPCSTR, LPCSTR, xr_string&);
+    XFinedMCP::SetHandler(XFinedInspector);
+    XFinedMCP::Start();
+
     LTools->GetGimzo()->SetStep(Gizmo::EType::Move, 0.1f);
     LTools->GetGimzo()->SetStep(Gizmo::EType::Scale, 0.1f);
     LTools->GetGimzo()->SetStep(Gizmo::EType::Rotate, 5.625f);
@@ -62,6 +75,12 @@ UIMainForm::~UIMainForm()
 	dynamic_cast<CLevelPreferences*>(EPrefs)->OpenProperties = !m_Properties->IsClosed();
 	dynamic_cast<CLevelPreferences*>(EPrefs)->OpenWorldProperties = !m_WorldProperties->IsClosed();
     dynamic_cast<CLevelPreferences*>(EPrefs)->OpenObjectList = UIObjectList::IsOpen();
+    dynamic_cast<CLevelPreferences*>(EPrefs)->OpenContentBrowser = UIContentBrowser::IsOpen();
+    dynamic_cast<CLevelPreferences*>(EPrefs)->OpenWorldOutliner = UIWorldOutliner::IsOpen();
+    XFinedMCP::Stop();
+    EditorProject::Close();		// preview + manifest while the device is alive
+    UIContentBrowser::Close();
+    UIWorldOutliner::Close();
     ClearChooseEvents();
     xr_delete(m_WorldProperties);
     xr_delete(m_Properties);
@@ -85,16 +104,30 @@ UIMainForm::~UIMainForm()
     ExecCommand(COMMAND_DESTROY, (u32)0, (u32)0);
 }
 
+void UIMainForm::DropAsset(LPCSTR name)
+{
+    // p2=1 -> place under the cursor, the ray was refreshed by the drop target
+    ExecCommand(COMMAND_CB_PLACE_ASSET, xr_string(name), u32(1));
+}
+
 void UIMainForm::Draw()
 {
     bOpen = true;
+    // UE-style: until a project is opened, the browser page is the whole UI
+    // (the MCP pump lives in TUI::Idle so it runs for background windows too)
+    if (EditorProject::DrawBrowser())
+        return;
+    // a project with no valid game link blocks the editor exactly the same way
+    if (EditorProject::DrawGameLink())
+        return;
+    // deferred last-scene autoload — first clean frame after the browser closed
+    if (LPCSTR pending = EditorProject::PopPendingScene())
+        ExecCommand(COMMAND_LOAD, xr_string(pending));
     m_MainMenu->Draw();
     m_TopBar->Draw();
     m_LeftBar->Draw();
 	m_Properties->Draw();
 	m_WorldProperties->Draw();
-    static bool Demo = true;
-    ImGui::ShowDemoWindow(&Demo);
     m_Render->Draw();
 }
 

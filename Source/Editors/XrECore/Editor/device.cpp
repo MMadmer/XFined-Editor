@@ -313,9 +313,15 @@ void  CEditorRenderDevice::Resize(int w, int h, bool maximized)
     UI->RedrawScene	();
 }
 
+TEditorDeviceResetProc	g_pOnEditorDeviceResetBegin	= nullptr;
+TEditorDeviceResetProc	g_pOnEditorDeviceResetEnd	= nullptr;
+
 void CEditorRenderDevice::Reset  	(bool )
 {
     u32 tm_start			= TimerAsync();
+	// out-of-XrECore owners of D3DPOOL_DEFAULT resources go first: HW.Reset
+	// R_CHKs the result and a single surviving surface makes Reset() fail
+	if (g_pOnEditorDeviceResetBegin)	g_pOnEditorDeviceResetBegin();
     Resources->reset_begin	();
 	UI->ResetBegin();
     Memory.mem_compact		();
@@ -328,6 +334,7 @@ void CEditorRenderDevice::Reset  	(bool )
 //		fHeight_2			= float(dwRealHeight/2);
     Resources->reset_end	();
 	UI->ResetEnd();
+	if (g_pOnEditorDeviceResetEnd)		g_pOnEditorDeviceResetEnd();
     _SetupStates			();
     u32 tm_end				= TimerAsync();
     Msg						("*** RESET [%d ms]",tm_end-tm_start);
@@ -468,14 +475,120 @@ void CEditorRenderDevice::time_factor(float v)
 	 TimerGlobal.time_factor(v);
 }
 
+//------------------------------------------------------------------------------
+// GPU preference — stored where Windows' own "Graphics settings" page keeps it,
+// keyed by the full executable path. Applied by the OS at process start.
+//------------------------------------------------------------------------------
+static const char* kGpuPrefKey = "Software\\Microsoft\\DirectX\\UserGpuPreferences";
+
+static bool GetSelfPath(string_path& dst)
+{
+	return ::GetModuleFileNameA(NULL, dst, sizeof(string_path)) != 0;
+}
+
+EGpuPreference GetGpuPreference()
+{
+	string_path self;
+	if (!GetSelfPath(self)) return gpuAuto;
+
+	HKEY key;
+	if (::RegOpenKeyExA(HKEY_CURRENT_USER, kGpuPrefKey, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
+		return gpuAuto;
+
+	char value[64] = {};
+	DWORD size = sizeof(value) - 1, type = 0;
+	const LSTATUS res = ::RegQueryValueExA(key, self, NULL, &type, (LPBYTE)value, &size);
+	::RegCloseKey(key);
+
+	if (res != ERROR_SUCCESS || type != REG_SZ) return gpuAuto;
+	if (strstr(value, "GpuPreference=2")) return gpuPerformance;
+	if (strstr(value, "GpuPreference=1")) return gpuPowerSaving;
+	return gpuAuto;
+}
+
+bool SetGpuPreference(EGpuPreference pref)
+{
+	string_path self;
+	if (!GetSelfPath(self)) return false;
+
+	HKEY key;
+	if (::RegCreateKeyExA(HKEY_CURRENT_USER, kGpuPrefKey, 0, NULL, 0, KEY_SET_VALUE, NULL, &key, NULL) != ERROR_SUCCESS)
+		return false;
+
+	LSTATUS res;
+	if (gpuAuto == pref)
+	{
+		// no value at all == "let Windows decide"
+		res = ::RegDeleteValueA(key, self);
+		if (ERROR_FILE_NOT_FOUND == res) res = ERROR_SUCCESS;
+	}
+	else
+	{
+		string64 value;
+		xr_sprintf(value, "GpuPreference=%d;", int(pref));
+		res = ::RegSetValueExA(key, self, 0, REG_SZ, (const BYTE*)value, DWORD(xr_strlen(value) + 1));
+	}
+
+	::RegCloseKey(key);
+	return ERROR_SUCCESS == res;
+}
+
+LPCSTR GetActiveGpuName()
+{
+	static string256 name = {};
+	if (!name[0])
+	{
+		D3DADAPTER_IDENTIFIER9 id = {};
+		if (HW.pD3D && SUCCEEDED(HW.pD3D->GetAdapterIdentifier(HW.DevAdapter, 0, &id)))
+			xr_strcpy(name, id.Description);
+		else
+			xr_strcpy(name, "unknown");
+	}
+	return name;
+}
+
+int GpuAdapterCount()
+{
+	return (int)CHW::AdapterNames.size();
+}
+
+LPCSTR GpuAdapterName(int index)
+{
+	if (index < 0 || index >= (int)CHW::AdapterNames.size())	return "";
+	return CHW::AdapterNames[index].c_str();
+}
+
+void SetPreferredGpu(LPCSTR description)
+{
+	strncpy_s(CHW::PreferredAdapter, description ? description : "", _TRUNCATE);
+}
+
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 void CEditorRenderDevice::CreateWindow()
 {
-	m_WC = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, TEXT("XRay Editor"), NULL };
+	// Editors are DPI-unaware by default, so Windows bitmap-stretches them on
+	// scaled displays (blurry UI). Opt into Per-Monitor V2 before creating the
+	// window; resolve APIs dynamically to keep older systems working.
+	float dpi_scale = 1.f;
+	if (HMODULE user32 = ::GetModuleHandleA("user32.dll"))
+	{
+		typedef BOOL(WINAPI* SetCtxFn)(HANDLE);
+		typedef BOOL(WINAPI* SetAwareFn)();
+		typedef UINT(WINAPI* GetDpiFn)();
+		SetCtxFn set_ctx = (SetCtxFn)::GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+		SetAwareFn set_aware = (SetAwareFn)::GetProcAddress(user32, "SetProcessDPIAware");
+		// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 == (DPI_AWARENESS_CONTEXT)-4
+		const bool aware = set_ctx ? !!set_ctx((HANDLE)-4) : (set_aware && set_aware());
+		if (aware)
+			if (GetDpiFn get_dpi = (GetDpiFn)::GetProcAddress(user32, "GetDpiForSystem"))
+				dpi_scale = float(get_dpi()) / 96.f;
+	}
+
+	m_WC = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, TEXT("XFined Editor"), NULL };
 	::RegisterClassEx(&m_WC);
-	m_hWnd= ::CreateWindowA(m_WC.lpszClassName, TEXT("XRay Editor"), WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, NULL, NULL, m_WC.hInstance, NULL);
-	
+	m_hWnd= ::CreateWindowA(m_WC.lpszClassName, TEXT("XFined Editor"), WS_OVERLAPPEDWINDOW, 100, 100, int(1280 * dpi_scale), int(800 * dpi_scale), NULL, NULL, m_WC.hInstance, NULL);
+
 	::UpdateWindow(m_hWnd);
 }
 void CEditorRenderDevice::DestryWindow()

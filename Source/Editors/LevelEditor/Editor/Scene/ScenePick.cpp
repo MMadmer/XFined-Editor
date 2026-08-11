@@ -124,8 +124,9 @@ int EScene::GetQueryObjects(ObjectList& lst, ObjClassID classfilter, int iSel, i
     return lst.size();
 }
 
-int EScene::RaySelect(int flag, ObjClassID classfilter)
+int EScene::RaySelect(int flag, ObjClassID classfilter, ESceneToolBase** picked_tool)
 {
+	if (picked_tool) *picked_tool = 0;
 	if( !valid() ) return 0;
 
     float dist					= UI->ZFar();
@@ -136,20 +137,23 @@ int EScene::RaySelect(int flag, ObjClassID classfilter)
         SceneToolsMapPairIt _E 	= m_SceneTools.end();
         for (; _I!=_E; _I++)
         {
+			// hidden or disabled layers must stay unpickable
+			if (!_I->second->IsEnabled()||!_I->second->IsVisible()) continue;
         	float range			= UI->ZFar();
         	_I->second->RaySelect(flag,range,UI->m_CurrentRStart,UI->m_CurrentRDir,TRUE);
             if (range<dist){
             	dist			= range;
                 mt				= _I->second;
-            }		
+            }
         }
     }else{
         mt 						= GetTool(classfilter);
     }
     int count					= 0;
     dist						= UI->ZFar();
-    if (mt) 
+    if (mt)
     	count=mt->RaySelect	(flag,dist,UI->m_CurrentRStart,UI->m_CurrentRDir,FALSE);
+	if (picked_tool && count) *picked_tool = mt;
 	return count;
 /*
 	CCustomObject *nearest_object = RayPickObject(flt_max,UI->m_CurrentRStart,UI->m_CurrentRNorm,classfilter,0,0);

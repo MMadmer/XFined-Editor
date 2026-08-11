@@ -176,6 +176,14 @@ public:
 
 extern ECORE_API CEditorRenderDevice* EDevice;
 
+// Device-reset notifications for code living outside XrECore. D3D9 refuses to
+// Reset() while any D3DPOOL_DEFAULT resource is alive, so a panel that owns a
+// render target of its own has to drop it here - CResourceManager only knows
+// about the CRTs it created itself.
+typedef void (*TEditorDeviceResetProc)();
+extern ECORE_API TEditorDeviceResetProc g_pOnEditorDeviceResetBegin;
+extern ECORE_API TEditorDeviceResetProc g_pOnEditorDeviceResetEnd;
+
 // video
 enum {
 	rsFilterLinear		= (1ul<<20ul),
@@ -191,6 +199,32 @@ enum {
 };
 
 #define DEFAULT_CLEARCOLOR 0x00555555
+
+//------------------------------------------------------------------------------
+// GPU selection on hybrid-graphics machines.
+// D3D9 always enumerates a single adapter there — which physical GPU it maps to
+// is decided by the driver before our code runs, so the choice cannot be made at
+// device-creation time. Windows' per-application preference is the supported
+// knob; it is read at process start and takes effect on the next launch.
+//------------------------------------------------------------------------------
+enum EGpuPreference
+{
+	gpuAuto			= 0,	// let Windows decide (usually the integrated chip)
+	gpuPowerSaving	= 1,	// integrated
+	gpuPerformance	= 2,	// discrete
+};
+
+ECORE_API EGpuPreference	GetGpuPreference	();
+ECORE_API bool				SetGpuPreference	(EGpuPreference pref);
+ECORE_API LPCSTR			GetActiveGpuName	();
+
+// Adapter list and the user's pick. CHW is not exported, so the render layer is
+// reached through these instead of touching its statics across the DLL edge.
+// Setting a preference only takes effect on the next start: D3D9 cannot move a
+// live device to another adapter.
+ECORE_API int				GpuAdapterCount		();
+ECORE_API LPCSTR			GpuAdapterName		(int index);	// "" when out of range
+ECORE_API void				SetPreferredGpu		(LPCSTR description);	// null/"" = system default
 
 #define		REQ_CREATE()	if (!EDevice->bReady)	return;
 #define		REQ_DESTROY()	if (EDevice->bReady)	return;

@@ -20,7 +20,9 @@ private:
 		u32	  time;
 	};
 
-static SEnertionState m_etable[CElevatorState::clbNoState][CElevatorState::clbNoState];
+// Estate lives at namespace scope (IElevatorState.h); class-qualifying its
+// enumerators was a v142 permissive-mode quirk newer compilers reject
+static SEnertionState m_etable[clbNoState][clbNoState];
 
 IClimableObject	*m_ladder;	
 CPHCharacter	*m_character;

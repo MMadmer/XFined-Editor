@@ -167,6 +167,8 @@ public:
 	void  MousePress			(TShiftState Shift, int X, int Y);
 	void  MouseRelease		(TShiftState Shift, int X, int Y);
 	void  MouseMove			(TShiftState Shift, int X, int Y);
+	void  MouseWheel			(TShiftState Shift, float steps);
+	virtual bool IsViewportNavigating() override { return EDevice->m_Camera.IsMoving(); }
 
     void 			BeginEState			(EEditorState st){ m_EditorState.push_back(st); }
     void 			EndEState			(){ m_EditorState.pop_back(); }

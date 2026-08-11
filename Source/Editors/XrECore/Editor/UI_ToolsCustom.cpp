@@ -22,7 +22,7 @@ CToolCustom::CToolCustom()
 {
     m_bReady			= false;
     m_Action			= etaSelect;
-    m_Settings.assign	(etfNormalAlign|etfGSnap|etfOSnap|etfMTSnap|etfVSnap|etfASnap|etfMSnap);
+    m_Settings.assign	(etfNormalAlign|etfGSnap|etfOSnap|etfMTSnap|etfVSnap|etfASnap|etfMSnap|etfPickAnyClass);
     fFogness			= 0.9f;
     dwFogColor			= 0xffffffff;
     m_axis_xform		= Fidentity;

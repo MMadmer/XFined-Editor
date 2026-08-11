@@ -67,6 +67,11 @@ enum
 
     COMMAND_SHOWCONTEXTMENU,
     COMMAND_SHOW_CLIP_EDITOR,
+    COMMAND_GIZMO_MODE,
+    COMMAND_CB_PLACE_ASSET,		// p1 = asset name, p2 = 0 place at view centre / 1 at cursor
+    COMMAND_SHOW_CONTENT_BROWSER,
+    COMMAND_SHOW_WORLD_OUTLINER,
+    COMMAND_DROP_TO_GROUND,		// End: settle the selection on the surface below
 };
 
 class CLevelMain: public TUI{
@@ -108,6 +113,7 @@ public:
     virtual void	LoadSettings			(CInifile*);
     virtual Ivector2 GetRenderMousePosition()const;
     virtual void OnDrawUI();
+    virtual void BuildDefaultDockLayout(unsigned int dockspace_id);
     bool  KeyDown(WORD Key, TShiftState Shift);
     virtual void	OnStats(CGameFont* font);
 

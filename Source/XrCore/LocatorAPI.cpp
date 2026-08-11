@@ -295,7 +295,13 @@ void CLocatorAPI::LoadArchive(archive& A, LPCSTR entrypoint)
 	// Create base path
 	string_path					fs_entry_point;
 	fs_entry_point[0]			= 0;
-	if(A.header)
+	if(entrypoint)
+	{
+		// private mount: the caller dictates the virtual prefix, so the
+		// archive's own [header] entry_point is irrelevant and may be missing
+		xr_strcpy				(fs_entry_point, sizeof(fs_entry_point), entrypoint);
+	}
+	else if(A.header)
 	{
 
 		shared_str read_path	= A.header->r_string("header","entry_point");
@@ -337,9 +343,6 @@ void CLocatorAPI::LoadArchive(archive& A, LPCSTR entrypoint)
 		if(strext(fs_entry_point))
 			*strext(fs_entry_point) = 0;
 	}
-	if(entrypoint)
-		xr_strcpy				(fs_entry_point, sizeof(fs_entry_point), entrypoint);
-
 
 //	DUMMY_STUFF	*g_temporary_stuff_subst = NULL;
 //
@@ -449,6 +452,126 @@ void CLocatorAPI::ProcessArchive(LPCSTR _path)
 		LoadArchive				(A);
 	else
 		A.close					();
+}
+
+// Cheap probe: walks the chunk directory without reading or decompressing any
+// payload, so a stray non-archive file can be rejected instead of asserting.
+// SetFilePointerEx, not SetFilePointer: a garbage file yields random chunk
+// sizes, and one with bit 31 set would be a NEGATIVE 32-bit seek distance,
+// i.e. a walk that runs backwards forever.
+static bool has_chunk(void* ptr, u32 ID)
+{
+	u32				dwType, dwSize;
+	DWORD			read_byte;
+	LARGE_INTEGER	move, pos;
+
+	move.QuadPart	= 0;
+	if (!SetFilePointerEx(ptr, move, &pos, FILE_BEGIN))				return false;
+	for (;;)
+	{
+		if (!ReadFile(ptr,&dwType,4,&read_byte,0) || read_byte!=4)	return false;
+		if (!ReadFile(ptr,&dwSize,4,&read_byte,0) || read_byte!=4)	return false;
+		if ((dwType&(~CFS_CompressMark)) == ID)						return true;
+
+		move.QuadPart = (LONGLONG)dwSize;
+		if (!SetFilePointerEx(ptr, move, &pos, FILE_CURRENT))		return false;
+	}
+}
+
+bool CLocatorAPI::ProcessArchiveAs(LPCSTR _path, LPCSTR entrypoint)
+{
+	VERIFY						(entrypoint && entrypoint[0]);
+	shared_str path				= _path;
+
+	// already mounted - the file table is registered once, mounting is idempotent
+	for (archives_it it=m_archives.begin(); it!=m_archives.end(); ++it)
+		if (it->path==path)
+			return				true;
+
+	m_archives.push_back		(archive());
+	archive& A					= m_archives.back();
+	A.vfs_idx					= m_archives.size()-1;
+	A.path						= path;
+
+	A.open						();
+
+	// no file table -> not an archive; drop it rather than let LoadArchive assert
+	if (!has_chunk(A.hSrcFile, 1))
+	{
+		A.close					();
+		m_archives.pop_back		();
+		return					false;
+	}
+
+	// header is optional here: the entry point is supplied by the caller and
+	// auto_load has no say over an explicit mount request
+	IReader* hdr				= open_chunk(A.hSrcFile, CFS_HeaderChunkID);
+	if(hdr)
+	{
+		A.header				= xr_new<CInifile>(hdr,"archive_header");
+		hdr->close				();
+	}
+
+	LoadArchive					(A, entrypoint);
+	return						true;
+}
+
+int CLocatorAPI::file_list_prefix(FS_FileSet& dest, LPCSTR prefix)
+{
+	VERIFY						(prefix && prefix[0]);
+	check_pathes				();
+
+	const size_t base_len		= xr_strlen(prefix);
+	ILocatorAPIFile				key;
+	key.name					= prefix;
+
+	// lower_bound, not find: a drive-qualified private mount never gets a
+	// folder entry for its own root (see Register()'s _splitpath walk)
+	for (files_it I = m_files.lower_bound(key); I != m_files.end(); ++I)
+	{
+		const ILocatorAPIFile& entry = *I;
+		if (0 != strncmp(entry.name, prefix, base_len))	break;	// end of list
+
+		LPCSTR tail				= entry.name + xr_strlen(entry.name) - 1;
+		if (*tail == '\\')		continue;						// folder marker
+
+		FS_File f;
+		f.name					= entry.name + base_len;
+		f.size					= entry.size_real;
+		f.time_write			= entry.modif;
+		f.attrib				= (entry.vfs != 0xffffffff) ? FS_File::flVFS : 0;
+		dest.insert				(f);
+	}
+	return						(int)dest.size();
+}
+
+void CLocatorAPI::purge_registry()
+{
+	for (files_it I = m_files.begin(); I != m_files.end(); ++I)
+	{
+		char* str				= LPSTR(I->name);
+		xr_free					(str);
+	}
+	m_files.clear				();
+}
+
+CLocatorAPI* xrFS_CreateArchiveVFS()
+{
+	// deliberately NOT _initialize()d - no fsgame.ltx, no aliases, no disk scan
+	return						xr_new<CLocatorAPI>();
+}
+
+void xrFS_DestroyArchiveVFS(CLocatorAPI*& vfs)
+{
+	if (!vfs)					return;
+	for (CLocatorAPI::archives_it it = vfs->m_archives.begin(); it != vfs->m_archives.end(); ++it)
+	{
+		if (it->hSrcFile)		it->close();
+		xr_delete				(it->header);
+	}
+	vfs->m_archives.clear		();
+	vfs->purge_registry			();
+	xr_delete					(vfs);
 }
 
 void CLocatorAPI::unload_archive(CLocatorAPI::archive& A)
@@ -564,7 +687,7 @@ bool CLocatorAPI::Recurse		(const char* path)
 		xr_strcpy(full_path,sizeof(full_path), path);
 		xr_strcat(full_path, sFile.name);
 
-		// загоняем в вектор для того *.db* приходили в сортированном порядке
+		// пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅ *.db* пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 		if(!ignore_name(sFile.name) && !ignore_path(full_path))
 			rec_files.push_back(sFile);
 
@@ -578,7 +701,7 @@ bool CLocatorAPI::Recurse		(const char* path)
 	}
 	else
 	{
-		// загоняем в вектор для того *.db* приходили в сортированном порядке
+		// пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅ *.db* пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 		if(!ignore_name(sFile.name))
 			rec_files.push_back(sFile);
 
@@ -962,7 +1085,7 @@ xr_vector<char*>* CLocatorAPI::file_list_open			(const char* _path, u32 flags)
 {
 	R_ASSERT		(_path);
 	VERIFY			(flags);
-	// проверить нужно ли пересканировать пути
+	// пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ
 	check_pathes	();
 
 	string_path		N;
@@ -1021,7 +1144,7 @@ int CLocatorAPI::file_list(FS_FileSet& dest, LPCSTR path, u32 flags, LPCSTR mask
 {
 	R_ASSERT		(path);
 	VERIFY			(flags);
-	// проверить нужно ли пересканировать пути
+	// пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ
     check_pathes	();
                
 	string_path		N;
@@ -1330,7 +1453,7 @@ void CLocatorAPI::copy_file_to_build	(T *&r, LPCSTR source_name)
 
 bool CLocatorAPI::check_for_file	(LPCSTR path, LPCSTR _fname, string_path& fname, const ILocatorAPIFile *&desc)
 {
-	// проверить нужно ли пересканировать пути
+	// пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ
     check_pathes			();
 
 	// correct path
@@ -1452,7 +1575,7 @@ void	CLocatorAPI::w_close(IWriter* &S)
 
 CLocatorAPI::files_it CLocatorAPI::file_find_it(LPCSTR fname)
 {
-	// проверить нужно ли пересканировать пути
+	// пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ
     check_pathes	();
 
 	ILocatorAPIFile			desc_f;
@@ -1607,7 +1730,7 @@ void CLocatorAPI::update_path(xr_string& dest, LPCSTR initial, LPCSTR src)
 
 time_t CLocatorAPI::get_file_age(LPCSTR nm)
 {
-	// проверить нужно ли пересканировать пути
+	// пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ
     check_pathes	();
 
 	files_it I 		= file_find_it(nm);
@@ -1616,7 +1739,7 @@ time_t CLocatorAPI::get_file_age(LPCSTR nm)
 
 void CLocatorAPI::set_file_age(LPCSTR nm, time_t age)
 {
-	// проверить нужно ли пересканировать пути
+	// пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ
     check_pathes	();
 
     // set ILocatorAPIFile

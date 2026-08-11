@@ -21,6 +21,7 @@ private:
 private:
 	void DrawContextMenu();
 	void DrawRenderToolBar(ImVec2 Size);
+	void DropAsset(LPCSTR name);
 private:
 	ref_texture m_tMenu;
 

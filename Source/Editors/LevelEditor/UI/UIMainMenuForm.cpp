@@ -1,4 +1,6 @@
 #include "stdafx.h"
+#include "..\..\XrECore\Editor\EditorModManifest.h"
+#include "..\Editor\EditorModScene.h"
 UIMainMenuForm::UIMainMenuForm()
 {
 }
@@ -28,6 +30,39 @@ void UIMainMenuForm::Draw()
                 {
                     if (ImGui::MenuItem(str.c_str(), "")) { ExecCommand(COMMAND_LOAD, str); }
                 }
+                ImGui::EndMenu();
+            }
+            ImGui::Separator();
+            if (ImGui::BeginMenu("Project"))
+            {
+                ImGui::TextDisabled("Project: %s", EditorProject::Name());
+                ImGui::Separator();
+                if (ImGui::MenuItem("Import Base Scene...", ""))	EditorProject::RequestImportScene();
+                if (ImGui::MenuItem("Open Project Folder", ""))		EditorProject::OpenProjectFolder();
+                ImGui::Separator();
+                if (ImGui::MenuItem("Switch Project...", ""))
+                {
+                    // clear the scene, then drop back to the project browser
+                    ExecCommand(COMMAND_CLEAR);
+                    EditorProject::Close();
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::Separator();
+            if (ImGui::BeginMenu("Mod"))
+            {
+                if (ImGui::MenuItem("Edit Manifest...", ""))		EditorMod::RequestEditManifest();
+                if (ImGui::MenuItem("Export XMS Module...", ""))	EditorMod::RequestExportModule();
+                if (ImGui::MenuItem("Export Flat Gamedata...", ""))	EditorMod::RequestExportFlat();
+                ImGui::Separator();
+                // level deltas baked from the current selection: spawn ops first,
+                // they are the composable way to put something on a base level
+                if (ImGui::MenuItem("Export Spawn Layer...", ""))		EditorModScene::RequestExportSpawn();
+                // level overlays baked from the current selection (sector 0)
+                if (ImGui::MenuItem("Export Collision Overlay...", ""))	EditorModScene::RequestExportXCForm();
+                if (ImGui::MenuItem("Export Visual Overlay...", ""))	EditorModScene::RequestExportOGF();
+                // selection used as volumes: removes base collision + visuals
+                if (ImGui::MenuItem("Export Level Cut...", ""))			EditorModScene::RequestExportCut();
                 ImGui::EndMenu();
             }
             ImGui::Separator();
@@ -212,8 +247,60 @@ void UIMainMenuForm::Draw()
         
         if (ImGui::BeginMenu("Options"))
         {
+            {
+                bool any_class = !!Tools->GetSettings(etfPickAnyClass);
+                if (ImGui::MenuItem("Pick Any Class", "", &any_class))
+                    ExecCommand(COMMAND_SET_SETTINGS, etfPickAnyClass, any_class);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Unreal-style picking: click selects an object of any class\nand switches the active target to it");
+            }
+            ImGui::Separator();
             if (ImGui::BeginMenu("Render"))
             {
+                if (ImGui::BeginMenu("GPU"))
+                {
+                    ImGui::TextDisabled("Active: %s", GetActiveGpuName());
+                    ImGui::Separator();
+
+                    // Real adapters, by name, as the runtime reports them - the
+                    // device is created on the one picked here. The driver-level
+                    // preference below only nudges Windows and cannot pick a
+                    // specific card, which is why both exist.
+                    CLevelPreferences* prefs = dynamic_cast<CLevelPreferences*>(EPrefs);
+                    {
+                        bool is_default = !prefs || prefs->GpuAdapter.empty();
+                        if (ImGui::MenuItem("System default", "", &is_default) && is_default && prefs)
+                            prefs->GpuAdapter = "";
+                    }
+                    const int gpu_count = GpuAdapterCount();
+                    for (int i = 0; i < gpu_count; ++i)
+                    {
+                        LPCSTR name = GpuAdapterName(i);
+                        bool selected = prefs && (0 == xr_strcmp(prefs->GpuAdapter.c_str(), name));
+                        if (ImGui::MenuItem(name, "", &selected) && selected && prefs)
+                            prefs->GpuAdapter = name;
+                    }
+                    if (!gpu_count)
+                        ImGui::TextDisabled("no adapters reported");
+
+                    ImGui::Separator();
+                    const EGpuPreference current = GetGpuPreference();
+                    struct { EGpuPreference pref; const char* title; } items[] = {
+                        { gpuAuto,         "Driver hint: auto" },
+                        { gpuPerformance,  "Driver hint: high performance" },
+                        { gpuPowerSaving,  "Driver hint: power saving" },
+                    };
+                    for (auto& it : items)
+                    {
+                        bool selected = (current == it.pref);
+                        if (ImGui::MenuItem(it.title, "", &selected) && selected)
+                            SetGpuPreference(it.pref);
+                    }
+
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Takes effect after restart");
+                    ImGui::EndMenu();
+                }
                 if (ImGui::BeginMenu("Quality"))
                 {
                     static bool selected[4] = { false,false,true,false };
@@ -400,8 +487,20 @@ void UIMainMenuForm::Draw()
         if (ImGui::BeginMenu("Windows"))
         {
             {
+                bool selected = UIContentBrowser::IsOpen();
+                if (ImGui::MenuItem("Content Browser", "", &selected)) { if (selected) UIContentBrowser::Show(); else UIContentBrowser::Close(); }
+            }
+            {
+                bool selected = UIWorldOutliner::IsOpen();
+                if (ImGui::MenuItem("World Outliner", "", &selected)) { if (selected) UIWorldOutliner::Show(); else UIWorldOutliner::Close(); }
+            }
+            {
                 bool selected = UIObjectList::IsOpen();
                 if (ImGui::MenuItem("Object List", "", &selected)) { if (selected) UIObjectList::Show(); else UIObjectList::Close(); }
+            }
+            {
+                bool selected = UIVisualPreview::IsOpen();
+                if (ImGui::MenuItem("Model Preview", "", &selected)) { if (selected) UIVisualPreview::Show(); else UIVisualPreview::Close(); }
             }
             {
                 bool selected = !MainForm->GetPropertiesFrom()->IsClosed();
@@ -416,7 +515,10 @@ void UIMainMenuForm::Draw()
 
                 if (ImGui::MenuItem("Log", "",&selected)) { ExecCommand(COMMAND_LOG_COMMANDS); }
             }
-           
+            ImGui::Separator();
+            // rebuilds the Unreal-style arrangement and forgets manual docking
+            if (ImGui::MenuItem("Reset Layout", "")) { UI->RequestDockLayoutReset(); }
+
            ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();

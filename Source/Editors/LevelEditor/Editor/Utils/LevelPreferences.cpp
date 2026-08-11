@@ -15,6 +15,23 @@ void CLevelPreferences::Load(CInifile* I)
 		OpenWorldProperties = R_BOOL_SAFE("windows", "world_properties", true);
 
 	}
+    {
+        OpenContentBrowser = R_BOOL_SAFE("windows", "content_browser", true);
+    }
+    {
+        OpenWorldOutliner = R_BOOL_SAFE("windows", "world_outliner", true);
+    }
+    {
+        ContentBrowserTreeWidth = R_U32_SAFE("windows", "content_browser_tree_width", 220);
+    }
+    {
+        // an empty value reads back as a null pointer, not as "" - assigning that
+        // to a string is what made the editor die on startup
+        LPCSTR gpu = I->line_exist("render", "gpu_adapter") ? I->r_string("render", "gpu_adapter") : 0;
+        GpuAdapter = gpu ? gpu : "";
+        // hand it to the render layer before the device is created
+        SetPreferredGpu(GpuAdapter.c_str());
+    }
     SceneToolsMapPairIt _I 	= Scene->FirstTool();
     SceneToolsMapPairIt _E 	= Scene->LastTool();
     for (; _I!=_E; _I++)
@@ -28,6 +45,13 @@ void CLevelPreferences::Save(CInifile* I)
     I->w_bool("windows", "object_list", OpenObjectList);
 	I->w_bool("windows", "properties", OpenProperties);
 	I->w_bool("windows", "world_properties", OpenWorldProperties);
+    I->w_bool("windows", "content_browser", OpenContentBrowser);
+    I->w_bool("windows", "world_outliner", OpenWorldOutliner);
+    I->w_u32("windows", "content_browser_tree_width", ContentBrowserTreeWidth);
+    // only write a real choice: a key with an empty value is what the reader
+    // above chokes on, and "no key" already means "system default"
+    if (!GpuAdapter.empty())
+        I->w_string("render", "gpu_adapter", GpuAdapter.c_str());
     SceneToolsMapPairIt _I 	= Scene->FirstTool();
     SceneToolsMapPairIt _E 	= Scene->LastTool();
     for (; _I!=_E; _I++)

@@ -138,7 +138,9 @@ inline float asinf_assert(const float f)
 #define asinf asinf_assert
 #endif
 
-#if NV_CC_MSVC
+// shim for pre-C99 MSVC runtimes only: modern CRTs ship log2f/exp2f and treat
+// them as intrinsics, so redefining them is a hard error there
+#if NV_CC_MSVC && (_MSC_VER < 1800)
 NV_FORCEINLINE float log2f(float x)
 {
     nvCheck(x >= 0);

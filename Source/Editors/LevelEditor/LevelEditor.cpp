@@ -9,24 +9,32 @@
 #include "..\XrEngine\IGame_Level.h"
 #include "..\XrEngine\x_ray.h"
 #include "Engine/XRayEditor.h"
+#include "..\XrECore\Editor\EditorProject.h"
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow)
 {
     if (!IsDebuggerPresent()) Debug._initialize(false);
     const char* FSName = "fs.ltx";
+    bool bDefaultFS = true;
     {
         if (strstr(GetCommandLine(), "-soc_14") || strstr(GetCommandLine(), "-soc_10004"))
         {
             FSName = "fs_soc.ltx";
+            bDefaultFS = false;
         }
         else if (strstr(GetCommandLine(), "-soc"))
         {
             FSName = "fs_soc.ltx";
+            bDefaultFS = false;
         }
         else if (strstr(GetCommandLine(), "-cs"))
         {
             FSName = "fs_cs.ltx";
+            bDefaultFS = false;
         }
     }
+    // project selection is now an in-editor browser page (see EditorProject):
+    // the FS boots on the plain SDK config and gets remounted at open time
+    (void)bDefaultFS;
     Core._initialize("LevelEditor", ELogCallback, 1, FSName, true);
     Tools = xr_new<CLevelTool>();
     LTools = (CLevelTool*)Tools;

@@ -7,6 +7,9 @@
 #include "UI_ToolsCustom.h"
 
 #include "UI_Main.h"
+#include "EditorProject.h"
+#include "XFinedMCP.h"
+#include "EThumbnailVisual.h"
 #include "d3dutils.h"
 #include "SoundManager.h"
 #include "PSLibrary.h"
@@ -84,6 +87,10 @@ void TUI::UpdateSelectionRect( const Ivector2& from, const Ivector2& to ){
 bool  TUI::KeyDown (WORD Key, TShiftState Shift)
 {
 	if (!m_bReady) return false;
+    // project browser owns the keyboard: typing a project name must not feed
+    // the engine console or any tool. The Link Game page is just as blocking,
+    // so typing a game path must not leak either.
+    if (!EditorProject::Active() || !EditorProject::GameLinked()) return true;
     if (Console->bVisible)
     {
         if (Key == 0xC0)
@@ -107,6 +114,7 @@ bool  TUI::KeyDown (WORD Key, TShiftState Shift)
 bool  TUI::KeyUp   (WORD Key, TShiftState Shift)
 {
 	if (!m_bReady) return false;
+    if (!EditorProject::Active() || !EditorProject::GameLinked()) return true;
 //	m_ShiftState = Shift;
 	if (EDevice->m_Camera.KeyUp(Key,Shift)) return true;
     return Tools->KeyUp(Key, Shift);
@@ -115,6 +123,7 @@ bool  TUI::KeyUp   (WORD Key, TShiftState Shift)
 bool  TUI::KeyPress(WORD Key, TShiftState Shift)
 {
 	if (!m_bReady) return false;
+    if (!EditorProject::Active() || !EditorProject::GameLinked()) return true;
     return Tools->KeyPress(Key, Shift);
 }
 //----------------------------------------------------
@@ -191,6 +200,13 @@ void TUI::MouseMove(TShiftState Shift, int X, int Y)
 {
 	if (!m_bReady) return;
     m_ShiftState = Shift;
+}
+//----------------------------------------------------
+void TUI::MouseWheel(TShiftState Shift, float steps)
+{
+	if (!m_bReady) return;
+	EDevice->m_Camera.Wheel(Shift, steps);
+	RedrawScene();
 }
 //----------------------------------------------------
 void TUI::IR_OnMouseMove(int x, int y)
@@ -403,6 +419,12 @@ void TUI::Redraw()
 			EDevice->mProject.build_projection(deg2rad(EDevice->fFOV), EDevice->fASPECT, EDevice->m_Camera.m_Znear, EDevice->m_Camera.m_Zfar);
         }
 
+        // Thumbnail renders need the scene closed (GetRenderTargetData) and must
+        // never run inside the ImGui pass below, which is wrapped in catch(...):
+        // an exception escaping mid-render would leave the scene unbalanced and
+        // kill the next Begin(). Here nothing is open yet, so it is free.
+        FlushVisualThumbnailQueue(4);
+
         if (EDevice->Begin())
         {
             if (psDeviceFlags.is(rsRenderRealTime))
@@ -556,6 +578,9 @@ bool TUI::Idle()
     Sleep(1);
 
     OnFrame			();
+    // MCP requests must be served even when the window is inactive — the
+    // draw path (and the Pump call inside it) stops for background windows
+    XFinedMCP::Pump	();
     if (m_bAppActive && !m_Flags.is(flNeedQuit) && !m_AppClosed)
     RealRedrawScene();
 

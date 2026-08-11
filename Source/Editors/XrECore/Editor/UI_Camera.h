@@ -8,9 +8,23 @@ enum ECameraStyle{
     csFreeFly
 };
 
+// held-key bits for Unreal-style RMB fly navigation
+enum ENavMoveKey{
+	nmForward	= (1<<0),
+	nmBack		= (1<<1),
+	nmLeft		= (1<<2),
+	nmRight		= (1<<3),
+	nmUp		= (1<<4),
+	nmDown		= (1<<5),
+};
+
 class ECORE_API CUI_Camera{
 	ECameraStyle	m_Style;
     bool			m_bMoving;
+    bool			m_UENav;		// Unreal-style navigation (RMB/MMB/Alt+LMB without Shift)
+    bool			m_NavInput;		// any drag/keys happened during current/last nav — gates the RMB context menu
+    u32				m_MoveKeys;		// ENavMoveKey bits held while flying
+    float			m_OrbitDist;	// Alt+LMB orbit distance to m_Target
     TShiftState	 	m_Shift;
     Ivector2		m_StartPos;
     float 			m_FlySpeed;
@@ -48,6 +62,8 @@ public:
     bool			MoveStart	(TShiftState Shift);
     bool			MoveEnd		(TShiftState Shift);
     bool			IsMoving	(){return m_bMoving;}
+    bool			WasNavInput	(){return m_NavInput;}
+    void			Wheel		(TShiftState Shift, float steps);
 	bool 			Process		(TShiftState Shift, int dx, int dy);
     bool			KeyDown		(WORD Key, TShiftState Shift);
     bool			KeyUp		(WORD Key, TShiftState Shift);

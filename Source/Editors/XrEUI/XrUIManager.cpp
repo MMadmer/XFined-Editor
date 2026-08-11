@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "imgui_impl_dx9.h"
 #include "imgui_impl_win32.h"
+#include "imgui_internal.h"	// DockBuilder* for the default layout
 #include "spectrum.h"
 
 
@@ -118,11 +119,16 @@ void XrUIManager::Initialize(HWND hWnd, IDirect3DDevice9* device, const char* in
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;         // Enable Multi-Viewport / Platform Windows
     // Setup Dear ImGui style
     ImGui::StyleColorsClassic();
-    ImGui::Spectrum::LoadFont();
+    // Bake the monitor DPI into the font atlas and widget metrics so the UI
+    // stays crisp and keeps its visual size on scaled displays
+    const float dpi_scale = ImGui_ImplWin32_GetDpiScaleForHwnd(hWnd);
+    ImGui::Spectrum::LoadFont(16.f * dpi_scale);
     Style();
 
     ImGui::GetStyle().ItemSpacing = ImVec2(3, 3);
     ImGui::GetStyle().FramePadding = ImVec2(3, 1);
+    if (dpi_scale != 1.f)
+        ImGui::GetStyle().ScaleAllSizes(dpi_scale);
     ImGui_ImplWin32_Init(hWnd);
     ImGui_ImplDX9_Init(device);
 
@@ -211,6 +217,14 @@ void XrUIManager::ApplyShortCut(DWORD Key)
         case VK_SPACE:
         case VK_CANCEL:
         case VK_RETURN:
+        case VK_ESCAPE:
+        // navigation block: End drops the selection to the ground, the rest
+        // are free for user bindings
+        case VK_END:
+        case VK_HOME:
+        case VK_PRIOR:
+        case VK_NEXT:
+        case VK_INSERT:
             IsFail = false;
             break;
         default:
@@ -239,6 +253,45 @@ void XrUIManager::Push(XrUI* ui, bool need_deleted)
 	ui->Flags.set(!need_deleted, XrUI::F_NoDelete);
 }
 
+void XrUIManager::DockLayoutBegin(unsigned int dockspace_id)
+{
+	const ImGuiID dockspace = (ImGuiID)dockspace_id;
+	ImGui::DockBuilderRemoveNode(dockspace);
+	ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
+	ImGui::DockBuilderSetNodeSize(dockspace, ImGui::GetMainViewport()->Size);
+
+	// order matters: the right column is taken from the root first, so it keeps
+	// the full height and the bottom strip below cannot run under it
+	ImGuiID centre = dockspace;
+	ImGuiID right = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, 0.22f, NULL, &centre);
+	ImGuiID bottom = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.28f, NULL, &centre);
+	ImGuiID left = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, 0.18f, NULL, &centre);
+	ImGuiID right_bottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.55f, NULL, &right);
+
+	// DockBuilderFinish must run on the dockspace id itself: the splits above
+	// reassign 'centre' to the leftover child, and finishing on that leaves the
+	// tree half-built (every window ends up undocked and the UI renders empty)
+	m_DockRoot = (unsigned int)dockspace;
+	m_DockNodes[DockCenter] = (unsigned int)centre;
+	m_DockNodes[DockLeft] = (unsigned int)left;
+	m_DockNodes[DockRight] = (unsigned int)right;
+	m_DockNodes[DockRightBottom] = (unsigned int)right_bottom;
+	m_DockNodes[DockBottom] = (unsigned int)bottom;
+}
+
+void XrUIManager::DockLayoutPlace(const char* window_name, EDockSlot slot)
+{
+	if (!m_DockRoot || !window_name) return;
+	ImGui::DockBuilderDockWindow(window_name, (ImGuiID)m_DockNodes[slot]);
+}
+
+void XrUIManager::DockLayoutEnd()
+{
+	if (!m_DockRoot) return;
+	ImGui::DockBuilderFinish((ImGuiID)m_DockRoot);
+	m_DockRoot = 0;
+}
+
 void XrUIManager::Draw()
 {
     ImGui_ImplDX9_NewFrame();
@@ -265,6 +318,14 @@ void XrUIManager::Draw()
 
         m_MenuBarHeight = ImGui::GetWindowBarHeight();
         // Save off menu bar height for later.
+
+        // no layout yet (fresh install) or an explicit reset: lay the panels out
+        // before DockSpace() consumes the id
+        if (m_ResetDockLayout || ImGui::DockBuilderGetNode(dockMain) == NULL)
+        {
+            m_ResetDockLayout = false;
+            BuildDefaultDockLayout(dockMain);
+        }
 
         ImGui::DockSpace(dockMain);
         ImGui::End();
@@ -349,7 +410,7 @@ LRESULT XrUIManager::WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case VK_SHIFT:
             break;
         default:
-            if(!IsPlayInEditor())   ApplyShortCut(wParam);
+            if(!IsPlayInEditor() && !IsViewportNavigating())   ApplyShortCut(wParam);
             break;
         }
     default:

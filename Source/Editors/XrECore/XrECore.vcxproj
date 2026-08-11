@@ -133,6 +133,8 @@
     <ClCompile Include="Editor\EditObjectProps.cpp" />
     <ClCompile Include="Editor\EditObjectSkin.cpp" />
     <ClCompile Include="Editor\EditorPreferences.cpp" />
+    <ClCompile Include="Editor\XFinedMCP.cpp" />
+    <ClCompile Include="Editor\EditorProject.cpp" />
     <ClCompile Include="Editor\ELog.cpp" />
     <ClCompile Include="Editor\EStats.cpp" />
     <ClCompile Include="Editor\EThumbnail.cpp" />
@@ -263,6 +265,7 @@
     <ClInclude Include="Editor\EditObject.h" />
     <ClInclude Include="Editor\EditorChooseEvents.h" />
     <ClInclude Include="Editor\EditorPreferences.h" />
+    <ClInclude Include="Editor\EditorProject.h" />
     <ClInclude Include="Editor\ELog.h" />
     <ClInclude Include="Editor\EStats.h" />
     <ClInclude Include="Editor\EThumbnail.h" />

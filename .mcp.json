@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "xfined-editor": {
+      "command": "python",
+      "args": ["tools/mcp/xfined_mcp.py"]
+    }
+  }
+}

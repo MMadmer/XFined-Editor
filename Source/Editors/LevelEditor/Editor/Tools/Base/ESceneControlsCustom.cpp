@@ -304,9 +304,18 @@ bool  TUI_CustomControl::SelectStart(TShiftState Shift)
     }
 	if (CheckSnapList(Shift)) return false;
     if (Shift==ssRBOnly){ ExecCommand(COMMAND_SHOWCONTEXTMENU,parent_tool->FClassID); return false;}
-    if (!((Shift&ssCtrl)||(Shift&ssAlt))) Scene->SelectObjects( false, cls);
 
-    int cnt 		= Scene->RaySelect((Shift & ssCtrl)?-1:(Shift & ssAlt)?0:1,parent_tool->FClassID);
+    // UE-style picking: hit-test every class, then make the class that was hit
+    // the active target so the gizmo can actually operate on it
+    const bool any_class = !!Tools->GetSettings(etfPickAnyClass);
+    const ObjClassID filter = any_class ? OBJCLASS_DUMMY : parent_tool->FClassID;
+
+    if (!((Shift&ssCtrl)||(Shift&ssAlt))) Scene->SelectObjects( false, any_class?OBJCLASS_DUMMY:cls);
+
+    ESceneToolBase* picked = 0;
+    int cnt 		= Scene->RaySelect((Shift & ssCtrl)?-1:(Shift & ssAlt)?0:1,filter,&picked);
+    if (any_class && picked && picked->FClassID!=LTools->CurrentClassID())
+        LTools->SetTarget(picked->FClassID, 0);	// deferred, applied next frame
     bBoxSelection    = ((0!=cnt) && ((Shift & ssCtrl)||(Shift & ssAlt))) || (0==cnt);
     if( bBoxSelection )
     {

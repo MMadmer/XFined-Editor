@@ -120,7 +120,7 @@ protected:
 
 	TProperties* m_SummaryInfo;
 
-	ObjectList		m_ESO_SnapObjects; // временно здесь а вообще нужно перенести в ESceneTools
+	ObjectList		m_ESO_SnapObjects; // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ ESceneTools
 protected:
 	bool 			OnLoadAppendObject(CCustomObject* O);
 	bool 			OnLoadSelectionAppendObject(CCustomObject* O);
@@ -244,7 +244,7 @@ public:
 	int				RayQuery(SPickQuery& RQ, const Fvector& start, const Fvector& dir, float dist, u32 flags, CDB::MODEL* model);
 	int 			BoxQuery(SPickQuery& RQ, const Fbox& bb, u32 flags, CDB::MODEL* model);
 
-	int 			RaySelect(int flag, ObjClassID classfilter = OBJCLASS_DUMMY); // flag=0,1,-1 (-1 invert)
+	int 			RaySelect(int flag, ObjClassID classfilter = OBJCLASS_DUMMY, ESceneToolBase** picked_tool = 0); // flag=0,1,-1 (-1 invert)
 	int 			FrustumSelect(int flag, ObjClassID classfilter = OBJCLASS_DUMMY);
 	void			SelectObjects(bool flag, ObjClassID classfilter = OBJCLASS_DUMMY);
 	void 			ShowObjects(bool flag, ObjClassID classfilter = OBJCLASS_DUMMY, bool bAllowSelectionFlag = false, bool bSelFlag = true);

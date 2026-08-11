@@ -20,6 +20,10 @@ CUI_Camera::CUI_Camera()
     m_FlyAltitude = 1.8f;
 
     m_bMoving=false;
+    m_UENav=false;
+    m_NavInput=false;
+    m_MoveKeys=0;
+    m_OrbitDist=10.f;
 }
 
 CUI_Camera::~CUI_Camera()
@@ -149,6 +153,26 @@ static const Fvector down_dir={0.f,-1.f,0.f};
 
 void CUI_Camera::Update(float dt)
 {
+	if (m_bMoving && m_UENav){
+		// UE-style fly: integrate held WASD/QE along view axes (QE = world up/down)
+		if (m_MoveKeys && (m_Shift&ssRight)){
+			Fvector mv = {0.f,0.f,0.f};
+			if (m_MoveKeys&nmForward)	mv.add(m_CamMat.k);
+			if (m_MoveKeys&nmBack)		mv.sub(m_CamMat.k);
+			if (m_MoveKeys&nmRight)		mv.add(m_CamMat.i);
+			if (m_MoveKeys&nmLeft)		mv.sub(m_CamMat.i);
+			if (m_MoveKeys&nmUp)		mv.y += 1.f;
+			if (m_MoveKeys&nmDown)		mv.y -= 1.f;
+			if (mv.square_magnitude()>EPS_S){
+				mv.normalize();
+				mv.mul(m_FlySpeed*dt);
+				m_Position.add(mv);
+				BuildCamera();
+				UI->RedrawScene();
+			}
+		}
+		return;
+	}
 	if (m_bMoving){
     	BOOL bLeftDn = m_Shift&ssLeft;
     	BOOL bRightDn = m_Shift&ssRight;
@@ -210,11 +234,24 @@ void CUI_Camera::Rotate(float dx, float dy)
 
 bool CUI_Camera::MoveStart(TShiftState Shift)
 {
-	if (Shift&ssShift){
+	// UE-style claim: RMB (look/fly), MMB (pan) or Alt+LMB (orbit), all without Shift
+	const bool ue_claim = !(Shift&ssShift) &&
+		((Shift&ssRight) || (Shift&ssMiddle) || ((Shift&ssAlt)&&(Shift&ssLeft)));
+
+	if ((Shift&ssShift) || ue_claim){
     	if (!m_bMoving){
 		    ShowCursor	(FALSE);
     	    UI->IR_GetMousePosScreen(m_StartPos);
 			m_bMoving	= true;
+			m_UENav		= ue_claim;
+			m_MoveKeys	= 0;
+			m_NavInput	= false;
+			if (m_UENav){
+				// orbit pivot: reuse the focus target when sane, else project one ahead
+				float d = m_Position.distance_to(m_Target);
+				if (d>0.5f && d<500.f)	m_OrbitDist = d;
+				else					{ m_OrbitDist = 10.f; m_Target.mad(m_Position, m_CamMat.k, m_OrbitDist); }
+			}
         }
 		m_Shift 	= Shift;
         return true;
@@ -226,10 +263,14 @@ bool CUI_Camera::MoveStart(TShiftState Shift)
 bool CUI_Camera::MoveEnd(TShiftState Shift)
 {
 	m_Shift = Shift;
-	if ((!Shift&ssLeft)||(!Shift&ssShift)){
+	const bool nav_end		= m_UENav && !(Shift&(ssLeft|ssRight|ssMiddle));
+	const bool legacy_end	= !m_UENav && ((!Shift&ssLeft)||(!Shift&ssShift));
+	if (nav_end || legacy_end){
 	    SetCursorPos(m_StartPos.x, m_StartPos.y);
     	ShowCursor	(TRUE);
 		m_bMoving	= false;
+		m_UENav		= false;
+		m_MoveKeys	= 0;
         return true;
     }
     return false;
@@ -242,9 +283,39 @@ bool CUI_Camera::Process(TShiftState Shift, int dx, int dy)
 // camera move
         if( dx || dy ){
         	SetCursorPos(m_StartPos.x,m_StartPos.y);
+            if (m_UENav){
+                m_NavInput = true;
+                const bool L = !!(m_Shift&ssLeft), R = !!(m_Shift&ssRight);
+                const bool M = !!(m_Shift&ssMiddle), A = !!(m_Shift&ssAlt);
+                if (A && L && !R){
+                    // orbit around the pivot at fixed distance
+                    m_HPB.x -= m_SR*dx;
+                    m_HPB.y -= m_SR*dy*EDevice->fASPECT;
+                    Fvector D; D.setHP(m_HPB.x,m_HPB.y);
+                    m_Position.mul(D,-m_OrbitDist);
+                    m_Position.add(m_Target);
+                    BuildCamera();
+                }else if (A && R && !L){
+                    // dolly: drag up = in, drag down = out
+                    float d = dy*m_SM;
+                    m_Position.mad(m_Position, m_CamMat.k, -d);
+                    m_OrbitDist += d;
+                    clamp(m_OrbitDist, 0.5f, 5000.f);
+                    BuildCamera();
+                }else if ((L && R) || M){
+                    // pan: grab-the-world вЂ” drag right moves camera left
+                    Fvector mv;
+                    mv.mul(m_CamMat.i, -dx*m_SM);
+                    m_Position.add(mv);
+                    m_Position.y += dy*m_SM;
+                    BuildCamera();
+                }else if (R){
+                    Rotate(dx, dy);
+                }
+            }else{
             switch (m_Style){
             case csPlaneMove:
-                if ((m_Shift & ssLeft) && (m_Shift & ssRight)) 
+                if ((m_Shift & ssLeft) && (m_Shift & ssRight))
                 {
                     Rotate(dx, dy);
                 }
@@ -266,6 +337,7 @@ bool CUI_Camera::Process(TShiftState Shift, int dx, int dy)
             	ArcBall(m_Shift,dx,dy);
             break;
             }
+            }
 		    UI->RedrawScene();
         }
         return true;
@@ -276,6 +348,21 @@ bool CUI_Camera::Process(TShiftState Shift, int dx, int dy)
 bool CUI_Camera::KeyDown(WORD Key, TShiftState Shift)
 {
     if (m_bMoving){
+        // UE-style fly: WASD + QE while RMB is held; consume so tool hotkeys stay quiet
+        if (m_UENav && (m_Shift&ssRight)){
+            switch (Key){
+            case 'W': m_MoveKeys |= nmForward;	break;
+            case 'S': m_MoveKeys |= nmBack;		break;
+            case 'A': m_MoveKeys |= nmLeft;		break;
+            case 'D': m_MoveKeys |= nmRight;	break;
+            case 'E': m_MoveKeys |= nmUp;		break;
+            case 'Q': m_MoveKeys |= nmDown;		break;
+            case VK_CONTROL: m_Shift = ssCtrl | m_Shift; return true;
+            default: return false;
+            }
+            m_NavInput = true;
+            return true;
+        }
     	switch (Key){
         case VK_CONTROL:  m_Shift = ssCtrl | m_Shift; break;
         default: return false;
@@ -288,6 +375,18 @@ bool CUI_Camera::KeyDown(WORD Key, TShiftState Shift)
 bool CUI_Camera::KeyUp(WORD Key, TShiftState Shift)
 {
     if (m_bMoving){
+        if (m_UENav){
+            switch (Key){
+            case 'W': m_MoveKeys &= ~nmForward;	return true;
+            case 'S': m_MoveKeys &= ~nmBack;	return true;
+            case 'A': m_MoveKeys &= ~nmLeft;	return true;
+            case 'D': m_MoveKeys &= ~nmRight;	return true;
+            case 'E': m_MoveKeys &= ~nmUp;		return true;
+            case 'Q': m_MoveKeys &= ~nmDown;	return true;
+            case VK_CONTROL: m_Shift = ~ssCtrl & m_Shift; return true;
+            default: return false;
+            }
+        }
     	switch (Key){
         case VK_SHIFT:  m_Shift = ~ssShift & m_Shift; MoveEnd(m_Shift); break;
         case VK_CONTROL: m_Shift = ~ssCtrl & m_Shift; break;
@@ -296,6 +395,25 @@ bool CUI_Camera::KeyUp(WORD Key, TShiftState Shift)
 	    return true;
     }
 	return false;
+}
+
+void CUI_Camera::Wheel(TShiftState Shift, float steps)
+{
+	if (m_bMoving && m_UENav && (m_Shift&ssRight)){
+		// UE: wheel while flying tunes the camera speed exponentially
+		m_FlySpeed *= powf(1.2f, steps);
+		clamp(m_FlySpeed, 0.1f, 200.f);
+		string64 tmp;
+		xr_sprintf(tmp, "Camera speed: %.1f", m_FlySpeed);
+		UI->SetStatus(tmp, false);
+		return;
+	}
+	// UE: plain wheel dollies along the view direction, scaled by fly speed
+	Fvector mv;
+	mv.mul(m_CamMat.k, steps * _max(0.5f, m_FlySpeed*0.35f));
+	m_Position.add(mv);
+	BuildCamera();
+	UI->RedrawScene();
 }
 
 void CUI_Camera::MouseRayFromPoint( Fvector& start, Fvector& direction, const Ivector2& point )
@@ -335,7 +453,7 @@ void CUI_Camera::ZoomExtents(const Fbox& bb)
 
 	BuildCamera();
 /*
-	eye_k - фокусное расстояние, eye_k=eye_width/2
+	eye_k - пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ, eye_k=eye_width/2
 	camera.alfa:=0;
      camera.beta:=-30*pi/180;
      camera.gama:=0;

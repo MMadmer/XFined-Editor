@@ -6,6 +6,8 @@
 #include "../XrECore/Editor/ui_main.h"
 #include "../XrECore/Editor/GeometryCollector.h"
 #include "../XrECore/Editor/EditorPreferences.h"
+#include "../XrECore/Editor/EditorProject.h"
+#include "../XrECore/Editor/XFinedMCP.h"
 #include "../XrECore/Editor/render.h"
 #include "../XrECore/Editor/UIRenderForm.h"
 #include "../XrECore/Editor/ELog.h"
@@ -164,6 +166,9 @@
 #include "UI/UIWorldPropertiesFrom.h"
 #include "UI/ObjectList/UIObjectListItem.h"
 #include "UI/ObjectList/UIObjectList.h"
+#include "UI/ContentBrowser/UIContentBrowser.h"
+#include "UI/Outliner/UIWorldOutliner.h"
+#include "UI/Preview/UIVisualPreview.h"
 #include "UI/UIPropertiesModal.h"
 #include "UI/UITopBarForm.h"
 

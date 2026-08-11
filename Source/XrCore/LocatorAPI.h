@@ -37,6 +37,20 @@ public:
     archives_vec				m_archives;
 	void						LoadArchive		(archive& A, LPCSTR entrypoint=NULL);
 
+	// Mounts an archive under a PRIVATE virtual prefix instead of the entry
+	// point stored in its [header] chunk, and ignores auto_load. Read-only:
+	// the file is opened with shared read access and never written to.
+	// The editor uses this to browse a linked game install without letting its
+	// content shadow SDK data. `entrypoint` must be backslash-terminated.
+	bool						ProcessArchiveAs(LPCSTR path, LPCSTR entrypoint);
+
+	// Enumerates every registered file whose name starts with `prefix`
+	// (lowercase, backslash-terminated), recursively, names relative to it.
+	// Unlike file_list() the prefix is not an alias and needs no folder entry
+	// of its own - Register()'s parent walk drops the drive on every level but
+	// the deepest, so a private mount cannot rely on one. Read-only.
+	int							file_list_prefix(FS_FileSet& dest, LPCSTR prefix);
+
 private:
 	struct	file_pred
 	{	
@@ -158,7 +172,23 @@ public:
 	void						rescan_pathes		();
 	void						lock_rescan			();
 	void						unlock_rescan		();
+
+	// Drops every registered file entry and frees the names. Teardown helper
+	// for a private archive VFS only - never call it on the process-wide FS.
+	void						purge_registry		();
 };
+
+// Standalone read-only archive VFS.
+//
+// The editor's process-wide FS is an ELocatorAPI, which knows nothing about
+// .xdb archives. These factories hand out a bare CLocatorAPI that is never
+// _initialize()d: it owns no path aliases and scans no disk, it only serves
+// the archives mounted into it through ProcessArchiveAs(). Because it is a
+// separate registry, nothing mounted into it can be seen by - let alone
+// shadow - the editor's own content. Construction and destruction happen
+// inside XrCore so callers never depend on the object layout.
+extern XRCORE_API CLocatorAPI*	xrFS_CreateArchiveVFS	();
+extern XRCORE_API void			xrFS_DestroyArchiveVFS	(CLocatorAPI*& vfs);
 
 
 #endif // LocatorAPIH

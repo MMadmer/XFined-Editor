@@ -29,6 +29,9 @@ enum ETFlags{
 	etfVSnap      	= (1<<6),
 	etfASnap      	= (1<<7),
 	etfMSnap      	= (1<<8),
+	// UE-style picking: click selects across every object class, not just the
+	// active target, and switches the target to whatever was hit
+	etfPickAnyClass = (1<<9),
 };
 
 class ECORE_API CToolCustom

@@ -327,10 +327,12 @@ CCommandVar 	CommandDestroy(CCommandVar p1, CCommandVar p2)
 }             
 CCommandVar 	CommandQuit(CCommandVar p1, CCommandVar p2)
 {
-    if (UI->IsModified())
+    // The IsModified() gate here was inverted logic: File\Quit did nothing at all
+    // on a saved scene. Quit unconditionally - the save prompt belongs to
+    // COMMAND_EXIT, which callers run before this one when they want it.
     UI->Quit			();
     return				TRUE;
-}             
+}
 CCommandVar 	CommandEditorPrefs(CCommandVar p1, CCommandVar p2)
 {
     EPrefs->Edit		();
@@ -735,7 +737,9 @@ bool TUI::ApplyShortCut(DWORD Key, TShiftState Shift)
 
     if (ApplyGlobalShortCut(Key,Shift))	return true;
 
-    if (Key==VK_ESCAPE){		ExecCommand	(COMMAND_CHANGE_ACTION, etaSelect); return true;}
+    // Esc resets the tool to Select, then falls through so an Esc shortcut
+    // from the table (e.g. Deselect All) can fire as well — UE-style cancel
+    if (Key==VK_ESCAPE)			ExecCommand	(COMMAND_CHANGE_ACTION, etaSelect);
 
     xr_shortcut SC; 
     SC.key						= Key;
