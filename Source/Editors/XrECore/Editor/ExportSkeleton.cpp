@@ -12,6 +12,10 @@
 #include "SkeletonMotions.h"
 #include "motion.h"
 
+// routes D3DXOptimizeFaces/Vertices to XrETools' local implementations - the
+// last direct d3dx9.lib users in this DLL
+#include "D3DX_Wrapper.h"
+
 //#include "library.h"
 
 #include "MgcCont3DBox.h"         

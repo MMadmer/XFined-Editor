@@ -18,25 +18,15 @@
 // Call this to reorder the tris in this trilist to get good vertex-cache coherency.
 // *pwList is modified (but obviously not changed in size or memory location).
 //void OptimiseVertexCoherencyTriList ( WORD *pwList, int iHowManyTris, u32 mode);
+void _OptimiseVertexCoherencyTriList(WORD* pwList, int iHowManyTris, u32 optimize_mode);
+
 void OptimiseVertexCoherencyTriList (WORD* pwList, int iHowManyTris, u32 optimize_mode)
 {
-	if (iHowManyTris){
-		DWORD* remap	= xr_alloc<DWORD>		(iHowManyTris);
-		WORD max_idx	= 0;
-		for (int k=0; k<iHowManyTris*3; k++)
-			max_idx		= _max(max_idx,pwList[k]);
-		HRESULT	rhr		= D3DXOptimizeFaces		(pwList,iHowManyTris,max_idx+1,FALSE,remap);
-		R_CHK			(rhr);
-		WORD* tmp		= xr_alloc<WORD>		(iHowManyTris*3);
-		memcpy			(tmp,pwList,sizeof(WORD) * 3 * iHowManyTris);
-		for (int it=0; it<iHowManyTris; it++){	
-			pwList[it*3+0]= tmp[remap[it]*3+0];
-			pwList[it*3+1]= tmp[remap[it]*3+1];
-			pwList[it*3+2]= tmp[remap[it]*3+2];
-		}
-		xr_free			(remap);
-		xr_free			(tmp);
-	}
+	// straight to the in-tree Forsyth optimizer - same in-place reorder the
+	// D3DX round-trip produced, minus the d3dx9 dependency, plus it honours
+	// the quality mode which the D3DX path silently ignored
+	if (iHowManyTris)
+		_OptimiseVertexCoherencyTriList(pwList, iHowManyTris, optimize_mode==2 ? 2 : 1);
 }
 
 BOOL CalculateSW(Object* object, VIPM_Result* result, u32 optimize_vertex_order)

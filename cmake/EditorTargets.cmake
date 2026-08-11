@@ -38,7 +38,7 @@ xray_glob(XRETOOLS_SRC "${ED}/XrETools")
 add_library(XrETools SHARED ${XRETOOLS_SRC})
 xray_common(XrETools NO_MBCS PCH "${ED}/XrETools/stdafx.h")  # CharacterSet NotSet
 target_compile_definitions(XrETools PRIVATE XRETOOLS_EXPORTS _WINDOWS _USRDLL)
-target_link_libraries(XrETools PRIVATE Ogg Vorbis XrCDB XrCore XrQSlim d3d9 d3dx9 dxerr)
+target_link_libraries(XrETools PRIVATE Ogg Vorbis XrCDB XrCore XrQSlim)
 
 #-- XrDXT ----------------------------------------------------------------------
 xray_glob(XRDXT_SRC "${ED}/XrDXT" EXCLUDE nvdxt.cpp)
@@ -123,7 +123,7 @@ target_include_directories(XrECore PRIVATE
 target_link_libraries(XrECore PRIVATE
     Luabind Ogg RedImageTool Theora Vorbis XrAPI XrCDB XrCore XrEngine XrParticles
     XrPhysics XrSound FreeMagic XrDXT XrEProps XrETools XrEUI
-    d3d11 dxgi d3dcompiler d3dx9 vfw32 Winmm dxguid dinput8 Rpcrt4 lua51)
+    d3d11 dxgi d3dcompiler vfw32 Winmm dxguid dinput8 Rpcrt4 lua51)
 
 #-- LevelEditor ----------------------------------------------------------------
 file(GLOB_RECURSE LE_SRC CONFIGURE_DEPENDS "${ED}/LevelEditor/*.cpp")
@@ -149,7 +149,7 @@ target_include_directories(LevelEditor PRIVATE
 target_link_libraries(LevelEditor PRIVATE
     XrAPI XrCDB XrCore XrEngine XrPhysics XrSound
     FreeMagic XrECore XrEProps XrETools XrEUI
-    d3dx9)  # editor tool code still calls D3DX math directly (S7 tail)
+    )  # d3dx9 probe
 
 #-- XrSE_Factory family --------------------------------------------------------
 # Each factory has TWO precompiled headers in the vcxproj (stdafx.h + pch_script.h).

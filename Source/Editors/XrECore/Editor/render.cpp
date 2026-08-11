@@ -224,12 +224,21 @@ HRESULT	CRender::CompileShader			(
 		void*							_ppErrorMsgs,
 		void*							_ppConstantTable)
 {
+#if defined(USE_DX10) || defined(USE_DX11)
+		// The D3DX9/CTAB compile path. Nothing calls it on D3D11 - the resource
+		// manager goes through the DWORD* shader_compile overload and D3DCompile.
+		// It only exists to keep the IRender_interface vtable complete, so it
+		// answers honestly instead of dragging d3dx9 back into the link.
+		VERIFY(!"CRender::CompileShader is a D3D9 path, dead under D3D11");
+		return E_NOTIMPL;
+#else
         CONST D3DXMACRO*                pDefines		= (CONST D3DXMACRO*)	_pDefines;
         LPD3DXINCLUDE                   pInclude		= (LPD3DXINCLUDE)		_pInclude;
         LPD3DXBUFFER*                   ppShader		= (LPD3DXBUFFER*)		_ppShader;
         LPD3DXBUFFER*                   ppErrorMsgs		= (LPD3DXBUFFER*)		_ppErrorMsgs;
         LPD3DXCONSTANTTABLE*            ppConstantTable	= (LPD3DXCONSTANTTABLE*)_ppConstantTable;
 		return D3DXCompileShader		(pSrcData,SrcDataLen,pDefines,pInclude,pFunctionName,pTarget,Flags,ppShader,ppErrorMsgs,ppConstantTable);
+#endif
 }
 HRESULT	CRender::shader_compile			(
 		LPCSTR							name,
@@ -290,6 +299,14 @@ HRESULT	CRender::shader_compile			(
 	defines[def_it].Definition		=	0;
 	def_it							++;
 
+#if defined(USE_DX10) || defined(USE_DX11)
+	// dead on D3D11 - the resource manager compiles through the DWORD* overload
+	// below (D3DCompile + reflection). Kept for the vtable only.
+	(void)_pInclude; (void)_ppShader; (void)_ppErrorMsgs; (void)_ppConstantTable;
+	(void)pSrcData; (void)SrcDataLen; (void)pFunctionName; (void)pTarget; (void)Flags;
+	VERIFY(!"CRender::shader_compile(LPCSTR...) is a D3D9 path, dead under D3D11");
+	return E_NOTIMPL;
+#else
 	LPD3DXINCLUDE                   pInclude		= (LPD3DXINCLUDE)		_pInclude;
 	LPD3DXBUFFER*                   ppShader		= (LPD3DXBUFFER*)		_ppShader;
 	LPD3DXBUFFER*                   ppErrorMsgs		= (LPD3DXBUFFER*)		_ppErrorMsgs;
@@ -301,6 +318,7 @@ HRESULT	CRender::shader_compile			(
 	HRESULT		_result	= D3DXCompileShader(pSrcData,SrcDataLen,defines,pInclude,pFunctionName,pTarget,Flags,ppShader,ppErrorMsgs,ppConstantTable);
 #endif
 	return _result;
+#endif
 }
 
 #if defined(USE_DX11)

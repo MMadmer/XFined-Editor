@@ -4,7 +4,8 @@
 #include	"stdafx.h"
 #include	"D3DX_Wrapper.h"
 
-#include	"directx\dxerr.h"
+// the in-tree vertex-cache optimizer (Forsyth), optimize_vertex_order.cpp
+void _OptimiseVertexCoherencyTriList(WORD* pwList, int iHowManyTris, u32 optimize_mode);
 // misc
 
 extern "C"{ 
@@ -185,7 +186,22 @@ extern "C"{
 
 	ETOOLS_API const char*  WINAPI DX_GetErrorDescription(HRESULT hr)
 	{
-		return DXGetErrorDescription(hr);
+		// dxerr.lib is dead SDK cargo; the system message table covers the
+		// COM/Win32 facilities and everything else gets the raw code, which is
+		// what actually matters in a log
+		static char buf[256];
+		DWORD len = ::FormatMessageA(
+			FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+			NULL, DWORD(hr), 0, buf, DWORD(sizeof(buf) - 1), NULL);
+		if (len)
+		{
+			// strip the trailing CRLF FormatMessage insists on
+			while (len && (buf[len-1] == '\r' || buf[len-1] == '\n'))
+				buf[--len] = 0;
+		}
+		else
+			xr_sprintf(buf, sizeof(buf), "HRESULT 0x%08X", DWORD(hr));
+		return buf;
 	}
 	ETOOLS_API D3DXMATRIX* WINAPI 
 		D3DX_MatrixInverse(          
@@ -221,6 +237,11 @@ extern "C"{
 		return D3DXPlaneTransform(pOut, pP, pM);
 	}
 
+	// D3DX-compatible contract, local implementation.
+	// remap[newFace] = oldFace - that is how every caller in this tree applies
+	// it (m_Faces[it] = _source[remap[it]]). The order comes from the in-tree
+	// Forsyth optimizer run on a scratch copy; identical triples are matched
+	// through per-triple queues, so duplicated faces keep a stable mapping.
 	ETOOLS_API HRESULT WINAPI
 		D3DX_OptimizeFaces(
 		LPCVOID pIndices,
@@ -229,9 +250,47 @@ extern "C"{
 		BOOL Indices32Bit,
 		DWORD * pFaceRemap)
 	{
-		return D3DXOptimizeFaces(pIndices, NumFaces, NumVertices, Indices32Bit, pFaceRemap);
+		if (!pIndices || !pFaceRemap)	return E_POINTER;
+
+		// nothing the optimizer can improve; keep the order
+		if (NumFaces < 3 || Indices32Bit)
+		{
+			if (Indices32Bit && NumFaces >= 3)
+				Msg("! D3DX_OptimizeFaces: 32bit indices are not optimised, identity order kept");
+			for (UINT i=0; i<NumFaces; ++i)	pFaceRemap[i] = i;
+			return S_OK;
+		}
+
+		const WORD*	src	= (const WORD*)pIndices;
+		WORD*		tmp	= xr_alloc<WORD>(NumFaces*3);
+		CopyMemory	(tmp, src, sizeof(WORD)*NumFaces*3);
+		_OptimiseVertexCoherencyTriList(tmp, int(NumFaces), 2);	// export-time: quality mode
+
+		// map each ordered triple to the queue of original faces carrying it
+		typedef u64							face_key;
+		typedef xr_map<face_key, xr_deque<DWORD> >	remap_map;
+		remap_map	lookup;
+		for (UINT f=0; f<NumFaces; ++f)
+		{
+			const face_key k = (face_key(src[f*3+0])<<32) | (face_key(src[f*3+1])<<16) | face_key(src[f*3+2]);
+			lookup[k].push_back(f);
+		}
+		for (UINT f=0; f<NumFaces; ++f)
+		{
+			const face_key k = (face_key(tmp[f*3+0])<<32) | (face_key(tmp[f*3+1])<<16) | face_key(tmp[f*3+2]);
+			remap_map::iterator it = lookup.find(k);
+			VERIFY(it != lookup.end() && !it->second.empty());
+			pFaceRemap[f] = it->second.front();
+			it->second.pop_front();
+		}
+		xr_free(tmp);
+		return S_OK;
 	}
 
+	// remap[oldVertex] = newVertex, vertices ordered by first use in the face
+	// list, unreferenced ones appended in their original order - the exact
+	// post-TnL fetch order D3DXOptimizeVertices produced, and the exact way
+	// ExportSkeleton applies it.
 	ETOOLS_API HRESULT WINAPI
 		D3DX_OptimizeVertices(
 		LPCVOID pIndices,
@@ -240,6 +299,33 @@ extern "C"{
 		BOOL Indices32Bit,
 		DWORD * pVertexRemap)
 	{
-		return D3DXOptimizeVertices(pIndices, NumFaces, NumVertices, Indices32Bit, pVertexRemap);
+		if (!pIndices || !pVertexRemap)	return E_POINTER;
+
+		const DWORD	unset = DWORD(-1);
+		for (UINT v=0; v<NumVertices; ++v)	pVertexRemap[v] = unset;
+
+		DWORD next = 0;
+		if (Indices32Bit)
+		{
+			const u32* idx = (const u32*)pIndices;
+			for (UINT i=0; i<NumFaces*3; ++i)
+			{
+				VERIFY(idx[i] < NumVertices);
+				if (pVertexRemap[idx[i]] == unset)	pVertexRemap[idx[i]] = next++;
+			}
+		}
+		else
+		{
+			const WORD* idx = (const WORD*)pIndices;
+			for (UINT i=0; i<NumFaces*3; ++i)
+			{
+				VERIFY(idx[i] < NumVertices);
+				if (pVertexRemap[idx[i]] == unset)	pVertexRemap[idx[i]] = next++;
+			}
+		}
+		for (UINT v=0; v<NumVertices; ++v)
+			if (pVertexRemap[v] == unset)	pVertexRemap[v] = next++;
+		VERIFY(next == NumVertices);
+		return S_OK;
 	}
 }
