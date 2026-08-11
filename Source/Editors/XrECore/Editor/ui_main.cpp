@@ -558,6 +558,19 @@ void TUI::Redraw()
             try {
                 EDevice->SetRS(D3DRS_FILLMODE, D3DFILL_SOLID);
                 g_bRendering = FALSE;
+#if defined(USE_DX11)
+                // ImGui submits through the raw context, not RCache, and
+                // RCache's set_RT is lazy - it only binds inside Render(). So
+                // whatever target the scene pass left bound would swallow the
+                // whole UI. Bind the backbuffer by hand.
+                HW.pContext->OMSetRenderTargets(1, &HW.pBaseRT, HW.pBaseZB);
+                D3D11_VIEWPORT ui_vp;
+                ui_vp.TopLeftX = 0.f;               ui_vp.TopLeftY = 0.f;
+                ui_vp.Width    = float(EDevice->dwRealWidth);
+                ui_vp.Height   = float(EDevice->dwRealHeight);
+                ui_vp.MinDepth = 0.f;               ui_vp.MaxDepth = 1.f;
+                HW.pContext->RSSetViewports(1, &ui_vp);
+#endif
                 UI_TRACE("before imgui Draw");
                 Draw();
                 UI_TRACE("after imgui Draw");
