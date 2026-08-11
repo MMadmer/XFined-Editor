@@ -57,7 +57,9 @@ void	CBlender_BmmD::Load		(IReader& fs, u16 version )
 	}
 }
 
-#if RENDER==R_R1
+// The editor compiles the R1 implementation regardless of RENDER: it is the only
+// one carrying a bEditor branch, and it is what the editor built before the port.
+#if RENDER==R_R1 || defined(REDITOR)
 //////////////////////////////////////////////////////////////////////////
 // R1
 //////////////////////////////////////////////////////////////////////////
@@ -69,6 +71,18 @@ void	CBlender_BmmD::Compile	(CBlender_Compile& C)
 		string256				mask;
 		strconcat(sizeof(mask), mask, C.L_textures[0].c_str(), "_mask");
 		C.r_Pass("impl_dt", "impl_dt", FALSE);
+#if defined(USE_DX10) || defined(USE_DX11)
+		// same bindings, D3D11 style: texture and sampler are separate objects and
+		// smp_base already is the anisotropic/wrap state the detail maps asked for
+		C.r_dx10Texture("s_base",	C.L_textures[0]);
+		C.r_dx10Texture("s_detail",	oT2_Name);
+		C.r_dx10Texture("s_mask",	mask);
+		C.r_dx10Texture("s_dt_r",	oR_Name);
+		C.r_dx10Texture("s_dt_g",	oG_Name);
+		C.r_dx10Texture("s_dt_b",	oB_Name);
+		C.r_dx10Texture("s_dt_a",	oA_Name);
+		C.r_dx10Sampler("smp_base");
+#else
 		C.r_Sampler("s_base", C.L_textures[0]);
 		C.r_Sampler("s_detail", oT2_Name);
 		C.r_Sampler("s_mask", mask);
@@ -76,8 +90,10 @@ void	CBlender_BmmD::Compile	(CBlender_Compile& C)
 		C.r_Sampler("s_dt_g", oG_Name, false, D3DTADDRESS_WRAP, D3DTEXF_ANISOTROPIC, D3DTEXF_LINEAR, D3DTEXF_ANISOTROPIC);
 		C.r_Sampler("s_dt_b", oB_Name, false, D3DTADDRESS_WRAP, D3DTEXF_ANISOTROPIC, D3DTEXF_LINEAR, D3DTEXF_ANISOTROPIC);
 		C.r_Sampler("s_dt_a", oA_Name, false, D3DTADDRESS_WRAP, D3DTEXF_ANISOTROPIC, D3DTEXF_LINEAR, D3DTEXF_ANISOTROPIC);
+#endif
 		C.r_End();
 	} else {
+#if !defined(USE_DX10) && !defined(USE_DX11)
 		if (C.L_textures.size()<2)	Debug.fatal	(DEBUG_INFO,"Not enought textures for shader, base tex: %s",*C.L_textures[0]);
 		switch (C.iElement)
 		{
@@ -116,6 +132,7 @@ void	CBlender_BmmD::Compile	(CBlender_Compile& C)
 			C.r_End			();
 			break;
 		}
+#endif	//	game-only R1 paths: r_Sampler
 	}
 }
 #elif RENDER==R_R2

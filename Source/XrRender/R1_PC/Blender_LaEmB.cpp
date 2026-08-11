@@ -48,9 +48,20 @@ void	CBlender_LaEmB::Compile(CBlender_Compile& C)
 
 	BOOL bConstant			= (0!=stricmp(oT2_const,"$null"));
 	if (C.bEditor)	{
+#if defined(USE_DX10) || defined(USE_DX11)
+		// compile_ED/compile_EDc are fixed-function stage chains that D3D11
+		// cannot express. The editor viewport only ever needed the base texture
+		// out of them, so both variants become one textured pass.
+		C.r_Pass		("model_def_hq","model_def_hq",TRUE,TRUE,TRUE);
+		C.r_dx10Texture	("s_base",	oT_Name);
+		C.r_dx10Sampler	("smp_base");
+		C.r_End			();
+#else
 		if (bConstant)	compile_EDc	(C);
 		else			compile_ED	(C);
+#endif
 	} else {
+#if !defined(USE_DX10) && !defined(USE_DX11)
 		if (2==C.iElement)
 		{
 			if (bConstant)	compile_Lc	(C);
@@ -69,8 +80,14 @@ void	CBlender_LaEmB::Compile(CBlender_Compile& C)
 				break;
 			}
 		}
+#endif	//	game-only R1 stage-count paths
 	}
 }
+
+// The two editor helpers below are fixed-function only; under D3D11 the caller
+// above uses a programmable pass and these are never reached, so they are not
+// compiled at all (their declarations stay in the header).
+#if !defined(USE_DX10) && !defined(USE_DX11)
 
 // EDITOR --- NO CONSTANT
 void CBlender_LaEmB::compile_ED	(CBlender_Compile& C)
@@ -144,6 +161,12 @@ void CBlender_LaEmB::compile_EDc	(CBlender_Compile& C)
 }
 
 //
+#endif	//	fixed-function editor helpers
+
+// The remaining variants are the R1 game paths (fixed-function stage
+// chains and r_Sampler); D3D11 has neither, and the editor never calls them.
+#if !defined(USE_DX10) && !defined(USE_DX11)
+
 void CBlender_LaEmB::compile_2	(CBlender_Compile& C)
 {
 	// Pass1 - Lmap+Env
@@ -338,3 +361,5 @@ void CBlender_LaEmB::compile_Lc	(CBlender_Compile& C)
 	}
 	C.PassEnd			();
 }
+
+#endif	//	game-only R1 paths

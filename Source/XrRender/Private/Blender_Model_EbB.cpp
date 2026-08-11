@@ -46,11 +46,26 @@ void	CBlender_Model_EbB::Load(	IReader& fs, u16 version )
 	}
 }
 
-#if RENDER==R_R1
+// The editor compiles the R1 implementation regardless of RENDER: it is the only
+// one carrying a bEditor branch, and it is what the editor built before the port.
+#if RENDER==R_R1 || defined(REDITOR)
 void	CBlender_Model_EbB::Compile(CBlender_Compile& C)
 {
 	IBlender::Compile		(C);
 	if (C.bEditor)	{
+#if defined(USE_DX10) || defined(USE_DX11)
+		// Both elements collapse onto the same programmable pass: element 0 was
+		// only a fixed-function rebuild of the env/base lerp element 1 already does.
+		if (oBlend.value)	C.r_Pass("model_env_hq", "model_env_hq", FALSE, TRUE, FALSE, TRUE, D3DBLEND_SRCALPHA, D3DBLEND_INVSRCALPHA, TRUE, 0);
+		else				C.r_Pass("model_env_hq", "model_env_hq", FALSE);
+		// element 1 used the compiled texture list, element 0 the property - the
+		// list is empty when the shader is compiled straight from properties
+		C.r_dx10Texture("s_base",	C.L_textures.empty() ? oT_Name : C.L_textures[0]);
+		C.r_dx10Texture("s_env",	oT2_Name);
+		C.r_dx10Sampler("smp_base");
+		C.r_dx10Sampler("smp_rtlinear");
+		C.r_End();
+#else
 		if (C.iElement == 0)
 		{
 			C.PassBegin();
@@ -94,7 +109,9 @@ void	CBlender_Model_EbB::Compile(CBlender_Compile& C)
 			C.r_Sampler("s_env", oT2_Name, false, D3DTADDRESS_CLAMP);
 			C.r_End();
 		}
+#endif
 	} else {
+#if !defined(USE_DX10) && !defined(USE_DX11)
 		LPCSTR	vsname			= 0;
 		LPCSTR	psname			= 0;
 		switch (C.iElement)
@@ -141,6 +158,7 @@ void	CBlender_Model_EbB::Compile(CBlender_Compile& C)
 			C.r_End				();
 			break;
 		}
+#endif	//	game-only R1 paths: r_Sampler
 	}
 }
 #elif RENDER==R_R2

@@ -1,26 +1,30 @@
 #ifndef	SKIN_H
 #define SKIN_H
 
+// Vertex input types follow the D3D11 input layout, not the D3D9 one:
+// SHORT2/SHORT4 elements arrive as R16G16_SINT / R16G16B16A16_SINT (so int2/int4),
+// and D3DCOLOR-packed normals arrive as R8G8B8A8_UNORM, i.e. with the RGB order
+// reversed - hence the .zyx fixups at the top of every skinning_* below.
 
 struct 	v_model_skinned_0
 {
-	float4 	P	: POSITION;	// (float,float,float,1) - quantized	// short4
+	int4 	P	: POSITION;	// (float,float,float,1) - quantized	// short4
 	float3	N	: NORMAL;	// normal				// DWORD
 	float3	T	: TANGENT;	// tangent				// DWORD
 	float3	B	: BINORMAL;	// binormal				// DWORD
-	float2	tc	: TEXCOORD0;	// (u,v)				// short2
+	int2	tc	: TEXCOORD0;	// (u,v)				// short2
 };
 struct 	v_model_skinned_1   		// 24 bytes
 {
-	float4 	P	: POSITION;	// (float,float,float,1) - quantized	// short4
-	int4	N	: NORMAL;	// (nx,ny,nz,index)			// DWORD
+	int4 	P	: POSITION;	// (float,float,float,1) - quantized	// short4
+	float4	N	: NORMAL;	// (nx,ny,nz,index)			// DWORD
 	float3	T	: TANGENT;	// tangent				// DWORD
 	float3	B	: BINORMAL;	// binormal				// DWORD
-	float2	tc	: TEXCOORD0;	// (u,v)				// short2
+	int2	tc	: TEXCOORD0;	// (u,v)				// short2
 };
 struct 	v_model_skinned_2		// 28 bytes
 {
-	float4 	P	: POSITION;	// (float,float,float,1) - quantized	// short4
+	int4 	P	: POSITION;	// (float,float,float,1) - quantized	// short4
 	float4 	N	: NORMAL;	// (nx,ny,nz,weight)			// DWORD
 	float3	T	: TANGENT;	// tangent				// DWORD
 	float3	B	: BINORMAL;	// binormal				// DWORD
@@ -29,7 +33,7 @@ struct 	v_model_skinned_2		// 28 bytes
 
 struct 	v_model_skinned_3		// 28 bytes
 {
-	float4 	P	: POSITION;	// (float,float,float,1) - quantized	// short4
+	int4 	P	: POSITION;	// (float,float,float,1) - quantized	// short4
 	float4 	N	: NORMAL;	// (nx,ny,nz,weight0)			// DWORD
 	float4	T	: TANGENT;	// (tx,ty,tz,weight1)				// DWORD
 	float4	B	: BINORMAL;	// (bx,by,bz,m-index2)				// DWORD
@@ -38,7 +42,7 @@ struct 	v_model_skinned_3		// 28 bytes
 
 struct 	v_model_skinned_4		// 28 bytes
 {
-	float4 	P	: POSITION;	// (float,float,float,1) - quantized	// short4
+	int4 	P	: POSITION;	// (float,float,float,1) - quantized	// short4
 	float4 	N	: NORMAL;	// (nx,ny,nz,weight0)			// DWORD
 	float4	T	: TANGENT;	// (tx,ty,tz,weight1)				// DWORD
 	float4	B	: BINORMAL;	// (bx,by,bz,weight2)				// DWORD
@@ -51,17 +55,18 @@ struct 	v_model_skinned_4		// 28 bytes
 float4 	u_position	(float4 v)	{ return float4(v.xyz*(12.f / 32768.f), 1.f);	}	// -12..+12
 
 //////////////////////////////////////////////////////////////////////////////////////////
-//uniform float4 	sbones_array	[256-22] : register(vs,c22);
-//	Igor: some shaders in r1 need more free constant registers
-uniform float4 	sbones_array	[255-22-3] : register(vs,c22);
-float3 	skinning_dir 	(float3 dir, float3 m0, float3 m1, float3 m2)
+//	No c-register aliasing under SM4 - the array just lives in the global cbuffer
+//	and the engine still finds it by name.
+uniform float4 	sbones_array	[255-22-3];
+// The bone rows come in as float4; only their rotation part applies to a direction
+float3 	skinning_dir 	(float3 dir, float4 m0, float4 m1, float4 m2)
 {
 	float3 	U 	= unpack_normal(dir);
-	return 	float3	
+	return 	float3
 		(
-			dot	(m0, U),
-			dot	(m1, U),
-			dot	(m2, U)
+			dot	(m0.xyz, U),
+			dot	(m1.xyz, U),
+			dot	(m2.xyz, U)
 		);
 }
 float4 	skinning_pos 	(float4 pos, float4 m0, float4 m1, float4 m2)
@@ -78,6 +83,11 @@ float4 	skinning_pos 	(float4 pos, float4 m0, float4 m1, float4 m2)
 
 v_model skinning_0	(v_model_skinned_0	v)
 {
+	// swizzle back the D3DCOLOR-packed basis
+	v.N		= v.N.zyx;
+	v.T		= v.T.zyx;
+	v.B		= v.B.zyx;
+
 	// skinning
 	v_model 	o;
 	o.pos 		= u_position(v.P);
@@ -92,8 +102,12 @@ v_model skinning_0	(v_model_skinned_0	v)
 }
 v_model skinning_1 	(v_model_skinned_1	v)
 {
+	v.N.xyz		= v.N.zyx;
+	v.T.xyz		= v.T.zyx;
+	v.B.xyz		= v.B.zyx;
+
 	// matrices
-	int 	mid 	= v.N.w * (int)255;
+	int 	mid 	= v.N.w * 255 + 0.3;
 	float4  m0 	= sbones_array[mid+0];
 	float4  m1 	= sbones_array[mid+1];
 	float4  m2 	= sbones_array[mid+2];
@@ -101,7 +115,7 @@ v_model skinning_1 	(v_model_skinned_1	v)
 	// skinning
 	v_model 	o;
 	o.pos 		= skinning_pos(v.P, m0,m1,m2 );
-	o.norm 		= skinning_dir(v.N, m0,m1,m2 );
+	o.norm 		= skinning_dir(v.N.xyz, m0,m1,m2 );
 	o.T 		= skinning_dir(v.T, m0,m1,m2 );
 	o.B 		= skinning_dir(v.B, m0,m1,m2 );
 	o.tc 		= v.tc		*(16.f / 32768.f);	// -16..+16
@@ -112,6 +126,10 @@ v_model skinning_1 	(v_model_skinned_1	v)
 }
 v_model skinning_2 	(v_model_skinned_2	v)
 {
+	v.N.xyz		= v.N.zyx;
+	v.T.xyz		= v.T.zyx;
+	v.B.xyz		= v.B.zyx;
+
 	// matrices
 	int 	id_0 	= v.tc.z;
 	float4  m0_0 	= sbones_array[id_0+0];
@@ -131,10 +149,10 @@ v_model skinning_2 	(v_model_skinned_2	v)
 	// skinning
 	v_model 	o;
 	o.pos 		= skinning_pos(v.P, m0,m1,m2 );
-	o.norm 		= skinning_dir(v.N, m0,m1,m2 );
+	o.norm 		= skinning_dir(v.N.xyz, m0,m1,m2 );
 	o.T 		= skinning_dir(v.T, m0,m1,m2 );
 	o.B 		= skinning_dir(v.B, m0,m1,m2 );
-	o.tc 		= v.tc		*(16.f / 32768.f);	// -16..+16
+	o.tc 		= v.tc.xy	*(16.f / 32768.f);	// -16..+16
 #ifdef SKIN_COLOR
 	o.rgb_tint	= float3	(2,0,0)	;
 	if (id_0==id_1)	o.rgb_tint	= float3(1,2,0);
@@ -144,6 +162,10 @@ v_model skinning_2 	(v_model_skinned_2	v)
 
 v_model skinning_2lq 	(v_model_skinned_2	v)
 {
+	v.N.xyz		= v.N.zyx;
+	v.T.xyz		= v.T.zyx;
+	v.B.xyz		= v.B.zyx;
+
 	// matrices
 	int 	id_0 	= v.tc.z;
 	float4  m0 	= sbones_array[id_0+0];
@@ -153,10 +175,10 @@ v_model skinning_2lq 	(v_model_skinned_2	v)
 	// skinning
 	v_model 	o ;
 	o.pos 		= skinning_pos	(v.P, m0,m1,m2 );
-	o.norm 		= skinning_dir	(v.N, m0,m1,m2 );
+	o.norm 		= skinning_dir	(v.N.xyz, m0,m1,m2 );
 	o.T 		= skinning_dir	(v.T, m0,m1,m2 );
 	o.B 		= skinning_dir	(v.B, m0,m1,m2 );
-	o.tc 		= v.tc		*(16.f / 32768.f);	// -16..+16
+	o.tc 		= v.tc.xy	*(16.f / 32768.f);	// -16..+16
 #ifdef SKIN_COLOR
 	o.rgb_tint	= float3	(0,2,0)	;
 #endif
@@ -165,6 +187,10 @@ v_model skinning_2lq 	(v_model_skinned_2	v)
 
 v_model skinning_3 	(v_model_skinned_3	v)
 {
+	v.N.xyz		= v.N.zyx;
+	v.T.xyz		= v.T.zyx;
+	v.B.xyz		= v.B.zyx;
+
 	// matrices
 	int 	id_0 	= v.tc.z;
 	float4  m0_0 	= sbones_array[id_0+0];
@@ -198,10 +224,10 @@ v_model skinning_3 	(v_model_skinned_3	v)
 	// skinning
 	v_model 	o;
 	o.pos 		= skinning_pos(v.P, m0,m1,m2 );
-	o.norm 		= skinning_dir(v.N, m0,m1,m2 );
-	o.T 		= skinning_dir(v.T, m0,m1,m2 );
-	o.B 		= skinning_dir(v.B, m0,m1,m2 );
-	o.tc 		= v.tc		*(16.f / 32768.f);	// -16..+16
+	o.norm 		= skinning_dir(v.N.xyz, m0,m1,m2 );
+	o.T 		= skinning_dir(v.T.xyz, m0,m1,m2 );
+	o.B 		= skinning_dir(v.B.xyz, m0,m1,m2 );
+	o.tc 		= v.tc.xy	*(16.f / 32768.f);	// -16..+16
 #ifdef SKIN_COLOR
 	o.rgb_tint	= float3	(2,0,0)	;
 	if (id_0==id_1)	o.rgb_tint	= float3(1,2,0);
@@ -216,12 +242,19 @@ v_model skinning_3lq 	(v_model_skinned_3	v)
 
 v_model skinning_4 	(v_model_skinned_4	v)
 {
+	v.N.xyz		= v.N.zyx;
+	v.T.xyz		= v.T.zyx;
+	v.B.xyz		= v.B.zyx;
+	v.ind.xyz	= v.ind.zyx;
+
 	// matrices
 	float		id[4];
 	float4	m[4][3];	//	[bone index][matrix row or column???]
+	[unroll]
 	for (int i=0; i<4; ++i)
-	{		
+	{
 		id[i] = v.ind[i]*255+0.3;
+		[unroll]
 		for (int j=0; j<3; ++j)
 			m[i][j] = sbones_array[id[i]+j];
 	}
@@ -237,23 +270,23 @@ v_model skinning_4 	(v_model_skinned_4	v)
 	float4  m1 	= m[0][1]*w[0];
 	float4  m2 	= m[0][2]*w[0];
 
-	for (int i=1; i<4; ++i)
+	[unroll]
+	for (int k=1; k<4; ++k)
 	{
-		m0 	+= m[i][0]*w[i];
-		m1 	+= m[i][1]*w[i];
-		m2 	+= m[i][2]*w[i];
+		m0 	+= m[k][0]*w[k];
+		m1 	+= m[k][1]*w[k];
+		m2 	+= m[k][2]*w[k];
 	}
 
 	// skinning
 	v_model 	o;
 	o.pos 		= skinning_pos(v.P, m0,m1,m2 );
-	o.norm 		= skinning_dir(v.N, m0,m1,m2 );
-	o.T 		= skinning_dir(v.T, m0,m1,m2 );
-	o.B 		= skinning_dir(v.B, m0,m1,m2 );
+	o.norm 		= skinning_dir(v.N.xyz, m0,m1,m2 );
+	o.T 		= skinning_dir(v.T.xyz, m0,m1,m2 );
+	o.B 		= skinning_dir(v.B.xyz, m0,m1,m2 );
 	o.tc 		= v.tc		*(16.f / 32768.f);	// -16..+16
 #ifdef SKIN_COLOR
 	o.rgb_tint	= float3	(2,0,0)	;
-	if (id_0==id_1)	o.rgb_tint	= float3(1,2,0);
 #endif
 	return o;
 }

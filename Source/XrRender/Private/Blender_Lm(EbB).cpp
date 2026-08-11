@@ -45,7 +45,9 @@ void	CBlender_LmEbB::Load(	IReader& fs, u16 version )
 	}
 }
 
-#if RENDER==R_R1
+// The editor compiles the R1 implementation regardless of RENDER: it is the only
+// one carrying a bEditor branch, and it is what the editor built before the port.
+#if RENDER==R_R1 || defined(REDITOR)
 //////////////////////////////////////////////////////////////////////////
 // R1
 //////////////////////////////////////////////////////////////////////////
@@ -53,6 +55,16 @@ void	CBlender_LmEbB::Compile(CBlender_Compile& C)
 {
 	IBlender::Compile		(C);
 	if (C.bEditor)	{
+#if defined(USE_DX10) || defined(USE_DX11)
+		// D3D11 has no fixed-function stages - model_env_hq does the same env/base
+		// lerp the three-stage setup below was assembling by hand
+		C.r_Pass		("model_env_hq","model_env_hq",TRUE,TRUE,TRUE);
+		C.r_dx10Texture	("s_base",	oT_Name);
+		C.r_dx10Texture	("s_env",	oT2_Name);
+		C.r_dx10Sampler	("smp_base");
+		C.r_dx10Sampler	("smp_rtlinear");
+		C.r_End			();
+#else
 		C.PassBegin		();
 		{
 			C.PassSET_ZB		(TRUE,TRUE);
@@ -84,7 +96,9 @@ void	CBlender_LmEbB::Compile(CBlender_Compile& C)
 			C.StageEnd			();
 		}
 		C.PassEnd			();
+#endif
 	} else {
+#if !defined(USE_DX10) && !defined(USE_DX11)
 		if (C.L_textures.size()<2)	Debug.fatal	(DEBUG_INFO,"Not enought textures for shader, base tex: %s",*C.L_textures[0]);
 		switch (C.iElement)
 		{
@@ -136,6 +150,7 @@ void	CBlender_LmEbB::Compile(CBlender_Compile& C)
 			C.r_End			();
 			break;
 		}
+#endif	//	game-only R1 paths: r_Sampler
 	}
 }
 #elif RENDER==R_R2

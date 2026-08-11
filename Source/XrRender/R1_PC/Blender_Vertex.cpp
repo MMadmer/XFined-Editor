@@ -50,13 +50,21 @@ void CBlender_Vertex::Compile	(CBlender_Compile& C)
 
 	if (C.bEditor)
 	{
+#if defined(USE_DX10) || defined(USE_DX11)
+		// see BlenderDefault: the editor viewport needs the base texture, not
+		// the fixed-function stage chain that D3D11 dropped
+		C.r_Pass		("model_def_hq","model_def_hq",TRUE,TRUE,TRUE);
+		C.r_dx10Texture	("s_base",	oT_Name);
+		C.r_dx10Sampler	("smp_base");
+		C.r_End			();
+#else
 		// Editor shader
 		C.PassBegin		();
 		{
 			C.PassSET_ZB			(TRUE,TRUE);
 			C.PassSET_Blend			(FALSE,D3DBLEND_ONE,D3DBLEND_ZERO,	FALSE,0);
 			C.PassSET_LightFog		(TRUE,TRUE);
-			
+
 			// Stage0 - Base texture
 			C.StageBegin			();
 			C.StageSET_Color		(D3DTA_TEXTURE,	  D3DTOP_MODULATE,	D3DTA_DIFFUSE);
@@ -67,7 +75,9 @@ void CBlender_Vertex::Compile	(CBlender_Compile& C)
 			C.StageEnd				();
 		}
 		C.PassEnd			();
+#endif
 	} else {
+#if !defined(USE_DX10) && !defined(USE_DX11)
 		switch (C.iElement)
 		{
 		case SE_R1_NORMAL_HQ:
@@ -111,5 +121,6 @@ void CBlender_Vertex::Compile	(CBlender_Compile& C)
 			C.r_End			();
 			break;
 		}
+#endif	//	game-only R1 paths: DX9 fixed-function and r_Sampler
 	}
 }

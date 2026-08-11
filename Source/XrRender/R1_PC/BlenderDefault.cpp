@@ -45,12 +45,21 @@ void	CBlender_default::Compile(CBlender_Compile& C)
 {
 	IBlender::Compile		(C);
 	if (C.bEditor)	{
+#if defined(USE_DX10) || defined(USE_DX11)
+		// D3D11 has no fixed-function stages. The editor viewport only needs the
+		// surface's base texture, so it goes through a minimal textured pass -
+		// the lightmap/detail work below belongs to the game renderer.
+		C.r_Pass		("model_def_hq","model_def_hq",TRUE,TRUE,TRUE);
+		C.r_dx10Texture	("s_base",	oT_Name);
+		C.r_dx10Sampler	("smp_base");
+		C.r_End			();
+#else
 		C.PassBegin		();
 		{
 			C.PassSET_ZB			(TRUE,TRUE);
 			C.PassSET_Blend			(FALSE,D3DBLEND_ONE,D3DBLEND_ZERO,FALSE,0);
 			C.PassSET_LightFog		(TRUE,TRUE);
-			
+
 			// Stage1 - Base texture
 			C.StageBegin			();
 			C.StageSET_Color		(D3DTA_TEXTURE,	  D3DTOP_MODULATE,		D3DTA_DIFFUSE);
@@ -59,7 +68,9 @@ void	CBlender_default::Compile(CBlender_Compile& C)
 			C.StageEnd				();
 		}
 		C.PassEnd			();
+#endif
 	} else {
+#if !defined(USE_DX10) && !defined(USE_DX11)
 		if (C.L_textures.size()<3)	Debug.fatal	(DEBUG_INFO,"Not enought textures for shader, base tex: %s",*C.L_textures[0]);
 		switch (C.iElement)
 		{
@@ -112,5 +123,6 @@ void	CBlender_default::Compile(CBlender_Compile& C)
 			C.r_End			();
 			break;
 		}
+#endif	//	game-only R1 paths: DX9 fixed-function and r_Sampler
 	}
 }

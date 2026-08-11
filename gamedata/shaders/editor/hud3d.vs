@@ -10,8 +10,8 @@ struct	ui_vert_in
 
 struct	ui_vert_out
 {
- 	half2 	tc0		: TEXCOORD0;
-	float4 	P		: POSITION;
+ 	float2 	tc0		: TEXCOORD0;
+	float4 	P		: SV_Position;
 };
 
 

@@ -70,7 +70,7 @@ endforeach()
 # (it takes 109 of the 110 Private sources and swaps these out).
 list(APPEND _priv_excl
     "HW.cpp" "Texture.cpp" "SH_RT.cpp" "SH_Texture.cpp"
-    "ResourceManager_Resources.cpp")
+    "ResourceManager_Resources.cpp" "ResourceManager_Scripting.cpp")
 xray_exclude(XRECORE_RPRIV ${_priv_excl})
 xray_glob(XRECORE_RBLEND "${SRC}/XrRender/Private/blenders")
 set(XRECORE_R1
@@ -84,10 +84,7 @@ endforeach()
 # calls D3D11CreateDeviceAndSwapChain - and it is the same code the R4 renderer
 # builds on. Game-only translation units are excluded.
 xray_glob(XRECORE_DX11 "${SRC}/XrRender/DX10")
-# dx10ResourceManager_Scripting is written against the GAME renderer's CRender
-# (MSAA options, CRender::o) - the editor has its own CRender, so it keeps the
-# shared Private version of that one file instead.
-xray_exclude(XRECORE_DX11 "dx10DetailManager_VS.cpp" "dx10ResourceManager_Scripting.cpp")
+xray_exclude(XRECORE_DX11 "dx10DetailManager_VS.cpp")
 
 set(XRECORE_EXTERNAL
     "${SRC}/XrCPU_Pipe/xrSkin2W.cpp"

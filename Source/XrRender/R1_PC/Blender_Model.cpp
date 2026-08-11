@@ -66,6 +66,17 @@ void	CBlender_Model::Compile	(CBlender_Compile& C)
 	IBlender::Compile		(C);
 	if (C.bEditor)
 	{
+#if defined(USE_DX10) || defined(USE_DX11)
+		// Both elements collapse onto the same programmable pass: element 0 was
+		// only a fixed-function version of what element 1 already does.
+		if (oBlend.value)	C.r_Pass("model_def_hq", "model_def_hq", FALSE, TRUE, TRUE, TRUE, D3DBLEND_SRCALPHA, D3DBLEND_INVSRCALPHA, TRUE, oAREF.value);
+		else				C.r_Pass("model_def_hq", "model_def_hq", FALSE);
+		// element 1 used the compiled texture list, element 0 the property - the
+		// list is empty when the shader is compiled straight from properties
+		C.r_dx10Texture("s_base", C.L_textures.empty() ? oT_Name : C.L_textures[0]);
+		C.r_dx10Sampler("smp_base");
+		C.r_End();
+#else
 		if (C.iElement == 0)
 		{
 			C.PassBegin();
@@ -89,7 +100,9 @@ void	CBlender_Model::Compile	(CBlender_Compile& C)
 			C.r_Sampler("s_base", C.L_textures[0]);
 			C.r_End();
 		}
+#endif
 	} else {
+#if !defined(USE_DX10) && !defined(USE_DX11)
 		LPCSTR	vsname		= 0;
 		LPCSTR	psname		= 0;
 		switch (C.iElement)
@@ -136,5 +149,6 @@ void	CBlender_Model::Compile	(CBlender_Compile& C)
 			C.r_End				();
 			break;
 		}
+#endif	//	game-only R1 paths: DX9 fixed-function and r_Sampler
 	}
 }

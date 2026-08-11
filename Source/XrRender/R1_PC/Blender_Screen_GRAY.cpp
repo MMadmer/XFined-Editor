@@ -33,6 +33,16 @@ void	CBlender_Screen_GRAY::Load	( IReader& fs, u16 version	)
 void	CBlender_Screen_GRAY::Compile	(CBlender_Compile& C)
 {
 	IBlender::Compile		(C);
+#if defined(USE_DX10) || defined(USE_DX11)
+	// The grayscale trick was two fixed-function stages with a DOTPRODUCT3
+	// against TFACTOR. There is no stage chain in D3D11 and no editor code path
+	// that asks for this blender (Blender_Palette never instantiates it), so it
+	// becomes a plain textured pass rather than dead FF code.
+	C.r_Pass		("model_def_hq","model_def_hq",FALSE,FALSE,FALSE);
+	C.r_dx10Texture	("s_base",	oT_Name);
+	C.r_dx10Sampler	("smp_base");
+	C.r_End			();
+#else
 	C.PassBegin		();
 	{
 		C.PassSET_ZB			(FALSE,FALSE);
@@ -66,4 +76,5 @@ void	CBlender_Screen_GRAY::Compile	(CBlender_Compile& C)
 		C.StageEnd			();
 	}
 	C.PassEnd			();
+#endif
 }

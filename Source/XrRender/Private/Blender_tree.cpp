@@ -40,7 +40,9 @@ void	CBlender_Tree::Load		(IReader& fs, u16 version )
 	}
 }
 
-#if RENDER==R_R1
+// The editor compiles the R1 implementation regardless of RENDER: it is the only
+// one carrying a bEditor branch, and it is what the editor built before the port.
+#if RENDER==R_R1 || defined(REDITOR)
 //////////////////////////////////////////////////////////////////////////
 // R1
 //////////////////////////////////////////////////////////////////////////
@@ -50,6 +52,15 @@ void	CBlender_Tree::Compile	(CBlender_Compile& C)
 	
 	if (C.bEditor)
 	{
+#if defined(USE_DX10) || defined(USE_DX11)
+		// D3D11 has no fixed-function stages. The editor viewport only needs the
+		// base texture; alpha test (ref 200) and blending move to r_Pass arguments.
+		if (oBlend.value)	C.r_Pass	("model_def_hq","model_def_hq",TRUE,TRUE,TRUE,TRUE,D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA,TRUE,200);
+		else				C.r_Pass	("model_def_hq","model_def_hq",TRUE,TRUE,TRUE,FALSE,D3DBLEND_ONE,D3DBLEND_ZERO,TRUE,200);
+		C.r_dx10Texture	("s_base",	oT_Name);
+		C.r_dx10Sampler	("smp_base");
+		C.r_End			();
+#else
 		C.PassBegin		();
 		{
 			C.PassSET_ZB		(TRUE,TRUE);
@@ -65,7 +76,9 @@ void	CBlender_Tree::Compile	(CBlender_Compile& C)
 			C.StageEnd			();
 		}
 		C.PassEnd			();
+#endif
 	} else {
+#if !defined(USE_DX10) && !defined(USE_DX11)
 		u32							tree_aref		= 200;
 		if (oNotAnTree.value)		tree_aref		= 0;
 
@@ -129,6 +142,7 @@ void	CBlender_Tree::Compile	(CBlender_Compile& C)
 			*/
 			break;
 		}
+#endif	//	game-only R1 paths: DX9 fixed-function and r_Sampler
 	}
 }
 #elif RENDER==R_R2

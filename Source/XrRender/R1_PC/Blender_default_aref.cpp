@@ -55,13 +55,24 @@ void CBlender_default_aref::Compile(CBlender_Compile& C)
 {
 	IBlender::Compile		(C);
 	if (C.bEditor)	{
+#if defined(USE_DX10) || defined(USE_DX11)
+		// no fixed-function stages under D3D11; alpha test and blend survive as
+		// pass arguments, which is all this shader used them for
+		if (oBlend.value)
+			C.r_Pass	("model_def_hq","model_def_hq",TRUE,TRUE,TRUE,TRUE,D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA,TRUE,oAREF.value);
+		else
+			C.r_Pass	("model_def_hq","model_def_hq",TRUE,TRUE,TRUE,FALSE,D3DBLEND_ONE,D3DBLEND_ZERO,TRUE,oAREF.value);
+		C.r_dx10Texture	("s_base",	oT_Name);
+		C.r_dx10Sampler	("smp_base");
+		C.r_End			();
+#else
 		C.PassBegin		();
 		{
 			C.PassSET_ZB			(TRUE,TRUE);
 			if (oBlend.value)		C.PassSET_Blend			(TRUE, D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA,	TRUE,oAREF.value);
 			else					C.PassSET_Blend			(TRUE, D3DBLEND_ONE, D3DBLEND_ZERO,				TRUE,oAREF.value);
 			C.PassSET_LightFog		(TRUE,TRUE);
-			
+
 			// Stage0 - Base texture
 			C.StageBegin		();
 			C.StageSET_Address	(D3DTADDRESS_WRAP);
@@ -71,7 +82,9 @@ void CBlender_default_aref::Compile(CBlender_Compile& C)
 			C.StageEnd			();
 		}
 		C.PassEnd			();
+#endif
 	} else {
+#if !defined(USE_DX10) && !defined(USE_DX11)
 		if (C.L_textures.size()<2)	Debug.fatal	(DEBUG_INFO,"Not enought textures for shader, base tex: %s",*C.L_textures[0]);
 		switch (C.iElement)
 		{
@@ -128,5 +141,6 @@ void CBlender_default_aref::Compile(CBlender_Compile& C)
 			C.r_End			();
 			break;
 		}
+#endif	//	game-only R1 paths: DX9 fixed-function and r_Sampler
 	}
 }

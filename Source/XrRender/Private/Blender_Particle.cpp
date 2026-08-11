@@ -54,7 +54,10 @@ void	CBlender_Particle::Load	( IReader& fs, u16 version)
 	xrPREAD_PROP		(fs,xrPID_INTEGER,		oAREF);
 }
 
-#if RENDER==R_R1
+// The editor compiles the R1 implementation regardless of RENDER: it is the single
+// unconditional path (no bEditor branch here) and what the editor built before the
+// port. The R2/R3 ones are deferred-renderer only.
+#if RENDER==R_R1 || defined(REDITOR)
 void	CBlender_Particle::Compile	(CBlender_Compile& C)
 {
 	IBlender::Compile		(C);
@@ -67,9 +70,20 @@ void	CBlender_Particle::Compile	(CBlender_Compile& C)
 		case 4:	C.r_Pass	("particle","particle",FALSE,	TRUE,FALSE,	TRUE,	D3DBLEND_DESTCOLOR,	D3DBLEND_SRCCOLOR,		TRUE,0);	break;	// MUL_2X
 		case 5:	C.r_Pass	("particle","particle",FALSE,	TRUE,FALSE,	TRUE,	D3DBLEND_SRCALPHA,	D3DBLEND_ONE,			TRUE,0);	break;	// ALPHA-ADD
 	}
+#if defined(USE_DX10) || defined(USE_DX11)
+	// r_Sampler is DX9-only: bind the texture and the sampler separately and carry
+	// the clamp flag onto the sampler state
+	C.r_dx10Texture			("s_base",	C.L_textures[0]);
+	{
+		u32 hSampler = C.r_dx10Sampler("smp_base");
+		if (oClamp.value && (hSampler!=(u32)-1))
+			C.i_dx10Address	(hSampler, D3DTADDRESS_CLAMP);
+	}
+#else
 	C.r_Sampler				("s_base",	C.L_textures[0],false,oClamp.value?D3DTADDRESS_CLAMP:D3DTADDRESS_WRAP);
+#endif
 	C.r_End					();
-}	
+}
 #elif RENDER==R_R2
 void	CBlender_Particle::Compile	(CBlender_Compile& C)
 {

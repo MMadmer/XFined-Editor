@@ -57,13 +57,23 @@ void	CBlender_Vertex_aref::Compile(CBlender_Compile& C)
 	
 	if (C.bEditor)
 	{
+#if defined(USE_DX10) || defined(USE_DX11)
+		// alpha test and blend carry over as pass arguments; the stage chain does not
+		if (oBlend.value)
+			C.r_Pass	("model_def_hq","model_def_hq",TRUE,TRUE,TRUE,TRUE,D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA,TRUE,oAREF.value);
+		else
+			C.r_Pass	("model_def_hq","model_def_hq",TRUE,TRUE,TRUE,FALSE,D3DBLEND_ONE,D3DBLEND_ZERO,TRUE,oAREF.value);
+		C.r_dx10Texture	("s_base",	oT_Name);
+		C.r_dx10Sampler	("smp_base");
+		C.r_End			();
+#else
 		C.PassBegin		();
 		{
 			C.PassSET_ZB		(TRUE,TRUE);
 			if (oBlend.value)	C.PassSET_Blend			(TRUE, D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA,	TRUE,oAREF.value);
 			else				C.PassSET_Blend			(TRUE, D3DBLEND_ONE, D3DBLEND_ZERO,				TRUE,oAREF.value);
 			C.PassSET_LightFog	(TRUE,TRUE);
-			
+
 			// Stage1 - Base texture
 			C.StageBegin		();
 			C.StageSET_Color	(D3DTA_TEXTURE,	  D3DTOP_MODULATE,	D3DTA_DIFFUSE);
@@ -74,7 +84,9 @@ void	CBlender_Vertex_aref::Compile(CBlender_Compile& C)
 			C.StageEnd			();
 		}
 		C.PassEnd			();
+#endif
 	} else {
+#if !defined(USE_DX10) && !defined(USE_DX11)
 		switch (C.iElement)
 		{
 		case SE_R1_NORMAL_HQ:
@@ -120,5 +132,6 @@ void	CBlender_Vertex_aref::Compile(CBlender_Compile& C)
 			C.r_End			();
 			break;
 		}
+#endif	//	game-only R1 paths: DX9 fixed-function and r_Sampler
 	}
 }
