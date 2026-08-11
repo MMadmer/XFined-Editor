@@ -5,7 +5,31 @@
 #include "ui_toolscustom.h"
 #include "ui_main.h"
 #include "ResourceManager.h"
+#include "EDX11Utils.h"
 
+#if defined(USE_DX11)
+bool CEditorRenderDevice::MakeScreenshot(U32Vec& pixels, u32 width, u32 height)
+{
+	if (!b_is_Ready)	return false;
+
+	// No Evict(): D3D11 has no managed pool to free, the driver owns residency.
+	SDX11TargetGuard	guard;		// puts the caller's target back on the way out
+	SDX11Target			target;
+	if (!target.create(width, height))	return false;
+
+	target.bind();
+	target.clear(EPrefs ? EPrefs->scene_clear_color : 0);
+
+	UI->PrepareRedraw	();
+	EDevice->Begin		();
+	Tools->Render		();
+	EDevice->End		();
+
+	// D3D9 read the target bottom-up, so the rows were mirrored while copying;
+	// keep the same orientation for callers that already expect it.
+	return DX11ReadbackToPixels(target.rt, width, height, pixels, true);
+}
+#else
 bool CEditorRenderDevice::MakeScreenshot(U32Vec& pixels, u32 width, u32 height)
 {
 	if (!b_is_Ready) return false;
@@ -65,5 +89,6 @@ bool CEditorRenderDevice::MakeScreenshot(U32Vec& pixels, u32 width, u32 height)
 
     return true;
 }
+#endif	//	USE_DX11
 
 

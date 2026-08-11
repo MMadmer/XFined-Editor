@@ -3,7 +3,12 @@
 //----------------------------------------------------
 #pragma once
 // DirectX headers
-#include <d3d9.h>
+// D3D11 is the render API; d3dx9 stays for now purely as a math/helper library
+// (D3DXMATRIX, D3DXVECTOR, mesh optimisation) exactly like the R4 renderer does
+// - dropping it is a separate step, not a prerequisite for the device switch.
+#include <d3d11.h>
+#include "directx\D3Dx11core.h"
+#include <D3DCompiler.h>
 #include "directx\d3dx9.h"
 #include "..\..\XrRender\Private\xrD3dDefs.h"
 
@@ -29,7 +34,12 @@
 
 #define         R_R1    1
 #define         R_R2    2
-#define         RENDER  R_R1
+#define         R_R3    3
+#define         R_R4    4
+// The editor renders through the DX11 path now. USE_DX11 itself comes from the
+// build (target_compile_definitions) so that every pulled-in XrRender TU sees it,
+// not just the ones that happen to include this header first.
+#define         RENDER  R_R4
 #define			REDITOR 1
 
 #ifdef	XRECORE_EXPORTS

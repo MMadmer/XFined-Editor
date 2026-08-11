@@ -5,10 +5,15 @@
 #   .\Build.ps1 -Target XrGame  - build one target
 #   .\Build.ps1 -Clean          - wipe the cmake binary dir first
 #   .\Build.ps1 -Debug          - Debug preset instead of Release
+#   .\Build.ps1 -KeepGoing      - do not stop at the first failing file
 param(
     [string]$Target = "",
     [switch]$Clean,
-    [switch]$Debug
+    [switch]$Debug,
+    # Ninja stops at the first error by default, which hides the real size of a
+    # migration: you fix one file and discover the next. This builds everything
+    # it can and reports every failure in one pass.
+    [switch]$KeepGoing
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,5 +54,6 @@ if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
 $build_args = @('--build', '--preset', $preset)
 if ($Target) { $build_args += @('--target', $Target) }
+if ($KeepGoing) { $build_args += @('--', '-k', '0') }
 & $cmake @build_args
 exit $LASTEXITCODE

@@ -18,6 +18,39 @@ class CGameFont;
 class CInifile;
 class CResourceManager;
 #undef CreateWindow
+
+#if defined(USE_DX11)
+//------------------------------------------------------------------------------
+// Fixed-function state the editor still speaks in.
+//
+// D3D11 dropped the FFP entirely, but the editor's drawing code is written
+// against it in ~70 places (grid, gizmo, selection, debug draw, previews).
+// Rather than rewriting every caller at once, the setters record into this
+// block and the shader-based drawing path reads it back. Indices are masked, so
+// a stray state id can never write out of bounds.
+//------------------------------------------------------------------------------
+struct SEditorFixedFunc
+{
+	enum { RS_MAX = 256, SS_MAX = 16, SAMPLERS = 8, LIGHTS = 8 };
+
+	u32			render_state[RS_MAX];
+	u32			sampler_state[SAMPLERS][SS_MAX];
+	Flight		light[LIGHTS];
+	bool		light_enabled[LIGHTS];
+	Fmaterial	material;
+
+	SEditorFixedFunc()	{ reset(); }
+	void reset()
+	{
+		ZeroMemory(render_state,	sizeof(render_state));
+		ZeroMemory(sampler_state,	sizeof(sampler_state));
+		ZeroMemory(light,			sizeof(light));
+		ZeroMemory(light_enabled,	sizeof(light_enabled));
+		ZeroMemory(&material,		sizeof(material));
+	}
+};
+#endif
+
 //------------------------------------------------------------------------------
 class ECORE_API CEditorRenderDevice :
 	public XrDeviceInterface
@@ -41,6 +74,10 @@ public:
     ref_shader				m_SelectionShader;
 
     Fmaterial				m_DefaultMat;
+#if defined(USE_DX11)
+	// recorded fixed-function state, consumed by the shader drawing path
+	SEditorFixedFunc		ff;
+#endif
 public:
 	float RadiusRender;
    // u32 					dwWidth, dwHeight;
@@ -133,6 +170,25 @@ public:
 	void			   		DP				(D3DPRIMITIVETYPE pt, ref_geom geom, u32 startV, u32 pc);
 	void 					DIP				(D3DPRIMITIVETYPE pt, ref_geom geom, u32 baseV, u32 startV, u32 countV, u32 startI, u32 PC);
 
+#if defined(USE_DX11)
+	// D3D11 has no fixed-function pipeline: no render/sampler state setters, no
+	// lights, no material. The editor calls these from ~70 places, so instead of
+	// touching all of them the state is recorded here and the shader-based
+	// drawing path consumes it. Callers keep their meaning; only the backend
+	// moved. See SEditorFixedFunc below.
+	IC void					SetRS			(D3DRENDERSTATETYPE p1, u32 p2)
+	{ ff.render_state[u32(p1) & (SEditorFixedFunc::RS_MAX-1)] = p2; }
+	IC void					SetSS			(u32 sampler, D3DSAMPLERSTATETYPE type, u32 value)
+	{ if (sampler < SEditorFixedFunc::SAMPLERS) ff.sampler_state[sampler][u32(type) & (SEditorFixedFunc::SS_MAX-1)] = value; }
+
+	// light&material
+	IC void					LightEnable		(u32 dwLightIndex, BOOL bEnable)
+	{ if (dwLightIndex < SEditorFixedFunc::LIGHTS) ff.light_enabled[dwLightIndex] = !!bEnable; }
+	IC void					SetLight		(u32 dwLightIndex, Flight& lpLight)
+	{ if (dwLightIndex < SEditorFixedFunc::LIGHTS) ff.light[dwLightIndex] = lpLight; }
+	IC void					SetMaterial		(Fmaterial& mat)	{ ff.material = mat; }
+	IC void					ResetMaterial	()					{ ff.material = m_DefaultMat; }
+#else
     IC void					SetRS			(D3DRENDERSTATETYPE p1, u32 p2)
     { VERIFY(b_is_Ready); CHK_DX(HW.pDevice->SetRenderState(p1,p2)); }
     IC void					SetSS			(u32 sampler, D3DSAMPLERSTATETYPE type, u32 value)
@@ -147,6 +203,7 @@ public:
     { CHK_DX(HW.pDevice->SetMaterial((D3DMATERIAL9*)&mat));}
 	IC void					ResetMaterial	()
     { CHK_DX(HW.pDevice->SetMaterial((D3DMATERIAL9*)&m_DefaultMat));}
+#endif
 
 	// update
     void					UpdateView		();

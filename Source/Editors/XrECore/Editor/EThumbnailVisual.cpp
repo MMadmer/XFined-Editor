@@ -4,6 +4,7 @@
 
 #include "EThumbnailVisual.h"
 #include "EThumbnail.h"
+#include "EDX11Utils.h"
 #include "..\..\..\XrRender\Private\FBasicVisual.h"
 // posing an animated skeleton needs the full interface, not just the forward decl
 #include "..\..\..\XrRender\Public\KinematicsAnimated.h"
@@ -38,10 +39,17 @@ namespace
 	//--------------------------------------------------------------------------
 	struct SRenderStateGuard
 	{
+#if defined(USE_DX11)
+		// D3D11 has no state blocks. Render target, depth and viewport are the
+		// only device state an offscreen pass here overwrites, and that is what
+		// SDX11TargetGuard restores; everything else the draw path sets itself.
+		SDX11TargetGuard		m_Targets;
+#else
 		IDirect3DStateBlock9*	m_Block;
 		IDirect3DSurface9*		m_OldRT;
 		IDirect3DSurface9*		m_OldZB;
 		D3DVIEWPORT9			m_OldViewport;
+#endif
 		Fmatrix					m_OldWorld;
 		Fmatrix					m_OldView;
 		Fmatrix					m_OldProject;
@@ -54,6 +62,7 @@ namespace
 
 		SRenderStateGuard()
 		{
+#if !defined(USE_DX11)
 			m_Block				= 0;
 			m_OldRT				= 0;
 			m_OldZB				= 0;
@@ -63,6 +72,7 @@ namespace
 			HW.pDevice->GetRenderTarget		(0,&m_OldRT);
 			HW.pDevice->GetDepthStencilSurface(&m_OldZB);
 			HW.pDevice->GetViewport			(&m_OldViewport);
+#endif
 			// transforms travel through RCache, which mirrors them into the
 			// device, so save/restore has to go through RCache as well
 			m_OldWorld			= RCache.get_xform_world	();
@@ -83,6 +93,7 @@ namespace
 
 		~SRenderStateGuard()
 		{
+#if !defined(USE_DX11)
 			if (m_Block)		m_Block->Apply();
 			// render targets are not part of a D3D9 state block - restore by hand,
 			// and only then the viewport, since SetRenderTarget resets it
@@ -90,6 +101,7 @@ namespace
 			if (m_OldRT)	HW.pDevice->SetRenderTarget(0,m_OldRT);
 			HW.pDevice->SetDepthStencilSurface	(m_OldZB);
 			HW.pDevice->SetViewport				(&m_OldViewport);
+#endif
 			RCache.set_xform_world				(m_OldWorld);
 			RCache.set_xform_view				(m_OldView);
 			RCache.set_xform_project			(m_OldProject);
@@ -103,9 +115,11 @@ namespace
 			// about - OnFrameEnd is the public way to drop the cache, so the
 			// next draw (the next thumbnail included) re-applies everything
 			RCache.OnFrameEnd					();
+#if !defined(USE_DX11)
 			_RELEASE							(m_Block);
 			_RELEASE							(m_OldRT);
 			_RELEASE							(m_OldZB);
+#endif
 		}
 	};
 
@@ -143,13 +157,15 @@ namespace
 	void SetupThumbnailStates()
 	{
 		// states the shader passes do not own themselves: the editor may sit in
-		// wireframe/flat/fog mode and that must not leak into a thumbnail
-		HW.pDevice->SetRenderState(D3DRS_COLORWRITEENABLE,	D3DCOLORWRITEENABLE_ALPHA|D3DCOLORWRITEENABLE_BLUE|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_RED);
-		HW.pDevice->SetRenderState(D3DRS_FILLMODE,			D3DFILL_SOLID);
-		HW.pDevice->SetRenderState(D3DRS_SHADEMODE,			D3DSHADE_GOURAUD);
-		HW.pDevice->SetRenderState(D3DRS_FOGENABLE,			FALSE);
-		HW.pDevice->SetRenderState(D3DRS_AMBIENT,			0x30303030);
-		HW.pDevice->SetRenderState(D3DRS_TEXTUREFACTOR,		0xffffffff);
+		// wireframe/flat/fog mode and that must not leak into a thumbnail.
+		// Routed through the device wrapper rather than the raw API, so the DX11
+		// build records them for the shader path instead of failing to compile.
+		EDevice->SetRS(D3DRS_COLORWRITEENABLE,	D3DCOLORWRITEENABLE_ALPHA|D3DCOLORWRITEENABLE_BLUE|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_RED);
+		EDevice->SetRS(D3DRS_FILLMODE,			D3DFILL_SOLID);
+		EDevice->SetRS(D3DRS_SHADEMODE,			D3DSHADE_GOURAUD);
+		EDevice->SetRS(D3DRS_FOGENABLE,			FALSE);
+		EDevice->SetRS(D3DRS_AMBIENT,			0x30303030);
+		EDevice->SetRS(D3DRS_TEXTUREFACTOR,		0xffffffff);
 		for (u32 k=0; k<HW.Caps.raster.dwStages; k++)
 		{
 			EDevice->SetSS(k,D3DSAMP_MAGFILTER,D3DTEXF_LINEAR);
@@ -230,9 +246,25 @@ namespace
 		if (radius<EPS_L)	return false;
 
 		SRenderStateGuard	guard;
+		const u32 w = THUMB_WIDTH, h = THUMB_HEIGHT;
+
+#if defined(USE_DX11)
+		// The whole D3D9 dance is gone: no scene to open or close, no offscreen
+		// plain surface, and a readback is legal at any point. That also means
+		// this can run inside the ImGui pass safely - the reason the deferred
+		// queue exists in the first place.
+		SDX11Target	target;
+		if (!target.create(w, h))	return false;
+		target.bind();
+		target.clear(s_BackgroundColor);
+
+		bool drawn = false;
+		{
+		{
+			// somebody else (ImGui, the previous pass) may have written device
+#else
 		SScopedSurface		rt, zb, sys;
 
-		const u32 w = THUMB_WIDTH, h = THUMB_HEIGHT;
 		if (FAILED(HW.pDevice->CreateRenderTarget(w,h,D3DFMT_A8R8G8B8,D3DMULTISAMPLE_NONE,0,FALSE,&rt.s,0)))
 			return false;
 		if (FAILED(HW.pDevice->CreateDepthStencilSurface(w,h,HW.Caps.bStencil?D3DFMT_D24S8:D3DFMT_D24X8,D3DMULTISAMPLE_NONE,0,FALSE,&zb.s,0)))
@@ -260,6 +292,7 @@ namespace
 			HW.pDevice->Clear		(0,0,D3DCLEAR_ZBUFFER|D3DCLEAR_TARGET|(HW.Caps.bStencil?D3DCLEAR_STENCIL:0),s_BackgroundColor,1.f,0);
 
 			// somebody else (ImGui, the previous pass) may have written device
+#endif
 			// state behind RCache's back - clear the cache so our draw sets
 			// everything up itself instead of trusting stale entries
 			RCache.OnFrameEnd	();
@@ -296,6 +329,11 @@ namespace
 			drawn = true;
 		}
 		}
+#if defined(USE_DX11)
+		// the guard puts the caller's render target and viewport back; nothing
+		// else here needs unwinding
+		return drawn ? DX11ReadbackToPixels(target.rt, w, h, out, false) : false;
+#else
 		catch (...)
 		{
 			if (guard.m_OldRT)	HW.pDevice->SetRenderTarget(0,guard.m_OldRT);
@@ -326,6 +364,7 @@ namespace
 		if (scene_was_open)	HW.pDevice->BeginScene();
 
 		return result;
+#endif
 	}
 
 	//--------------------------------------------------------------------------

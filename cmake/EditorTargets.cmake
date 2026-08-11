@@ -14,7 +14,7 @@ target_compile_definitions(FreeMagic PRIVATE FREEMAGIC_EXPORTS _WINDOWS _USRDLL)
 xray_glob(XREUI_SRC "${ED}/XrEUI")
 add_library(XrEUI SHARED ${XREUI_SRC})
 xray_common(XrEUI NO_MBCS)  # Unicode project
-target_compile_definitions(XrEUI PRIVATE XREUI_EXPORTS _WINDOWS _USRDLL _UNICODE UNICODE)
+target_compile_definitions(XrEUI PRIVATE XREUI_EXPORTS _WINDOWS _USRDLL _UNICODE UNICODE USE_DX11)
 target_link_libraries(XrEUI PRIVATE XrCore)
 target_link_options(XrEUI PRIVATE "/NATVIS:${ED}/XrEUI/imgui.natvis")
 
@@ -65,6 +65,12 @@ set(_priv_excl "")
 foreach(_e IN LISTS XRECORE_PRIVATE_EXCLUDE)
     list(APPEND _priv_excl "${_e}.cpp")
 endforeach()
+# Six shared sources have D3D11 replacements in XrRender/DX10 and must not be
+# compiled alongside them - this is exactly the split the R4 renderer uses
+# (it takes 109 of the 110 Private sources and swaps these out).
+list(APPEND _priv_excl
+    "HW.cpp" "Texture.cpp" "SH_RT.cpp" "SH_Texture.cpp"
+    "ResourceManager_Resources.cpp")
 xray_exclude(XRECORE_RPRIV ${_priv_excl})
 xray_glob(XRECORE_RBLEND "${SRC}/XrRender/Private/blenders")
 set(XRECORE_R1
@@ -74,11 +80,20 @@ set(XRECORE_R1_SRC "")
 foreach(_f IN LISTS XRECORE_R1)
     list(APPEND XRECORE_R1_SRC "${SRC}/XrRender/R1_PC/${_f}.cpp")
 endforeach()
+# DX11 layer. The directory is called DX10 for historical reasons - dx10HW.cpp
+# calls D3D11CreateDeviceAndSwapChain - and it is the same code the R4 renderer
+# builds on. Game-only translation units are excluded.
+xray_glob(XRECORE_DX11 "${SRC}/XrRender/DX10")
+# dx10ResourceManager_Scripting is written against the GAME renderer's CRender
+# (MSAA options, CRender::o) - the editor has its own CRender, so it keeps the
+# shared Private version of that one file instead.
+xray_exclude(XRECORE_DX11 "dx10DetailManager_VS.cpp" "dx10ResourceManager_Scripting.cpp")
+
 set(XRECORE_EXTERNAL
     "${SRC}/XrCPU_Pipe/xrSkin2W.cpp"
     "${SRC}/XrEngine/ai_script_lua_debug.cpp"
     "${SRC}/XrEngine/ai_script_lua_extension.cpp"
-    "${SRC}/XrRender/DX9/dx9r_constants_cache.cpp"
+    ${XRECORE_DX11}
     ${XRECORE_RBLEND} ${XRECORE_RPRIV} ${XRECORE_R1_SRC})
 
 add_library(XrECore SHARED
@@ -88,14 +103,16 @@ xray_common(XrECore)
 # `#include "stdafx.h"` line SKIPPED, not resolved to the sibling render PCH
 xray_msvc_pch(XrECore "stdafx.h" "${ED}/XrECore/stdafx.cpp" NOPCH
     guid.cpp WmlMatrix2.cpp WmlMatrix4.cpp WmlVector2.cpp WmlVector4.cpp)
-target_compile_definitions(XrECore PRIVATE XRECORE_EXPORTS _WINDOWS _USRDLL)
+# USE_DX11 has to reach every pulled-in XrRender TU, not only the ones that
+# include the editor PCH first - hence a target definition rather than a #define
+target_compile_definitions(XrECore PRIVATE XRECORE_EXPORTS _WINDOWS _USRDLL USE_DX11)
 target_include_directories(XrECore PRIVATE
     "${ED}/XrECore" "${SRC}/XrEngine" "${SRC}/XrRender/Private" "${SRC}/XrRender/Public"
     "${ED}/FreeMagic")
 target_link_libraries(XrECore PRIVATE
     Luabind Ogg RedImageTool Theora Vorbis XrAPI XrCDB XrCore XrEngine XrParticles
     XrPhysics XrSound FreeMagic XrDXT XrEProps XrETools XrEUI
-    d3d9 d3dx9 vfw32 Winmm dxguid dinput8 Rpcrt4 lua51)
+    d3d11 dxgi d3dcompiler d3d9 d3dx9 vfw32 Winmm dxguid dinput8 Rpcrt4 lua51)
 
 #-- LevelEditor ----------------------------------------------------------------
 file(GLOB_RECURSE LE_SRC CONFIGURE_DEPENDS "${ED}/LevelEditor/*.cpp")
@@ -109,7 +126,7 @@ set(LE_EXTERNAL
 add_executable(LevelEditor WIN32 ${LE_SRC} ${LE_EXTERNAL})
 xray_common(LevelEditor)
 xray_msvc_pch(LevelEditor "stdafx.h" "${ED}/LevelEditor/stdafx.cpp")
-target_compile_definitions(LevelEditor PRIVATE _WINDOWS)
+target_compile_definitions(LevelEditor PRIVATE _WINDOWS USE_DX11)
 target_include_directories(LevelEditor PRIVATE
     "${ED}/LevelEditor" "${SRC}/XrEngine" "${SRC}/XrRender/Public" "${SRC}/XrRender/Private"
     "${ED}/LevelEditor/Engine")
