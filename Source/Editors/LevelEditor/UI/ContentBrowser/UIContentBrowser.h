@@ -174,8 +174,10 @@ private:
 	// `err` non-null returns the reason instead of popping a dialog, which is
 	// what MCP needs - a modal on an unattended machine is a hang.
 	bool			OpenAsset			(LPCSTR name, xr_string* err = 0);
-	// a Levels listing entry -> the .level file COMMAND_LOAD can open
-	static bool		ResolveLevelFile	(LPCSTR name, string_path& out);
+	// a listing entry -> the .level file COMMAND_LOAD can open. `source` is the
+	// browser's: the project names files relative to its root, the library by
+	// a name under $maps$ with the extension clamped off.
+	static bool		ResolveLevelFile	(LPCSTR name, int source, string_path& out);
 	void			DropCache			();
 	void			SwitchSource		(int src);
 	// vertical splitter between the folder tree and the tile grid

@@ -12,6 +12,13 @@ static bool IsImageExt(LPCSTR name)
 				   !_stricmp(ext, ".jpg") || !_stricmp(ext, ".bmp"));
 }
 
+// a scene file, wherever it is listed from
+static bool IsLevelExt(LPCSTR name)
+{
+	LPCSTR ext = name ? strrchr(name, '.') : 0;
+	return ext && !_stricmp(ext, ".level");
+}
+
 // models carry no baked thumbnail, so their preview has to be rendered
 static bool IsVisualExt(LPCSTR name)
 {
@@ -586,10 +593,22 @@ void UIContentBrowser::DrawFolder(SFolder& f)
 // actually open. The listing clamps the extension off, and a level may be a
 // bare "<name>.level" or a folder holding "<name>\<name>.level", so all the
 // shapes are tried before giving up.
-bool UIContentBrowser::ResolveLevelFile(LPCSTR name, string_path& out)
+bool UIContentBrowser::ResolveLevelFile(LPCSTR name, int source, string_path& out)
 {
 	out[0] = 0;
 	if (!name || !name[0])	return false;
+
+	// the project's own Content names files relative to the project root
+	if (0 == source && EditorProject::Active())
+	{
+		string_path abs;
+		xr_sprintf	(abs, sizeof(abs), "%s\\%s", EditorProject::Root(), name);
+		if (INVALID_FILE_ATTRIBUTES != ::GetFileAttributesA(abs))
+		{
+			xr_strcpy(out, sizeof(out), abs);
+			return true;
+		}
+	}
 
 	string_path stem;
 	xr_strcpy	(stem, sizeof(stem), name);
@@ -631,14 +650,20 @@ bool UIContentBrowser::OpenAsset(LPCSTR name, xr_string* err)
 	// A level IS the scene: opening one loads it, which is the one case where
 	// the double-click legitimately changes what the editor is working on.
 	// COMMAND_LOAD asks about unsaved changes itself.
-	if (m_Source == 1 && kCategories[m_Category].id == kLevelsCategoryId)
+	//
+	// Both by extension and by category: the library lists levels by name with
+	// the extension clamped off, while the project's own Content shows the
+	// .level FILE - and a double click there has to do the same thing.
+	const bool is_level = IsLevelExt(name) ||
+						  (m_Source == 1 && kCategories[m_Category].id == kLevelsCategoryId);
+	if (is_level)
 	{
 		// COMMAND_LOAD feeds its argument straight to FS.r_open and returns FALSE
 		// without a word when that fails - and the listing hands out names with
 		// the extension clamped off, which never opens. Resolve to a real file
 		// first, and say so when there is none.
 		string_path fn;
-		if (!ResolveLevelFile(name, fn))
+		if (!ResolveLevelFile(name, m_Source, fn))
 			OPEN_FAILED("no .level file behind '%s'", name);
 
 		ExecCommand(COMMAND_LOAD, xr_string(fn));

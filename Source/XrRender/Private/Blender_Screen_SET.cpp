@@ -100,10 +100,28 @@ void	CBlender_Screen_SET::Compile	(CBlender_Compile& C)
 	IBlender::Compile		(C);
 	//C.r_Pass			("stub_notransform_t", "Blender_Screen_SET", false);
 
+	// Two kinds of geometry reach this blender, and under D3D9 the FVF decided
+	// between them for free: FVF::F_TL is already in pixel coordinates
+	// (POSITIONT - fonts, the 2D UI), while FVF::F_LIT is world space and has to
+	// be transformed (the editor's sprites: AI nodes, glows, wallmarks). D3D11
+	// has no fixed-function T&L, so the choice moved into the vertex shader -
+	// and one shader cannot serve both, because POSITIONT and POSITION are
+	// different semantics and CreateInputLayout refuses the mismatch outright.
+	//
+	// So the blender emits both and the DRAW picks: element 5 is the
+	// pre-transformed variant, everything else transforms. Element 5 is used
+	// because 0..4 carry X-Ray's own LOD/detail meaning, which a screen blender
+	// has no use for but something might still bind. See dxFontRender and
+	// dxUIRender, the two F_TL consumers, which ask for it by index.
+	const bool	pre_transformed	= (5 == C.iElement);
+	LPCSTR		vs_1x			= pre_transformed ? "stub_notransform_t"	: "stub_default";
+	LPCSTR		vs_m2			= pre_transformed ? "stub_notransform_t_m2"	: "stub_default";
+	LPCSTR		vs_m4			= pre_transformed ? "stub_notransform_t_m4"	: "stub_default";
+
 	if (oBlend.IDselected==6)
 	{
 		// Usually for wallmarks
-		C.r_Pass			("stub_notransform_t", "stub_default_ma", false);
+		C.r_Pass			(vs_1x, "stub_default_ma", false);
 
 		VERIFY(C.L_textures.size()>0);
 		C.r_dx10Texture			("s_base",	C.L_textures[0]	);
@@ -117,7 +135,7 @@ void	CBlender_Screen_SET::Compile	(CBlender_Compile& C)
 		if (9==oBlend.IDselected)
 		{
 			// 4x R
-			C.r_Pass			("stub_notransform_t_m4", "stub_default", false);
+			C.r_Pass			(vs_m4, "stub_default", false);
 			//C.StageSET_Color	(D3DTA_TEXTURE,	  D3DTOP_MODULATE4X,	D3DTA_DIFFUSE);
 			//C.StageSET_Alpha	(D3DTA_TEXTURE,	  D3DTOP_SELECTARG1,	D3DTA_DIFFUSE);
 		} 
@@ -126,14 +144,14 @@ void	CBlender_Screen_SET::Compile	(CBlender_Compile& C)
 			if ((7==oBlend.IDselected) || (8==oBlend.IDselected))
 			{
 				// 2x R
-				C.r_Pass			("stub_notransform_t_m2", "stub_default", false);
+				C.r_Pass			(vs_m2, "stub_default", false);
 				//C.StageSET_Color	(D3DTA_TEXTURE,	  D3DTOP_MODULATE2X,	D3DTA_DIFFUSE);
 				//C.StageSET_Alpha	(D3DTA_TEXTURE,	  D3DTOP_SELECTARG1,	D3DTA_DIFFUSE);
 			} 
 			else 
 			{
 				// 1x R
-				C.r_Pass			("stub_notransform_t", "stub_default", false);
+				C.r_Pass			(vs_1x, "stub_default", false);
 				//C.StageSET_Color	(D3DTA_TEXTURE,	  D3DTOP_MODULATE,		D3DTA_DIFFUSE);
 				//C.StageSET_Alpha	(D3DTA_TEXTURE,	  D3DTOP_MODULATE,		D3DTA_DIFFUSE);
 			}

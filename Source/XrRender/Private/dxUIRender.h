@@ -42,6 +42,9 @@ public:
 private:
 	ref_geom		hGeom_TL;
 	ref_geom		hGeom_LIT;
+	// what SetShader was last given: the element to bind depends on the point
+	// type, which is only known once the primitive is flushed
+	ref_shader		m_hShader;
 
 	ePrimitiveType	PrimitiveType;
 	ePointType		m_PointType;

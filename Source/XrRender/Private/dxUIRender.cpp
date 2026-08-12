@@ -22,6 +22,9 @@ void dxUIRender::SetShader(IUIShader &shader)
 	dxUIShader *pShader = (dxUIShader*) &shader;
 	VERIFY(&pShader);
 	VERIFY(pShader->hShader);
+	// kept so FlushPrimitive can pick the element that matches the geometry it
+	// is about to draw - see the note there
+	m_hShader = pShader->hShader;
 	RCache.set_Shader(pShader->hShader);
 }
 
@@ -241,6 +244,11 @@ void dxUIRender::FlushPrimitive()
 
 		RCache.Vertex.Unlock		(u32(p_cnt),hGeom_TL.stride());
 		RCache.set_Geometry	 		(hGeom_TL);
+		// F_TL is already in pixel coordinates (POSITIONT). Blender_Screen_SET
+		// compiles that variant as element 5; element 0 transforms, and feeding
+		// it POSITIONT geometry is a CreateInputLayout failure, not a wrong
+		// picture. LIT geometry above keeps element 0, which is correct for it.
+		if (m_hShader && m_hShader->E[5])	RCache.set_Element(m_hShader->E[5]);
 		break;
 	default:
 		NODEFAULT;

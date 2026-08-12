@@ -46,7 +46,12 @@ void dxFontRender::OnRender(CGameFont &owner)
 				!!P.state._get(), !!P.vs._get(), !!P.ps._get(),
 				!!P.constants._get(), !!P.T._get(), !!P.M._get());
 		}
-		RCache.set_Shader	(pShader);
+		// element 5, not 0: the font's geometry is FVF::F_TL - already in pixel
+		// coordinates - and that is the variant Blender_Screen_SET compiles
+		// without a transform. Element 0 transforms, which is what the editor's
+		// world-space sprites through the same blender need.
+		if (pShader->E[5])	RCache.set_Element	(pShader->E[5]);
+		else				RCache.set_Shader	(pShader);
 	}
 	FONT_BC("shader set");
 	FONT_TRACE("~ font: shader set");
