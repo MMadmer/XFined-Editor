@@ -1446,13 +1446,14 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     // twin of "Copy to project" / "Copy folder to project" in the browser menu
     if (0 == xr_strcmp(cmd, "content_browser_copy"))
     {
-        char names[4096] = {}, folder[512] = {}, cat[64] = {};
+        char names[4096] = {}, folder[512] = {}, dst[512] = {}, cat[64] = {};
         XFinedMCP::GetArg(raw, "names",  names,  sizeof(names));
         XFinedMCP::GetArg(raw, "folder", folder, sizeof(folder));
+        XFinedMCP::GetArg(raw, "dst",    dst,    sizeof(dst));
         XFinedMCP::GetArg(raw, "category", cat,  sizeof(cat));
         // GetArg hands over the raw JSON value, so an escaped "a\\b" arrives
         // with both slashes - the browser compares names exactly
-        for (char* buf : { names, folder })
+        for (char* buf : { names, folder, dst })
         {
             for (char* p = buf; *p; ++p) if (*p == '/') *p = '\\';
             char* w = buf;
@@ -1482,7 +1483,7 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
         int files = 0;
         xr_string err;
         const bool ok = UIContentBrowser::McpCopyToProject(
-            names, folder, src, category, GetArgBool(raw, "overwrite", true), files, err);
+            names, folder, dst, src, category, GetArgBool(raw, "overwrite", true), files, err);
 
         char head[96];
         sprintf_s(head, sizeof(head), "{\"ok\":%s,\"files\":%d", ok ? "true" : "false", files);

@@ -14,7 +14,11 @@ port of the original GSC editors to x64 + ImGui.
   Alt orbit; Q/W/E/R gizmo modes, Space cycle, F focus, Esc deselect;
   click-select across all object classes.
 * **Content Browser** — dockable asset browser with folder tree, thumbnail
-  grid, search, double-click placement and drag&drop into the viewport.
+  grid, search, double-click open and drag&drop into the viewport. Folders and
+  assets are one selection with one set of commands: Copy/Cut/Paste/Delete/
+  Rename work on any mix of them, and a paste goes into the folder you are
+  looking at. The SDK library and the linked game install are read-only sources
+  you copy out of.
 * Per-monitor DPI awareness, GPU picker for hybrid laptops
   (`Options → Render → GPU`), CoC/Dead Air data compatibility fixes.
 

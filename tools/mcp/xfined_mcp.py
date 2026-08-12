@@ -385,6 +385,7 @@ TOOLS = [
             "properties": {
                 "names": {"type": "string", "description": "';'-separated asset names from list_assets / darf_list"},
                 "folder": {"type": "string", "description": "copy this folder recursively instead of individual names"},
+                "dst": {"type": "string", "description": "project-relative target folder (e.g. 'gamedata/meshes/mymod'). Omit to mirror each asset into the layout fs.ltx implies instead."},
                 "source": {"type": "string", "enum": ["editor", "darf"], "description": "omit to use the current tab"},
                 "category": {"type": "string", "description": "Editor Content category caption, e.g. 'Objects' (omit to use the current one)"},
                 "overwrite": {"type": "boolean", "description": "replace files already in the project (default true)"},
