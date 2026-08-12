@@ -172,6 +172,7 @@ public:
 
 	// draw
 	void			   		SetShader		(ref_shader sh){m_CurrentShader = sh;}
+	ref_shader&				CurrentShader	(){return m_CurrentShader;}
 #if defined(USE_DX11)
 	// Pushes the recorded fixed-function bits the editor shaders take as
 	// uniforms. Has to run after set_Shader - constants are per-pass.

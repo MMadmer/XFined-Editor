@@ -1809,8 +1809,10 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "scene_info"))
     {
         char tmp[512];
+        // the scene name is a path once a level is loaded - raw backslashes
+        // break the JSON on the bridge side
         sprintf_s(tmp, "{\"ok\":true,\"scene\":\"%s\",\"modified\":%s,\"tools\":[",
-            Tools ? Tools->m_LastFileName.c_str() : "",
+            JsonEscapePath(Tools ? Tools->m_LastFileName.c_str() : "").c_str(),
             UI->IsModified() ? "true" : "false");
         out = tmp;
         bool first = true;
@@ -1880,8 +1882,10 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             for (ObjectIt o = lst.begin(); o != lst.end(); ++o)
                 if ((*o)->Selected()) ++selected;
         }
+        // path-escaped for the same reason as scene_info: once a level is
+        // loaded the name carries backslashes
         sprintf_s(tmp, "{\"ok\":true,\"scene\":\"%s\",\"modified\":%s,\"selected\":%d,",
-            Tools ? Tools->m_LastFileName.c_str() : "",
+            JsonEscapePath(Tools ? Tools->m_LastFileName.c_str() : "").c_str(),
             UI->IsModified() ? "true" : "false", selected);
         out = tmp;
         AppendCameraJson(out);

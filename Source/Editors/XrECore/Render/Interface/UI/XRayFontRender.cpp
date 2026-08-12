@@ -2,6 +2,10 @@
 #include "XRayFontRender.h"
 
 #include "../../xrEngine/GameFont.h"
+#if defined(USE_DX11)
+// complete Shader type - OnRender picks element 5 by hand
+#include "ResourceManager.h"
+#endif
 
 XRayFontRender::XRayFontRender()
 {
@@ -24,7 +28,20 @@ extern ENGINE_API Fvector2		g_current_font_scale;
 void XRayFontRender::OnRender(CGameFont& owner)
 {
 	VERIFY(g_bRendering);
+#if defined(USE_DX11)
+	// Glyphs are FVF::F_TL (POSITIONT): element 0 of the font's Screen_SET
+	// shader transforms and CreateInputLayout refuses the pair outright,
+	// killing the editor the moment any in-viewport text draws. Element 5
+	// is the pre-transformed variant compiled for exactly this geometry.
+	// No variant - no text; better than no editor.
+	if (pShader)
+	{
+		if (!pShader->E[5])	return;
+		RCache.set_Element	(pShader->E[5]);
+	}
+#else
 	if (pShader)		RCache.set_Shader(pShader);
+#endif
 
 	if (!(owner.uFlags & CGameFont::fsValid)) {
 		CTexture* T = RCache.get_ActiveTexture(0);

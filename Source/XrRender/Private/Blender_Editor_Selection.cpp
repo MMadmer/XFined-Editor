@@ -63,7 +63,14 @@ void	CBlender_Editor_Selection::Compile	(CBlender_Compile& C)
 		// layout at all, which took the editor down the moment anything was
 		// selected. simple_color.vs needs only POSITION and takes its colour
 		// from tfactor - exactly what a flat highlight wants.
-		C.r_Pass	("simple_color","simple_color",FALSE,TRUE,FALSE,TRUE,D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA);
+		//
+		// Element 5 is the PRE-TRANSFORMED variant (same convention as
+		// Blender_Editor_Wire): the rubber-band selection rect is FVF::F_TL,
+		// screen-space with per-vertex colour, and keeps the alpha blend.
+		if (5 == C.iElement)
+			C.r_Pass("simple_color_t","simple_color",FALSE,FALSE,FALSE,TRUE,D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA);
+		else
+			C.r_Pass("simple_color","simple_color",FALSE,TRUE,FALSE,TRUE,D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA);
 		C.r_End		();
 	}
 }

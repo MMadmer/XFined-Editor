@@ -65,7 +65,14 @@ void CBlender_Editor_Wire::Compile	(CBlender_Compile& C)
 		// down the moment a level was loaded. simple_color.vs needs only
 		// POSITION and takes its colour from tfactor, which is where every DU
 		// draw puts it anyway (see DU_DRAW_SH_C).
-		C.r_Pass	("simple_color","simple_color",FALSE,TRUE,TRUE);
+		//
+		// Element 5 is the PRE-TRANSFORMED variant, same convention as
+		// Blender_Screen_SET: DU's screen-space markers are FVF::F_TL
+		// (POSITIONT), which no transforming vertex shader can take.
+		if (5 == C.iElement)
+			C.r_Pass("simple_color_t","simple_color",FALSE,FALSE,FALSE);
+		else
+			C.r_Pass("simple_color","simple_color",FALSE,TRUE,TRUE);
 		C.r_End		();
 	}
 }

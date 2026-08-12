@@ -54,6 +54,29 @@ static Fvector boxvert[boxvertcount];
 #	define SCREEN_QUALITY 1.f
 #endif
 
+#if defined(USE_DX11)
+#include "ResourceManager.h"
+// FVF::F_TL is pre-transformed (POSITIONT): no transforming vertex shader can
+// take it, and inheriting whatever shader happened to be bound - which is what
+// these draws did on D3D9's fixed function - dies in CreateInputLayout under
+// D3D11. Element 5 of the editor blenders is the no-transform variant built
+// for exactly these draws (see Blender_Editor_Wire/Selection).
+//
+// Draws directly through RCache: the EDevice->DP path rebinds element 0 of
+// the current shader per pass, which would undo the element-5 selection.
+// A missing variant skips the draw - losing a debug marker beats killing
+// the frame.
+static void DU_DrawTL(ref_shader& sh, D3DPRIMITIVETYPE pt, ref_geom& geom, u32 vBase, u32 pc)
+{
+	Shader* S = sh._get();
+	if (!S || !S->E[5])	return;
+	RCache.set_Element	(S->E[5]);
+	RCache.set_c		("tfactor", 1.f, 1.f, 1.f, 1.f);
+	RCache.set_Geometry	(geom);
+	RCache.Render		(pt, vBase, pc);
+}
+#endif
+
 
 // identity box
 const u32 identboxcolor = D3DCOLOR_RGBA(255,255,255,0);
@@ -614,7 +637,14 @@ void CDrawUtilities::dbgDrawPlacement(const Fvector& p, int sz, u32 clr, LPCSTR 
 	Stream->Unlock(5,vs_TL->vb_stride);
 
 	// Render it as line strip
+#if defined(USE_DX11)
+	// This draw historically inherited whatever shader the frame left bound -
+	// over F_TL that meant CreateInputLayout death the moment a level with
+	// spawn placements was in view.
+	DU_DrawTL		(EDevice->m_WireShader,D3DPT_LINESTRIP,vs_TL,vBase,4);
+#else
     DU_DRAW_DP		(D3DPT_LINESTRIP,vs_TL,vBase,4);
+#endif
     if (caption){
 	    m_Font->SetColor(clr_font);
     	m_Font->Out(c.x,c.y+s,"%s",caption);
@@ -1139,8 +1169,13 @@ void CDrawUtilities::DrawObjectAxis(const Fmatrix& T, float sz, BOOL sel)
 
 	// Render it as line list
 	DU_DRAW_RS	(D3DRS_SHADEMODE,D3DSHADE_GOURAUD);
+#if defined(USE_DX11)
+	// F_TL: the wire shader's transforming element can't take POSITIONT
+	DU_DrawTL	(EDevice->m_WireShader,D3DPT_LINELIST,vs_TL,vBase,3);
+#else
 	DU_DRAW_SH	(EDevice->m_WireShader);
     DU_DRAW_DP	(D3DPT_LINELIST,vs_TL,vBase,3);
+#endif
 	DU_DRAW_RS	(D3DRS_SHADEMODE,SHADE_MODE);
 
     m_Font->SetColor(sel?0xFF000000:0xFF909090);
@@ -1176,15 +1211,36 @@ void CDrawUtilities::DrawSelectionRect(const Ivector2& m_SelStart, const Ivector
 	_VertexStream*	Stream	= &RCache.Vertex;
     u32 vBase;
 	FVF::TL* pv	= (FVF::TL*)Stream->Lock(4,vs_TL->vb_stride,vBase);
+#if defined(USE_DX11)
+	// D3D11 has no triangle fans (CBackend::Render silently drops them), so
+	// the quad goes out as a strip. Corners are normalised to keep the
+	// winding front-facing whichever way the rubber-band is dragged - the
+	// CULLMODE render-state below only feeds the FF emulation under DX11.
+	{
+		float x0 = _min(m_SelStart.x,m_SelEnd.x)*SCREEN_QUALITY, x1 = _max(m_SelStart.x,m_SelEnd.x)*SCREEN_QUALITY;
+		float y0 = _min(m_SelStart.y,m_SelEnd.y)*SCREEN_QUALITY, y1 = _max(m_SelStart.y,m_SelEnd.y)*SCREEN_QUALITY;
+		pv->set(x0,y0,m_SelectionRect,0.f,0.f); pv++;
+		pv->set(x1,y0,m_SelectionRect,0.f,0.f); pv++;
+		pv->set(x0,y1,m_SelectionRect,0.f,0.f); pv++;
+		pv->set(x1,y1,m_SelectionRect,0.f,0.f); pv++;
+	}
+#else
     pv->set(m_SelStart.x*SCREEN_QUALITY, m_SelStart.y*SCREEN_QUALITY, m_SelectionRect,0.f,0.f); pv++;
     pv->set(m_SelStart.x*SCREEN_QUALITY, m_SelEnd.y*SCREEN_QUALITY,   m_SelectionRect,0.f,0.f); pv++;
     pv->set(m_SelEnd.x*SCREEN_QUALITY,   m_SelEnd.y*SCREEN_QUALITY,   m_SelectionRect,0.f,0.f); pv++;
     pv->set(m_SelEnd.x*SCREEN_QUALITY,   m_SelStart.y*SCREEN_QUALITY, m_SelectionRect,0.f,0.f); pv++;
+#endif
 	Stream->Unlock(4,vs_TL->vb_stride);
 	// Render it as triangle list
     DU_DRAW_RS(D3DRS_CULLMODE,D3DCULL_NONE);
+#if defined(USE_DX11)
+	// F_TL again, but through the selection blender - its element 5 keeps
+	// the alpha blend the rubber-band fill needs
+	DU_DrawTL(EDevice->m_SelectionShader,D3DPT_TRIANGLESTRIP,vs_TL,vBase,2);
+#else
 	DU_DRAW_SH(EDevice->m_SelectionShader);
     DU_DRAW_DP(D3DPT_TRIANGLEFAN,vs_TL,vBase,2);
+#endif
     DU_DRAW_RS(D3DRS_CULLMODE,D3DCULL_CCW);
 }
 
@@ -1249,7 +1305,15 @@ void CDrawUtilities::DrawPrimitiveTL(D3DPRIMITIVETYPE pt, u32 pc, FVF::TL* verti
 	Stream->Unlock(dwNeed,vs_TL->vb_stride);
 
     if (!bCull) 	DU_DRAW_RS(D3DRS_CULLMODE,D3DCULL_NONE);
+#if defined(USE_DX11)
+	// Callers pick the shader via EDevice->SetShader - glow sprites bring a
+	// textured Screen_SET one - so honour it and use ITS element 5; only the
+	// transforming element 0 is unusable over POSITIONT
+	DU_DrawTL		(EDevice->CurrentShader()?EDevice->CurrentShader():EDevice->m_WireShader,
+					 pt,vs_TL,vBase,pc);
+#else
     DU_DRAW_DP		(pt,vs_TL,vBase,pc);
+#endif
     if (!bCull) 	DU_DRAW_RS(D3DRS_CULLMODE,D3DCULL_CCW);
 }
 

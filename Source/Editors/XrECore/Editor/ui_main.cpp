@@ -542,6 +542,11 @@ void TUI::Redraw()
                 UI->OnStats(EDevice->pSystemFont);
                 EDevice->SetRS(D3DRS_FILLMODE, D3DFILL_SOLID);
                 UI_TRACE("before font render");
+                // DU's own font queues the tool captions (way hints, spawn
+                // names, light controls) and nothing ever flushed it - the
+                // text silently piled up unseen. Same frame slot as the
+                // system font, same shader path.
+                DU_impl.OnRender();
                 EDevice->pSystemFont->OnRender();
                 UI_TRACE("after font render");
                 EDevice->SetRS(D3DRS_FILLMODE, EDevice->dwFillMode);
