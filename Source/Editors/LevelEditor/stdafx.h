@@ -169,7 +169,6 @@
 #include "UI/ContentBrowser/UIContentBrowser.h"
 #include "UI/Outliner/UIWorldOutliner.h"
 #include "UI/Preview/UIVisualPreview.h"
-#include "UI/Preview/UIImagePreview.h"
 #include "UI/UIPropertiesModal.h"
 #include "UI/UITopBarForm.h"
 

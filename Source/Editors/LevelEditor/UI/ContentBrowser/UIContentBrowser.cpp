@@ -120,7 +120,9 @@ static const int kDarfMaxTiles			= 2000;
 UIContentBrowser::UIContentBrowser()
 {
 	m_Category		= 0;
-	m_Source		= 1;	// Editor Content by default until the project has assets
+	// the project's own content is what someone opening the editor is working
+	// on; the shared library is a place you go to fetch from
+	m_Source		= 0;
 	m_NeedRefresh	= true;
 	m_TileSize		= 96.f;
 	m_Tick			= 0;
@@ -138,7 +140,7 @@ UIContentBrowser::UIContentBrowser()
 		m_TreeWidth	= float(prefs->ContentBrowserTreeWidth);
 	else
 		m_TreeWidth	= 220.f;
-	m_Root.name		= "Editor Content";
+	m_Root.name		= "Content";
 	m_Root.path		= "";
 	m_DarfReady		= false;
 	m_ThumbsThisFrame = 0;
@@ -705,19 +707,6 @@ bool UIContentBrowser::OpenAsset(LPCSTR name, xr_string* err)
 		else if (s_ShowVisual)
 			s_ShowVisual(name);
 		return true;
-	}
-
-	// Textures get their own window, whatever source they came from. In the SDK
-	// library the name carries no extension, so the category is what says it is
-	// a texture; everywhere else the extension does.
-	const bool is_texture = IsImageExt(name) ||
-							(m_Source == 1 && (kCategories[m_Category].id == smTexture ||
-											   kCategories[m_Category].id == smTextureRaw));
-	if (is_texture)
-	{
-		xr_string img_err;
-		if (UIImagePreview::Show(name, m_Source, &img_err))	return true;
-		OPEN_FAILED("%s: %s", name, img_err.c_str());
 	}
 
 	OPEN_FAILED("no viewer for this asset kind yet: '%s'", name);

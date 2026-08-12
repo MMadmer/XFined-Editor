@@ -843,16 +843,84 @@ void UIVisualPreview::DrawInfo()
 		return;
 	}
 
-	ImGui::Text		("%s",m_Name.c_str());
 	// library objects carry no MT_* type - name the format instead
-	LPCSTR kind		= m_Editable ? "library object" : VisualTypeName(m_Type);
-	if (m_Bones)	ImGui::Text("%s | %u verts | %u tris | %u bones",kind,m_Verts,m_Tris,u32(m_Bones));
-	else			ImGui::Text("%s | %u verts | %u tris",kind,m_Verts,m_Tris);
+	LPCSTR	kind	= m_Editable ? "library object" : VisualTypeName(m_Type);
+	Fvector	size;	m_Box.getsize(size);
+	Fvector	centre;	m_Box.getcenter(centre);
 
-	Fvector size;	m_Box.getsize(size);
-	ImGui::Text		("size %.2f x %.2f x %.2f  (%.2f..%.2f, %.2f..%.2f, %.2f..%.2f)",
-		size.x,size.y,size.z,
-		m_Box.min.x,m_Box.max.x,m_Box.min.y,m_Box.max.y,m_Box.min.z,m_Box.max.z);
+	if (ImGui::BeginTable("##modelinfo", 2, ImGuiTableFlags_SizingFixedFit))
+	{
+		#define ROW(k, ...)	do {											\
+			ImGui::TableNextRow(); ImGui::TableNextColumn();				\
+			ImGui::TextDisabled(k); ImGui::TableNextColumn();			\
+			ImGui::Text(__VA_ARGS__); } while(0)
+
+		ROW("Asset",		"%s", m_Name.c_str());
+		ROW("Kind",			"%s", kind);
+		ROW("Geometry",		"%u verts, %u tris", m_Verts, m_Tris);
+		if (m_Bones)	ROW("Bones", "%u", u32(m_Bones));
+
+		ROW("Bounds",		"%.2f x %.2f x %.2f", size.x, size.y, size.z);
+		ROW("Centre",		"%.2f, %.2f, %.2f", centre.x, centre.y, centre.z);
+		ROW("Radius",		"%.2f", m_Radius);
+
+		if (m_Editable)
+		{
+			ROW("Meshes",	"%d", m_Editable->MeshCount());
+			ROW("Materials","%d", m_Editable->SurfaceCount());
+			// same null-when-empty shared_str trap as the material table below
+			LPCSTR lods = m_Editable->GetLODs();
+			if (lods && lods[0])	ROW("LOD", "%s", lods);
+			if (m_Editable->IsSkeleton())
+				ROW("Motions", "%d", m_Editable->SMotionCount());
+		}
+		#undef ROW
+		ImGui::EndTable();
+	}
+
+	// Surfaces are what a static mesh IS to whoever has to ship it: which
+	// shader, which texture, which game material. Unreal puts the same list in
+	// its material slots panel.
+	if (m_Editable && m_Editable->SurfaceCount())
+	{
+		if (ImGui::CollapsingHeader("Materials", ImGuiTreeNodeFlags_DefaultOpen))
+		{
+			if (ImGui::BeginTable("##surfaces", 4,
+				ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|ImGuiTableFlags_SizingStretchProp))
+			{
+				ImGui::TableSetupColumn("Slot");
+				ImGui::TableSetupColumn("Texture");
+				ImGui::TableSetupColumn("Shader");
+				ImGui::TableSetupColumn("Game material");
+				ImGui::TableHeadersRow();
+
+				// A surface field that was never set is an EMPTY shared_str, and
+				// dereferencing one yields a NULL pointer, which TextUnformatted
+				// walks straight into. Several of these are legitimately empty -
+				// a game material is optional, for one.
+				#define CELL(x)	do {										\
+					ImGui::TableNextColumn();								\
+					LPCSTR _s = (x);										\
+					if (_s && _s[0])	ImGui::TextUnformatted(_s);			\
+					else				ImGui::TextDisabled("-");			\
+					} while(0)
+
+				SurfaceVec& sv = m_Editable->Surfaces();
+				for (u32 i = 0; i < sv.size(); ++i)
+				{
+					CSurface* s = sv[i];
+					if (!s) continue;
+					ImGui::TableNextRow();
+					CELL(s->_Name());
+					CELL(s->_Texture());
+					CELL(s->_ShaderName());
+					CELL(s->_GameMtlName());
+				}
+				#undef CELL
+				ImGui::EndTable();
+			}
+		}
+	}
 }
 
 void UIVisualPreview::Draw()

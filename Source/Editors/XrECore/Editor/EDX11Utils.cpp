@@ -7,6 +7,8 @@
 #if defined(USE_DX11)
 
 #include "RedImageTool/RedImage.hpp"
+// arming the capture asks for a redraw - see DX11ArmFrameCapture
+#include "ui_main.h"
 
 //------------------------------------------------------------------------------
 // whole-window capture state, see the header for why this has to exist
@@ -16,6 +18,7 @@ namespace
 	u32		g_frame_w		= 0;
 	u32		g_frame_h		= 0;
 	u32		g_armed_until	= 0;	// GetTickCount() stamp
+	u32		g_armed_at		= 0;	// when the current arm window opened
 	u32		g_last_mirror	= 0;
 
 	// Wall-clock, not frame counts: the arm window has to survive the gap between
@@ -33,14 +36,33 @@ namespace
 
 void	DX11ArmFrameCapture()
 {
-	g_armed_until	= ::GetTickCount() + CAPTURE_ARM_MS;
+	const u32 now = ::GetTickCount();
+	// a re-arm inside the window extends it without disowning the frame already
+	// mirrored for it - see the freshness rule in DX11GetFrameCapture
+	if (now > g_armed_until)	g_armed_at = now;
+	g_armed_until	= now + CAPTURE_ARM_MS;
+
+	// The editor redraws on demand: sitting idle it produces no frames at all,
+	// so arming alone would wait forever for one to mirror. Ask for a redraw -
+	// this is the whole reason the capture is armed rather than always on.
+	if (UI)	UI->RedrawScene();
 }
 
 bool	DX11GetFrameCapture(U32Vec& out, u32& w, u32& h)
 {
 	if (!g_frame_w || !g_frame_h || g_frame_px.empty())	return false;
-	// unsigned arithmetic keeps this right across a GetTickCount wrap
-	if (!g_last_mirror || (::GetTickCount() - g_last_mirror) > CAPTURE_FRESH_MS)
+	if (!g_last_mirror)									return false;
+
+	// A frame mirrored during the CURRENT arm window is what is on screen, however
+	// old it is: the editor redraws on demand, so an idle one simply stops
+	// producing frames and a plain age test would reject a picture that is still
+	// perfectly current. Outside the window the age test stays - without it the
+	// first request after a long pause would hand back a frame from minutes ago
+	// and report it as ok.
+	// (unsigned arithmetic keeps both comparisons right across a GetTickCount wrap)
+	const u32 now = ::GetTickCount();
+	const bool from_this_arm = g_armed_at && (u32(g_last_mirror - g_armed_at) < CAPTURE_ARM_MS * 4);
+	if (!from_this_arm && (now - g_last_mirror) > CAPTURE_FRESH_MS)
 		return false;
 	out	= g_frame_px;
 	w	= g_frame_w;

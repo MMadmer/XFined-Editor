@@ -503,13 +503,6 @@ void UIMainMenuForm::Draw()
                 if (ImGui::MenuItem("Model Preview", "", &selected)) { if (selected) UIVisualPreview::Show(); else UIVisualPreview::Close(); }
             }
             {
-                // the texture viewer only has something to show once an image is
-                // double-clicked, so the menu can close it but not open it empty
-                bool selected = UIImagePreview::IsOpen();
-                if (ImGui::MenuItem("Texture Preview", "", &selected, selected) && !selected)
-                    UIImagePreview::Close();
-            }
-            {
                 bool selected = !MainForm->GetPropertiesFrom()->IsClosed();
                 if (ImGui::MenuItem("Properties", "", &selected)) { if (selected)MainForm->GetPropertiesFrom()->Open(); else MainForm->GetPropertiesFrom()->Close(); }
             }
