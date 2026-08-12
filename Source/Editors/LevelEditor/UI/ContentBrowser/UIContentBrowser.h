@@ -26,6 +26,13 @@ public:
 	static void		Close				();
 	static IC bool	IsOpen				() { return !!Form; }
 
+	// The viewport drop hands over the browser's own name for the asset; what
+	// placement needs is a library reference. Translates per the ACTIVE source:
+	// an Objects entry is already a ref, a game path resolves through
+	// ResolvePlaceable, a project .object strips its rawdata prefix. False =
+	// not placeable (textures, sounds, meshes without an .object, ...).
+	static bool		ResolveDropRef		(LPCSTR name, string_path& ref);
+
 	// asset currently held by an in-flight drag, empty when nothing is dragged
 	static LPCSTR	DraggedAsset		();
 	static u32		DraggedCategory		();

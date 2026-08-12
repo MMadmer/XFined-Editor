@@ -1313,6 +1313,109 @@ static void RespondObjectJson(xr_string& out, CCustomObject* obj)
 
 bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
 {
+    // ------------------------------------------------------------------------
+    // The generic bridge to the editor's own command registry. Everything the
+    // menus and shortcuts can do goes through ExecCommand, so exposing the
+    // registry itself gives an agent the editor's full surface - including
+    // commands added later, with no MCP work at all. list_commands is the
+    // introspection half: ids, names and menu paths to drive exec_command with.
+    // ------------------------------------------------------------------------
+    if (0 == xr_strcmp(cmd, "list_commands"))
+    {
+        ECommandVec& cmds = GetEditorCommands();
+        out = "{\"ok\":true,\"commands\":[";
+        bool first = true;
+        for (u32 i = 0; i < cmds.size(); ++i)
+        {
+            SECommand* C = cmds[i];
+            if (!C) continue;
+            if (!first) out += ",";
+            first = false;
+
+            char head[192];
+            sprintf_s(head, sizeof(head), "{\"id\":%u,\"name\":\"%s\"", i, C->Name());
+            out += head;
+            if (C->Desc() && C->Desc()[0])
+            {
+                out += ",\"menu\":\"";
+                out += JsonEscapePath(C->Desc());
+                out += "\"";
+            }
+            // presets beyond the implicit (0,0) one are worth listing: they are
+            // the documented parameter combinations for this command
+            if (C->sub_commands.size() > 1)
+            {
+                out += ",\"presets\":[";
+                for (u32 s = 0; s < C->sub_commands.size(); ++s)
+                {
+                    SESubCommand* S = C->sub_commands[s];
+                    if (s) out += ",";
+                    out += "{\"desc\":\"";
+                    out += JsonEscapePath(S->desc.c_str());
+                    out += "\",\"p1\":";
+                    if (S->p0.IsInteger())	{ char b[16]; sprintf_s(b, "%u", u32(S->p0)); out += b; }
+                    else					{ out += "\""; out += JsonEscapePath(xr_string(S->p0).c_str()); out += "\""; }
+                    out += ",\"p2\":";
+                    if (S->p1.IsInteger())	{ char b[16]; sprintf_s(b, "%u", u32(S->p1)); out += b; }
+                    else					{ out += "\""; out += JsonEscapePath(xr_string(S->p1).c_str()); out += "\""; }
+                    out += "}";
+                }
+                out += "]";
+            }
+            out += "}";
+        }
+        out += "]}";
+        return true;
+    }
+
+    if (0 == xr_strcmp(cmd, "exec_command"))
+    {
+        ECommandVec& cmds = GetEditorCommands();
+
+        char name[160] = {};
+        XFinedMCP::GetArg(raw, "name", name, sizeof(name));
+        // raw json: an escaped "Edit\\Undo" arrives with both slashes
+        {
+            char* w = name;
+            for (const char* r = name; *r; ++r)
+                if (!(*r == '\\' && w > name && w[-1] == '\\')) *w++ = *r;
+            *w = 0;
+        }
+        int id = GetArgInt(raw, "id", -1);
+
+        // a name matches either the COMMAND_* identifier or the menu path
+        if (id < 0 && name[0])
+            for (u32 i = 0; i < cmds.size() && id < 0; ++i)
+                if (cmds[i] && (0 == _stricmp(cmds[i]->Name(), name) ||
+                                0 == _stricmp(cmds[i]->Desc(), name)))
+                    id = int(i);
+
+        if (id < 0 || id >= int(cmds.size()) || !cmds[id])
+        {
+            out = "{\"ok\":false,\"error\":\"unknown command - see list_commands\"}";
+            return true;
+        }
+
+        // p1s/p2s pass a string, p1i/p2i an integer; explicit forms, because a
+        // path made of digits must never silently turn into a number
+        char p1s[1024] = {}, p2s[1024] = {}, pi[64] = {};
+        CCommandVar P1, P2;
+        if (XFinedMCP::GetArg(raw, "p1s", p1s, sizeof(p1s)))		P1 = CCommandVar(xr_string(p1s));
+        else if (XFinedMCP::GetArg(raw, "p1i", pi, sizeof(pi)))		P1 = CCommandVar(u32(atoi(pi)));
+        if (XFinedMCP::GetArg(raw, "p2s", p2s, sizeof(p2s)))		P2 = CCommandVar(xr_string(p2s));
+        else if (XFinedMCP::GetArg(raw, "p2i", pi, sizeof(pi)))		P2 = CCommandVar(u32(atoi(pi)));
+
+        CCommandVar res = ExecCommand(u32(id), P1, P2);
+
+        char head[128];
+        sprintf_s(head, sizeof(head), "{\"ok\":true,\"id\":%d,\"name\":\"%s\",\"result\":", id, cmds[id]->Name());
+        out = head;
+        if (res.IsInteger())	{ char b[16]; sprintf_s(b, "%u", u32(res)); out += b; }
+        else					{ out += "\""; out += JsonEscapePath(xr_string(res).c_str()); out += "\""; }
+        out += "}";
+        return true;
+    }
+
     // XMS mod commands are project-scoped and do not need an open scene
     if (0 == xr_strcmp(cmd, "mod_manifest"))		{ EditorMod::McpManifest(out);			return true; }
     if (0 == xr_strcmp(cmd, "mod_set_manifest"))	{ EditorMod::McpSetManifest(raw, out);	return true; }

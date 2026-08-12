@@ -114,8 +114,16 @@ UIMainForm::~UIMainForm()
 
 void UIMainForm::DropAsset(LPCSTR name)
 {
+    // The payload is the browser's own name; placement needs a library ref.
+    // The translation depends on which source the browser is showing.
+    string_path ref;
+    if (!UIContentBrowser::ResolveDropRef(name, ref))
+    {
+        ELog.Msg(mtError, "'%s' cannot be placed in the scene - only .object references can.", name);
+        return;
+    }
     // p2=1 -> place under the cursor, the ray was refreshed by the drop target
-    ExecCommand(COMMAND_CB_PLACE_ASSET, xr_string(name), u32(1));
+    ExecCommand(COMMAND_CB_PLACE_ASSET, xr_string(ref), u32(1));
 }
 
 void UIMainForm::Draw()

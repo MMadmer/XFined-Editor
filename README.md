@@ -50,7 +50,9 @@ An unopenable value logs why and falls back to the picker.
 Diagnostics, all off by default: `-flushlog` (write the log line by line, so a
 crash keeps what was already printed), `-trace` (frame markers plus the
 capture/mirror reasons), `-bc` (allocation-free breadcrumbs to `bc.txt`),
-`-debugrender` (drain the D3D11 InfoQueue into the log).
+`-debugrender` (drain the D3D11 InfoQueue into the log), `-nodlg` (never open a
+modal error box: log a symbolised stack trace, write a minidump, terminate —
+mandatory for unattended runs).
 
 ### AI integration (MCP)
 
@@ -59,7 +61,10 @@ first frame (project browser included). A dependency-free MCP stdio bridge
 lives at `tools/mcp/xfined_mcp.py`; tools include editor/viewport screenshots
 (working even when the window is covered), content-browser navigation, asset
 copying out of the read-only sources, project/file management and editor state
-queries. Combine `-project` with the bridge to get a fully unattended session.
+queries — plus `xfined_list_commands`/`xfined_exec_command`, a generic bridge
+to the editor's own command registry: everything the menus and shortcuts can
+do, addressable by name, including commands added later. Combine `-project`
+and `-nodlg` with the bridge to get a fully unattended session.
 
 Setup instructions for any AI agent — including a ready-to-paste prompt block —
 are in [`tools/mcp/AI_SETUP.md`](tools/mcp/AI_SETUP.md). Claude Code one-liner:

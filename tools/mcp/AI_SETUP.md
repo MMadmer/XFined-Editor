@@ -23,8 +23,14 @@ LevelEditor.exe -project "D:\XFinedProjects\Test"
 `-project` takes a project folder or the name of one in the recent list (quote
 paths with spaces). An unopenable value is logged and the picker comes up as
 usual. `xfined_open_project` does the same thing on an editor that is already
-running. Useful alongside: `-flushlog` (log written line by line, so a crash
-keeps what was printed), `-trace` (frame markers and capture diagnostics).
+running.
+
+**Always add `-nodlg` to an unattended run.** A fatal error then never opens a
+system-modal dialog: the log gets a real, symbolised stack trace, a minidump is
+written next to the logs, and the process terminates (exit code 3) instead of
+hanging on a box nobody will click. Also useful: `-flushlog` (log written line
+by line, so a crash keeps what was printed), `-trace` (frame markers and
+capture diagnostics).
 
 ## Registering the MCP server
 
@@ -100,6 +106,8 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_content_copy` / `xfined_content_move` | copy/move files or folders by path; `src` accepts a `;`-separated list, `dst` is a folder inside the project, `recursive`/`overwrite`. Moving out of a read-only source is refused — a move deletes its source |
 | `xfined_content_delete` | delete files/folders inside the project; `recursive` defaults to false so a non-empty folder is reported instead of wiped |
 | `xfined_content_mkdir` | create a folder (with missing parents) inside the project |
+| `xfined_list_commands` | the editor's own command registry: every action the menus and shortcuts can perform, as `{id, name, menu, presets}` — the editor's full control surface, and commands added in future builds appear here automatically |
+| `xfined_exec_command` | execute ANY registry command — the same dispatch menus and shortcuts use. Address by `id`, `COMMAND_*` `name` or menu path; `p1s`/`p2s` pass strings, `p1i`/`p2i` integers. Prefer a dedicated tool when one exists; this is the escape hatch for everything else |
 | `xfined_undo` | undo the last scene operation |
 | `xfined_redo` | redo the last undone scene operation |
 

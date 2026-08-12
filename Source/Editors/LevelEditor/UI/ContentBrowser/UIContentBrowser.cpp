@@ -1096,6 +1096,41 @@ void UIContentBrowser::DrawEntryContextMenu(LPCSTR path, bool folder)
 	ImGui::EndPopup();
 }
 
+bool UIContentBrowser::ResolveDropRef(LPCSTR name, string_path& ref)
+{
+	ref[0] = 0;
+	if (!name || !name[0])	return false;
+	const int source = Form ? Form->m_Source : 1;
+
+	// the linked game install: only an .object the library can load qualifies
+	if (2 == source)
+		return EditorGameContent::ResolvePlaceable(name, ref);
+
+	// the project: its rawdata\objects mirrors the library layout, so the ref
+	// is the path below that root with the extension clamped off
+	if (0 == source)
+	{
+		LPCSTR ext = strrchr(name, '.');
+		if (!ext || 0 != _stricmp(ext, ".object"))	return false;
+
+		LPCSTR rel = name;
+		if (0 == _strnicmp(rel, "rawdata\\objects\\", 16))	rel += 16;
+		else return false;
+
+		xr_strcpy(ref, sizeof(string_path), rel);
+		if (char* dot = strrchr(ref, '.'))	*dot = 0;
+		return true;
+	}
+
+	// the SDK library: an Objects entry IS a reference; nothing else places
+	if (Form && kCategories[Form->m_Category].id == smObject)
+	{
+		xr_strcpy(ref, sizeof(string_path), name);
+		return true;
+	}
+	return false;
+}
+
 //------------------------------------------------------------------------------
 // MCP entry points
 //------------------------------------------------------------------------------

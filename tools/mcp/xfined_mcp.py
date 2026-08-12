@@ -336,6 +336,36 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_list_commands",
+        "description": "Introspect the editor's own command registry: every action the menus and shortcuts can "
+                       "perform, as {id, name, menu, presets}. 'name' is the COMMAND_* identifier, 'menu' the "
+                       "menu path when it has one, 'presets' the documented (p1,p2) combinations of multi-variant "
+                       "commands. Feed these to xfined_exec_command. This is the full control surface of the "
+                       "editor - commands added in future builds show up here automatically.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "xfined_exec_command",
+        "description": "Execute any command from the editor's registry (see xfined_list_commands) - the same "
+                       "dispatch the menus and keyboard shortcuts use, so this can do anything a human at the "
+                       "keyboard can. Address it by 'id', by COMMAND_* 'name', or by menu path. Parameters are "
+                       "explicit: p1s/p2s pass strings, p1i/p2i integers. Prefer the dedicated xfined_* tools "
+                       "when one exists (they validate and report better); this is the escape hatch for "
+                       "everything else. Note some commands open file pickers or other windows - take a "
+                       "screenshot afterwards to see what happened.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer", "description": "command id from list_commands"},
+                "name": {"type": "string", "description": "COMMAND_* identifier or menu path (alternative to id)"},
+                "p1s": {"type": "string", "description": "first parameter as a string"},
+                "p1i": {"type": "integer", "description": "first parameter as an integer"},
+                "p2s": {"type": "string", "description": "second parameter as a string"},
+                "p2i": {"type": "integer", "description": "second parameter as an integer"},
+            },
+        },
+    },
+    {
         "name": "xfined_content_mkdir",
         "description": "Create a folder inside the project, with any missing parent along the way. 'path' is "
                        "taken against the project root when relative (e.g. 'gamedata/meshes/mymod'). Anything "
@@ -648,6 +678,8 @@ CMD_MAP = {
     "xfined_content_move": "content_move",
     "xfined_content_delete": "content_delete",
     "xfined_content_mkdir": "content_mkdir",
+    "xfined_list_commands": "list_commands",
+    "xfined_exec_command": "exec_command",
     "xfined_content_browser_open": "content_browser_open",
     "xfined_content_browser_selection": "content_browser_selection",
     "xfined_content_browser_copy": "content_browser_copy",
