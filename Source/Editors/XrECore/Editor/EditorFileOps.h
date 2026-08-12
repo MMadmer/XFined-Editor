@@ -54,6 +54,10 @@ namespace EditorFileOps
 	// Move needs the source inside the project too — see the contract above.
 	ECORE_API void	Move	(LPCSTR src, LPCSTR dst_dir, bool recursive, bool overwrite, SReport& rep);
 	ECORE_API void	Delete	(LPCSTR path, bool recursive, SReport& rep);
+	// Creates a folder (and any missing parent) inside the project. `path` is
+	// taken against the project root when relative, and must resolve inside it.
+	// `out` receives the absolute path that now exists.
+	ECORE_API bool	MakeDir	(LPCSTR path, string_path& out, xr_string& err);
 
 	// Where a file living under `fs_alias` belongs once it is inside the project.
 	// fs.ltx builds every alias below the SDK root, so the tail of that root is
@@ -73,4 +77,5 @@ namespace EditorFileOps
 	ECORE_API void	McpCopy		(LPCSTR raw, xr_string& out);
 	ECORE_API void	McpMove		(LPCSTR raw, xr_string& out);
 	ECORE_API void	McpDelete	(LPCSTR raw, xr_string& out);
+	ECORE_API void	McpMakeDir	(LPCSTR raw, xr_string& out);
 }

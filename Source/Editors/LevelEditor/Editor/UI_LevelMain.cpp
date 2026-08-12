@@ -1388,6 +1388,7 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "content_copy"))		{ EditorFileOps::McpCopy(raw, out);				return true; }
     if (0 == xr_strcmp(cmd, "content_move"))		{ EditorFileOps::McpMove(raw, out);				return true; }
     if (0 == xr_strcmp(cmd, "content_delete"))		{ EditorFileOps::McpDelete(raw, out);			return true; }
+    if (0 == xr_strcmp(cmd, "content_mkdir"))		{ EditorFileOps::McpMakeDir(raw, out);			return true; }
 
     // reveal an asset in the content browser: the panel-driving twin of
     // asset_preview, which only ever renders offscreen

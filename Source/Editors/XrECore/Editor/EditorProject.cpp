@@ -598,12 +598,70 @@ void EditorProject::ReleasePreviews()
 //------------------------------------------------------------------------------
 // the browser page (fullscreen, drawn instead of the editor UI)
 //------------------------------------------------------------------------------
+// -project <folder|name>: opens that project at startup and skips the picker
+// entirely, so a scripted run - a smoke test, an agent driving the MCP port -
+// lands in the right project without anyone clicking a tile. The argument is
+// either a project folder or the name of a recent one; quotes are honoured
+// because a path with spaces is the normal case.
+static bool OpenProjectFromCommandLine()
+{
+	LPCSTR cmd = ::GetCommandLineA();
+	LPCSTR at  = strstr(cmd, "-project");
+	if (!at)	return false;
+
+	LPCSTR p = at + xr_strlen("-project");
+	while (' ' == *p || '=' == *p || ':' == *p) ++p;
+	if (!*p)	return false;
+
+	string_path arg = {};
+	if ('"' == *p)
+	{
+		++p;
+		LPCSTR end = strchr(p, '"');
+		const int len = end ? int(end - p) : int(xr_strlen(p));
+		strncpy_s(arg, sizeof(arg), p, _TRUNCATE);
+		if (len < (int)sizeof(arg)) arg[len] = 0;
+	}
+	else
+	{
+		LPCSTR end = strchr(p, ' ');
+		const int len = end ? int(end - p) : int(xr_strlen(p));
+		strncpy_s(arg, sizeof(arg), p, _TRUNCATE);
+		if (len < (int)sizeof(arg)) arg[len] = 0;
+	}
+	if (!arg[0])	return false;
+
+	for (char* c = arg; *c; ++c) if ('/' == *c) *c = '\\';
+
+	if (EditorProject::Open(arg))
+	{
+		Msg("* -project: opened '%s'", arg);
+		return true;
+	}
+
+	// not a folder - try it as the NAME of a project we already know
+	for (int i = 0; i < s_RecentCount; ++i)
+		if (0 == _stricmp(s_Recent[i].name, arg) && EditorProject::Open(s_Recent[i].path))
+		{
+			Msg("* -project: opened recent '%s'", s_Recent[i].path);
+			return true;
+		}
+
+	Msg("! -project: cannot open '%s' - falling back to the project browser", arg);
+	return false;
+}
+
 bool EditorProject::DrawBrowser()
 {
 	if (s_Active) return false;
 
 	static bool s_loaded = false;
-	if (!s_loaded) { ResolveAppRoot(); LoadRecent(); s_loaded = true; }
+	if (!s_loaded)
+	{
+		ResolveAppRoot(); LoadRecent(); s_loaded = true;
+		// done once, after the recent list is up: matching by name needs it
+		if (OpenProjectFromCommandLine())	return false;
+	}
 
 	// the editor's proven self-opening modal (imgui_user overload) — the same
 	// path UIChooseForm uses, so it is guaranteed to be visible and focused

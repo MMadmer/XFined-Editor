@@ -336,6 +336,20 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_content_mkdir",
+        "description": "Create a folder inside the project, with any missing parent along the way. 'path' is "
+                       "taken against the project root when relative (e.g. 'gamedata/meshes/mymod'). Anything "
+                       "that resolves outside the project root is refused. Creating a folder that already "
+                       "exists succeeds and changes nothing.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "folder to create, relative to the project root"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
         "name": "xfined_content_browser_open",
         "description": "Reveal an asset in the editor's Content Browser: opens the panel, switches source when "
                        "asked, navigates to the folder holding it and selects it. 'name' as returned by "
@@ -632,6 +646,7 @@ CMD_MAP = {
     "xfined_content_copy": "content_copy",
     "xfined_content_move": "content_move",
     "xfined_content_delete": "content_delete",
+    "xfined_content_mkdir": "content_mkdir",
     "xfined_content_browser_open": "content_browser_open",
     "xfined_content_browser_selection": "content_browser_selection",
     "xfined_content_browser_copy": "content_browser_copy",

@@ -119,6 +119,8 @@ UIContentBrowser::UIContentBrowser()
 	m_Tick			= 0;
 	m_ClipSource	= -1;
 	m_ClipCategory	= u32(-1);
+	m_RenameBuf[0]	= 0;
+	m_RenameFocus	= false;
 	m_Marquee		= false;
 	m_MarqueeStart	= ImVec2(0, 0);
 	// preferences may not exist yet when the browser is constructed at startup
@@ -203,7 +205,10 @@ void UIContentBrowser::DropCache()
 //------------------------------------------------------------------------------
 // data
 //------------------------------------------------------------------------------
-static void ScanContentDir(const char* base, const char* rel, ChooseItemVec& out)
+// `dirs` collects the folders themselves: an empty one has no items to derive it
+// from, and a folder the user just created is empty by definition.
+static void ScanContentDir(const char* base, const char* rel, ChooseItemVec& out,
+						   xr_vector<xr_string>& dirs)
 {
 	char mask[MAX_PATH];
 	sprintf_s(mask, "%s\\%s%s*", base, rel, rel[0] ? "\\" : "");
@@ -216,7 +221,10 @@ static void ScanContentDir(const char* base, const char* rel, ChooseItemVec& out
 		char sub[MAX_PATH];
 		sprintf_s(sub, "%s%s%s", rel, rel[0] ? "\\" : "", fd.cFileName);
 		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-			ScanContentDir(base, sub, out);
+		{
+			dirs.push_back(xr_string(sub));
+			ScanContentDir(base, sub, out, dirs);
+		}
 		else
 			out.push_back(SChooseItem(sub, ""));
 	} while (::FindNextFileA(h, &fd));
@@ -227,6 +235,7 @@ void UIContentBrowser::Refresh()
 {
 	m_NeedRefresh	= false;
 	m_Items.clear	();
+	m_Dirs.clear	();
 	DropCache		();
 
 	if (m_Source == 0)
@@ -237,8 +246,8 @@ void UIContentBrowser::Refresh()
 		// showing only one of them hid half of what had just been copied in.
 		if (EditorProject::Active())
 		{
-			ScanContentDir(EditorProject::Root(), "gamedata", m_Items);
-			ScanContentDir(EditorProject::Root(), "rawdata",  m_Items);
+			ScanContentDir(EditorProject::Root(), "gamedata", m_Items, m_Dirs);
+			ScanContentDir(EditorProject::Root(), "rawdata",  m_Items, m_Dirs);
 		}
 		m_Root.name = "Content";
 	}
@@ -296,6 +305,9 @@ void UIContentBrowser::SwitchSource(int src)
 	m_WantOverwrite	= false;
 	m_CopyPending.clear();
 	m_CopyTarget.clear();
+	// an open name box belongs to the tile it was opened on, which is gone now
+	m_Rename.clear();
+	m_RenameFocus	= false;
 	if (src == 2)
 	{
 		// the first mount reads every archive file table and can take a moment
@@ -304,47 +316,73 @@ void UIContentBrowser::SwitchSource(int src)
 	}
 }
 
+UIContentBrowser::SFolder* UIContentBrowser::EnsureFolder(LPCSTR path)
+{
+	SFolder* cur = &m_Root;
+	if (!path || !path[0]) return cur;
+
+	xr_string acc;
+	LPCSTR p = path;
+	for (;;)
+	{
+		LPCSTR slash = strchr(p, '\\');
+		// the tail after the last separator is a folder too when it came from
+		// the directory list; BuildTree stops one short for item names
+		const int len = slash ? int(slash - p) : int(xr_strlen(p));
+		if (!len) break;
+
+		string_path buf;
+		int n = len;
+		if (n > (int)sizeof(buf) - 1) n = sizeof(buf) - 1;
+		CopyMemory(buf, p, n);
+		buf[n] = 0;
+
+		xr_string part(buf);
+		if (!acc.empty()) acc += "\\";
+		acc += part;
+
+		SFolder* next = 0;
+		for (u32 c = 0; c < cur->children.size(); ++c)
+			if (cur->children[c].name == part) { next = &cur->children[c]; break; }
+
+		if (!next)
+		{
+			SFolder f; f.name = part; f.path = acc;
+			cur->children.push_back(f);
+			next = &cur->children.back();
+		}
+		cur = next;
+		if (!slash) break;
+		p = slash + 1;
+	}
+	return cur;
+}
+
 void UIContentBrowser::BuildTree()
 {
 	m_Root.children.clear();
 	m_Root.items.clear();
+
+	// folders that exist on disk first, so an empty one still shows up
+	for (u32 d = 0; d < m_Dirs.size(); ++d)
+		EnsureFolder(m_Dirs[d].c_str());
 
 	for (int i = 0; i < (int)m_Items.size(); ++i)
 	{
 		LPCSTR nm = m_Items[i].name.c_str();
 		if (!nm || !nm[0]) continue;
 
-		// split "a\b\name" into folders, the tail is the item itself
+		// everything up to the last separator is folders, the tail is the item
+		LPCSTR slash = strrchr(nm, '\\');
 		SFolder* cur = &m_Root;
-		xr_string acc;
-		LPCSTR p = nm;
-		for (;;)
+		if (slash)
 		{
-			LPCSTR slash = strchr(p, '\\');
-			if (!slash) break;
-
-			string_path buf;
-			int len = int(slash - p);
-			if (len > (int)sizeof(buf) - 1) len = sizeof(buf) - 1;
-			CopyMemory(buf, p, len);
-			buf[len] = 0;
-
-			xr_string part(buf);
-			if (!acc.empty()) acc += "\\";
-			acc += part;
-
-			SFolder* next = 0;
-			for (u32 c = 0; c < cur->children.size(); ++c)
-				if (cur->children[c].name == part) { next = &cur->children[c]; break; }
-
-			if (!next)
-			{
-				SFolder f; f.name = part; f.path = acc;
-				cur->children.push_back(f);
-				next = &cur->children.back();
-			}
-			cur = next;
-			p = slash + 1;
+			string_path dir;
+			int len = int(slash - nm);
+			if (len > (int)sizeof(dir) - 1) len = sizeof(dir) - 1;
+			CopyMemory(dir, nm, len);
+			dir[len] = 0;
+			cur = EnsureFolder(dir);
 		}
 		cur->items.push_back(i);
 	}
@@ -666,10 +704,14 @@ void UIContentBrowser::DrawTiles()
 			if (drawn % per_row) ImGui::SameLine();
 			drawn++;
 
+			const bool renaming = !m_Rename.empty() && (m_Rename == sub.path);
+
 			ImGui::PushID(1000000 + (int)c);
 			ImGui::BeginGroup();
-			// folders read as folders through colour: there is no icon atlas here
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.30f, 0.27f, 0.14f, 1.f));
+			// folders read as folders through colour: there is no icon atlas here.
+			// The one being renamed is lit up - it is the selection right now.
+			ImGui::PushStyleColor(ImGuiCol_Button, renaming ? ImVec4(0.46f, 0.41f, 0.20f, 1.f)
+															: ImVec4(0.30f, 0.27f, 0.14f, 1.f));
 			ImGui::Button("[ ]", ImVec2(m_TileSize, m_TileSize));
 			ImGui::PopStyleColor();
 			// Double click to enter, like Unreal - a single click must not
@@ -679,12 +721,33 @@ void UIContentBrowser::DrawTiles()
 				m_CurFolder = sub.path;
 				ClearSelection();
 			}
-			if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", sub.path.c_str());
+			if (ImGui::IsItemHovered() && !renaming) ImGui::SetTooltip("%s", sub.path.c_str());
 			DrawFolderContextMenu(sub.path.c_str());
 
-			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + m_TileSize);
-			ImGui::TextUnformatted(sub.name.c_str());
-			ImGui::PopTextWrapPos();
+			if (renaming)
+			{
+				ImGui::SetNextItemWidth(m_TileSize);
+				if (m_RenameFocus)
+				{
+					// one frame late on purpose: the widget has to exist before
+					// the keyboard can be handed to it
+					ImGui::SetKeyboardFocusHere();
+					m_RenameFocus = false;
+				}
+				// AutoSelectAll is the whole point - the name comes up fully
+				// selected, so the first keystroke replaces it
+				const bool done = ImGui::InputText("##cb_rename", m_RenameBuf, sizeof(m_RenameBuf),
+					ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+				// Enter commits, and so does clicking away. Escape reverts the
+				// buffer itself, so the commit sees an unchanged name and stops.
+				if (done || ImGui::IsItemDeactivated()) CommitRename();
+			}
+			else
+			{
+				ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + m_TileSize);
+				ImGui::TextUnformatted(sub.name.c_str());
+				ImGui::PopTextWrapPos();
+			}
 			ImGui::EndGroup();
 			ImGui::PopID();
 		}
@@ -930,6 +993,11 @@ void UIContentBrowser::DrawFolderContextMenu(LPCSTR path)
 				? "this category lives inside one shared library file - there is no per-item file to copy"
 				: "this is the project's own Content - it is already here");
 	}
+
+	// "New folder" is deliberately NOT here: it would create inside the OPEN
+	// folder, not inside the one clicked, which reads wrong. It lives on the
+	// empty-space menu, where a file manager keeps it.
+	if (m_Source == 0 && ImGui::MenuItem("Rename", "")) BeginRename(path);
 
 	if (ImGui::MenuItem("Copy path")) ImGui::SetClipboardText(path);
 
@@ -1279,6 +1347,18 @@ void UIContentBrowser::DrawGridContextMenu()
 	if (!ImGui::BeginPopupContextWindow("cb_grid_ctx", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
 		return;
 
+	// Authoring lives here, on the empty space of the writable source - the same
+	// place a file manager puts it.
+	if (m_Source == 0)
+	{
+		const bool can_make = !m_CurFolder.empty();
+		if (ImGui::MenuItem("New folder", "", false, can_make) && can_make)
+			CreateFolder();
+		if (!can_make && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("open gamedata or rawdata first - the project root is not a content folder");
+		ImGui::Separator();
+	}
+
 	const bool can = CanPaste();
 	if (ImGui::MenuItem("Paste", "Ctrl+V", false, can) && can)
 		ClipboardPaste();
@@ -1404,6 +1484,125 @@ int UIContentBrowser::CopyRefsToProject(u32 category, const xr_vector<xr_string>
 		err += last_err;
 	}
 	return files;
+}
+
+//------------------------------------------------------------------------------
+// folder authoring (project source only)
+//------------------------------------------------------------------------------
+void UIContentBrowser::CreateFolder()
+{
+	if (m_Source != 0 || !EditorProject::Active())	return;
+	// The project root is not a content folder: gamedata and rawdata are the two
+	// roots the engine and the editor read from, and a folder next to them would
+	// simply never be looked at.
+	if (m_CurFolder.empty())
+	{
+		ELog.DlgMsg(mtInformation,
+			"Open gamedata or rawdata first - the project root itself is not a content folder.");
+		return;
+	}
+
+	// first free "New Folder", "New Folder 2", ... exactly like a file manager
+	xr_string rel;
+	string_path probe;
+	for (int n = 1; n <= 999; ++n)
+	{
+		char leaf[64];
+		if (1 == n)	xr_strcpy(leaf, sizeof(leaf), "New Folder");
+		else		sprintf_s(leaf, "New Folder %d", n);
+
+		sprintf_s(probe, "%s\\%s\\%s", EditorProject::Root(), m_CurFolder.c_str(), leaf);
+		if (INVALID_FILE_ATTRIBUTES == ::GetFileAttributesA(probe))
+		{
+			rel  = m_CurFolder;
+			rel += "\\";
+			rel += leaf;
+			break;
+		}
+	}
+	if (rel.empty())	{ ELog.DlgMsg(mtError, "Too many unnamed folders here."); return; }
+
+	string_path full;
+	xr_string err;
+	if (!EditorFileOps::MakeDir(rel.c_str(), full, err))
+	{
+		ELog.DlgMsg(mtError, "Cannot create the folder: %s", err.c_str());
+		return;
+	}
+
+	// the tile has to exist before it can be renamed, and only a refresh puts it
+	// in the tree - an empty folder has no items to derive it from
+	Refresh			();
+	ClearSelection	();
+	BeginRename		(rel.c_str());
+}
+
+void UIContentBrowser::BeginRename(LPCSTR path)
+{
+	if (m_Source != 0 || !path || !path[0])	return;
+
+	m_Rename		= path;
+	m_RenameFocus	= true;
+
+	LPCSTR leaf = strrchr(path, '\\');
+	xr_strcpy(m_RenameBuf, sizeof(m_RenameBuf), leaf ? leaf + 1 : path);
+}
+
+void UIContentBrowser::CommitRename()
+{
+	if (m_Rename.empty())	return;
+
+	const xr_string was = m_Rename;
+	m_Rename.clear();
+
+	// trim, then bail on anything that is not a plain leaf name
+	char leaf[128];
+	xr_strcpy(leaf, sizeof(leaf), m_RenameBuf);
+	char* s = leaf;
+	while (' ' == *s) ++s;
+	for (char* e = s + xr_strlen(s); e > s && ' ' == e[-1];) *--e = 0;
+
+	LPCSTR old_leaf = strrchr(was.c_str(), '\\');
+	old_leaf = old_leaf ? old_leaf + 1 : was.c_str();
+	if (!s[0] || 0 == xr_strcmp(s, old_leaf))	return;		// unchanged, nothing to do
+
+	if (strpbrk(s, "\\/:*?\"<>|"))
+	{
+		ELog.DlgMsg(mtError, "A folder name cannot contain \\ / : * ? \" < > |");
+		return;
+	}
+
+	xr_string parent(was);
+	if (LPCSTR cut = strrchr(parent.c_str(), '\\'))
+		parent.erase(size_t(cut - parent.c_str()));
+	else
+		parent.clear();
+
+	string_path from, to;
+	sprintf_s(from, "%s\\%s", EditorProject::Root(), was.c_str());
+	if (parent.empty())	sprintf_s(to, "%s\\%s", EditorProject::Root(), s);
+	else				sprintf_s(to, "%s\\%s\\%s", EditorProject::Root(), parent.c_str(), s);
+
+	if (INVALID_FILE_ATTRIBUTES != ::GetFileAttributesA(to))
+	{
+		ELog.DlgMsg(mtError, "'%s' is already there.", s);
+		return;
+	}
+	if (!::MoveFileA(from, to))
+	{
+		ELog.DlgMsg(mtError, "Cannot rename the folder (error %d).", int(::GetLastError()));
+		return;
+	}
+
+	// keep the user where they were looking: the open folder may BE the renamed
+	// one, or sit under it
+	xr_string now(parent);
+	if (!now.empty()) now += "\\";
+	now += s;
+	if (0 == strncmp(m_CurFolder.c_str(), was.c_str(), was.size()))
+		m_CurFolder = now + (m_CurFolder.c_str() + was.size());
+
+	m_NeedRefresh = true;
 }
 
 void UIContentBrowser::CopyFolderToProject(LPCSTR path)

@@ -18,9 +18,12 @@ namespace
 	u32		g_armed_until	= 0;	// GetTickCount() stamp
 	u32		g_last_mirror	= 0;
 
-	// wall-clock, not frame counts: the arm window has to survive the seconds
-	// between the request that arms it and the follow-up that reads the frame
-	const u32	CAPTURE_ARM_MS		= 6000;
+	// Wall-clock, not frame counts: the arm window has to survive the gap between
+	// the request that arms it and the follow-up that reads the frame. Six
+	// seconds was not enough - an agent driving this does other work in between,
+	// and every request that lands after the window lapsed re-arms and fails
+	// again, so the capture never happens no matter how many times it is asked.
+	const u32	CAPTURE_ARM_MS		= 30000;
 	const u32	CAPTURE_PERIOD_MS	= 100;
 	// how long a mirrored frame still counts as "what is on screen". Without
 	// this the first request after the arm window lapsed would happily hand back
@@ -47,16 +50,21 @@ bool	DX11GetFrameCapture(U32Vec& out, u32& w, u32& h)
 
 void	DX11MirrorBackbuffer()
 {
+	// -trace: "frame not mirrored yet" has four possible causes and the caller
+	// cannot tell them apart. Only reports while armed, so it stays quiet.
+	static const bool s_trace = !!strstr(GetCommandLineA(), "-trace");
+#define MIRROR_BAIL(why)	do { if (s_trace) Msg("~ mirror: %s", why); return; } while(0)
+
 	const u32 now = ::GetTickCount();
-	if (now > g_armed_until)						return;
+	if (now > g_armed_until)						return;		// not armed: silent
 	// a full readback every frame would stall the loop for as long as capture
 	// stays armed, and nothing needs that rate
 	if (g_last_mirror && (now - g_last_mirror) < CAPTURE_PERIOD_MS)	return;
-	if (!HW.m_pSwapChain)							return;
+	if (!HW.m_pSwapChain)							MIRROR_BAIL("no swap chain");
 
 	ID3D11Texture2D* bb = 0;
 	if (FAILED(HW.m_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb)
-		return;
+		MIRROR_BAIL("GetBuffer failed");
 
 	U32Vec	px;
 	u32		w = 0, h = 0;
@@ -67,7 +75,9 @@ void	DX11MirrorBackbuffer()
 		g_frame_h		= h;
 		g_last_mirror	= now;
 	}
+	else if (s_trace)	Msg("~ mirror: readback failed");
 	bb->Release();
+#undef MIRROR_BAIL
 }
 
 //------------------------------------------------------------------------------

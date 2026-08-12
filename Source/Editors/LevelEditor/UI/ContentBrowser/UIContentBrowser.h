@@ -77,6 +77,10 @@ private:
 	u32								m_Tick;
 
 	ChooseItemVec					m_Items;
+	// Project source only: the folders that exist on disk. The tree is otherwise
+	// derived from item names, which cannot describe an EMPTY folder - and a
+	// freshly created one is exactly that.
+	xr_vector<xr_string>			m_Dirs;
 	SFolder							m_Root;
 	xr_string						m_CurFolder;
 	u32								m_Category;
@@ -125,6 +129,8 @@ private:
 
 	void			Refresh				();
 	void			BuildTree			();
+	// creates the folder chain for `path` and returns its node
+	SFolder*		EnsureFolder		(LPCSTR path);
 	void			DrawFolder			(SFolder& f);
 	void			DrawTiles			();
 	void			CollectItems		(SFolder& f, xr_vector<int>& out, bool recursive);
@@ -168,6 +174,16 @@ private:
 	// the copy itself, with no UI attached: what both the menu and MCP run
 	int				CopyRefsToProject	(u32 category, const xr_vector<xr_string>& names,
 										 bool overwrite, xr_string& err);
+
+	// folder authoring, project source only
+	void			CreateFolder		();				// in the folder now open
+	void			BeginRename			(LPCSTR path);	// inline edit on that tile
+	void			CommitRename		();
+	// Inline rename of a folder tile: the created folder starts here with its
+	// name fully selected, so typing replaces it - the usual file-manager flow.
+	xr_string						m_Rename;		// folder path being renamed, "" = none
+	char							m_RenameBuf[128];
+	bool							m_RenameFocus;	// grab the keyboard on the next frame
 
 	// clipboard
 	void			ClipboardCopy		();

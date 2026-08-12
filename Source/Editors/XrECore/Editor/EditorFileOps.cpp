@@ -462,6 +462,28 @@ static bool CopyFromGameArchive(LPCSTR src, LPCSTR dst_dir, bool overwrite, Edit
 	return true;
 }
 
+bool EditorFileOps::MakeDir(LPCSTR path, string_path& out, xr_string& err)
+{
+	out[0] = 0;
+	if (!ResolveInProject(path, out, err))	return false;
+
+	if (FileExists(out))
+	{
+		err = "a file of that name is already there";
+		out[0] = 0;
+		return false;
+	}
+	if (DirExists(out))						return true;	// already what was asked for
+
+	if (!EnsureDir(out))
+	{
+		err = Win32Reason("cannot create the folder");
+		out[0] = 0;
+		return false;
+	}
+	return true;
+}
+
 //------------------------------------------------------------------------------
 // shared SDK library -> project
 //------------------------------------------------------------------------------
@@ -811,6 +833,16 @@ static void ForEachEntry(char* list, LPCSTR dst, bool recursive, bool overwrite,
 		if (sep) *sep = 0;
 		while (*cursor == ' ') ++cursor;
 		for (char* e = cursor + xr_strlen(cursor); e > cursor && e[-1] == ' ';) *--e = 0;
+		// The argument arrives as the RAW json value, so an escaped "a\\b" still
+		// carries both slashes. LexicalNormalize collapses them for the actual
+		// operation, but the failure report echoes what was passed in - and a
+		// path that reads "D://Games" makes a real error look like a parsing bug.
+		{
+			char* w = cursor;
+			for (const char* r = cursor; *r; ++r)
+				if (!(*r == '\\' && w > cursor && w[-1] == '\\')) *w++ = *r;
+			*w = 0;
+		}
 		if (*cursor) fn(cursor, dst, recursive, overwrite, rep);
 		cursor = sep ? sep + 1 : 0;
 	}
@@ -850,6 +882,13 @@ static void McpTransfer(LPCSTR raw, xr_string& out, TEntryOp fn)
 		out = "{\"ok\":false,\"error\":\"missing 'dst' argument (target folder inside the project)\"}";
 		return;
 	}
+	// same raw-json unescaping the source list gets - see ForEachEntry
+	{
+		char* w = dst;
+		for (const char* r = dst; *r; ++r)
+			if (!(*r == '\\' && w > dst && w[-1] == '\\')) *w++ = *r;
+		*w = 0;
+	}
 
 	EditorFileOps::SReport rep;
 	ForEachEntry(src, dst, ArgBool(raw, "recursive", true), ArgBool(raw, "overwrite", false), rep, fn);
@@ -858,6 +897,43 @@ static void McpTransfer(LPCSTR raw, xr_string& out, TEntryOp fn)
 
 void EditorFileOps::McpCopy(LPCSTR raw, xr_string& out) { McpTransfer(raw, out, &OpCopy); }
 void EditorFileOps::McpMove(LPCSTR raw, xr_string& out) { McpTransfer(raw, out, &OpMove); }
+
+void EditorFileOps::McpMakeDir(LPCSTR raw, xr_string& out)
+{
+	if (!EditorProject::Active())
+	{
+		out = "{\"ok\":false,\"error\":\"no project is open\"}";
+		return;
+	}
+
+	char path[MAX_PATH] = {};
+	if (!XFinedMCP::GetArg(raw, "path", path, sizeof(path)) || !path[0])
+	{
+		out = "{\"ok\":false,\"error\":\"missing 'path' argument (folder inside the project)\"}";
+		return;
+	}
+	// the raw json value still carries its escaped separators - see ForEachEntry
+	{
+		char* w = path;
+		for (const char* r = path; *r; ++r)
+			if (!(*r == '\\' && w > path && w[-1] == '\\')) *w++ = *r;
+		*w = 0;
+	}
+
+	string_path full;
+	xr_string err;
+	if (!MakeDir(path, full, err))
+	{
+		out  = "{\"ok\":false,\"error\":\"";
+		out += err;
+		out += "\"}";
+		return;
+	}
+
+	out  = "{\"ok\":true,\"path\":\"";
+	for (LPCSTR p = full; *p; ++p)	out += ('\\' == *p) ? '/' : *p;
+	out += "\"}";
+}
 
 void EditorFileOps::McpDelete(LPCSTR raw, xr_string& out)
 {

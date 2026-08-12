@@ -318,13 +318,22 @@ static void Execute(SMCPRequest& r)
 		U32Vec	px;
 		u32		w = 0, h = 0;
 		DX11ArmFrameCapture();
-		if (DX11GetFrameCapture(px, w, h) && PixelsToPngBase64(px.data(), w, h, b64))
+		// the two ways this fails are nothing alike, and one message for both
+		// sent the last debugging session chasing the wrong one
+		if (!DX11GetFrameCapture(px, w, h))
+			r.response = "{\"ok\":false,\"error\":\"capture just armed, no frame mirrored yet - ask again\"}";
+		else if (!PixelsToPngBase64(px.data(), w, h, b64))
+		{
+			char msg[160];
+			sprintf_s(msg, "{\"ok\":false,\"error\":\"png encode failed for %ux%u\"}", w, h);
+			r.response = msg;
+		}
+		else
 		{
 			r.response = "{\"ok\":true,\"png_base64\":\"";
 			r.response += b64;
 			r.response += "\"}";
 		}
-		else r.response = "{\"ok\":false,\"error\":\"frame not mirrored yet, ask again\"}";
 #else
 		// resolved by window class — m_hWnd visibility varies across the tree
 		HWND wnd = ::FindWindowA("XFined Editor", NULL);

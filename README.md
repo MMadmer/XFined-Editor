@@ -30,12 +30,32 @@ One command after a clean clone (needs Visual Studio 2022+ with the
 Binaries land in `Bin\x64\Release`. Useful variants: `-Target XrGame`,
 `-Clean`, `-Debug`. Optional targets: `XrLC`, `xrDO_Light` (level compilers).
 
+### Command line
+
+```powershell
+LevelEditor.exe -project "D:\XFinedProjects\Test"
+```
+
+`-project <folder|name>` opens that project at startup and **skips the project
+picker** — the point being that a scripted run (a smoke test, an AI agent
+driving the MCP port) lands straight in the project it needs instead of sitting
+on a modal nobody is there to click. The argument is either a project folder or
+the name of a project already in the recent list; quote it when it has spaces.
+An unopenable value logs why and falls back to the picker.
+
+Diagnostics, all off by default: `-flushlog` (write the log line by line, so a
+crash keeps what was already printed), `-trace` (frame markers plus the
+capture/mirror reasons), `-bc` (allocation-free breadcrumbs to `bc.txt`),
+`-debugrender` (drain the D3D11 InfoQueue into the log).
+
 ### AI integration (MCP)
 
 The editor hosts a local automation endpoint on `127.0.0.1:28016` from the
 first frame (project browser included). A dependency-free MCP stdio bridge
 lives at `tools/mcp/xfined_mcp.py`; tools include editor/viewport screenshots
-(working even when the window is covered) and editor state queries.
+(working even when the window is covered), content-browser navigation, asset
+copying out of the read-only sources, project/file management and editor state
+queries. Combine `-project` with the bridge to get a fully unattended session.
 
 Setup instructions for any AI agent — including a ready-to-paste prompt block —
 are in [`tools/mcp/AI_SETUP.md`](tools/mcp/AI_SETUP.md). Claude Code one-liner:

@@ -11,6 +11,21 @@ The XFined Editor hosts a local automation endpoint whenever it is running:
 * alive from the very first frame — the project browser stage included
 * an MCP stdio bridge is bundled at `tools/mcp/xfined_mcp.py` (Python 3, stdlib only)
 
+## Starting the editor on a project
+
+Launch it with the project already open and the picker skipped — otherwise an
+unattended run stops on a modal nobody is there to click:
+
+```powershell
+LevelEditor.exe -project "D:\XFinedProjects\Test"
+```
+
+`-project` takes a project folder or the name of one in the recent list (quote
+paths with spaces). An unopenable value is logged and the picker comes up as
+usual. `xfined_open_project` does the same thing on an editor that is already
+running. Useful alongside: `-flushlog` (log written line by line, so a crash
+keeps what was printed), `-trace` (frame markers and capture diagnostics).
+
 ## Registering the MCP server
 
 **Claude Code:**
@@ -41,7 +56,7 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_ping` | editor presence check |
 | `xfined_state` | active project name/path, opened scene, FPS |
 | `xfined_screenshot_viewport` | PNG image of the 3D viewport render target |
-| `xfined_screenshot_editor` | PNG image of the whole editor window (all panels); captured via PrintWindow, so it works even when the editor is covered by other windows |
+| `xfined_screenshot_editor` | PNG image of the whole editor window (all panels), read from the presented frame, so it works even when the editor is covered by other windows. Mirroring the back buffer costs a full readback, so it only runs while armed: **the first call after an idle spell answers "capture just armed" — call it again** and the second one returns the image |
 | `xfined_scene_info` | opened scene file, modified flag, object counts per tool class |
 | `xfined_selection` | objects selected in the viewport: name, class, position/rotation/scale |
 | `xfined_object_info` | one object by exact `name`: class, selected/visible, transform |
@@ -79,8 +94,17 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_save_scene` | save the opened scene (its current file, or an explicit `file`) |
 | `xfined_outliner_show` | open (`open=true`, default) or close the World Outliner panel |
 | `xfined_scene_tree` | the World Outliner's data: groups per object tool class sorted by class name, each with `count`/`total` and `objects` (name, selected, visible); filters `filter`, `class`, `limit` (default 200) |
+| `xfined_content_browser_open` | reveal an asset in the Content Browser: opens the panel, switches `source` (`project`/`editor`/`darf`), navigates to its folder and selects it; `open=true` also opens its viewer (the double-click action) |
+| `xfined_content_browser_selection` | what the browser shows right now: open flag, active source, current folder, selected assets |
+| `xfined_content_browser_copy` | copy assets out of a READ-ONLY source into the project: `names` (`;`-separated) or `folder` (recursive), optional `source`/`category`, `overwrite` (default true). Each asset lands where the engine expects it — an Objects entry in `<project>/rawdata/objects/...`, a mesh in `<project>/gamedata/meshes/...`, a texture with its `.thm` |
+| `xfined_content_copy` / `xfined_content_move` | copy/move files or folders by path; `src` accepts a `;`-separated list, `dst` is a folder inside the project, `recursive`/`overwrite`. Moving out of a read-only source is refused — a move deletes its source |
+| `xfined_content_delete` | delete files/folders inside the project; `recursive` defaults to false so a non-empty folder is reported instead of wiped |
+| `xfined_content_mkdir` | create a folder (with missing parents) inside the project |
 | `xfined_undo` | undo the last scene operation |
 | `xfined_redo` | redo the last undone scene operation |
+
+Everything that writes is clamped to the project folder: the linked game install
+and the shared SDK library are sources you copy **out of**, never into.
 
 ## Raw protocol (if you don't want the bridge)
 
@@ -111,4 +135,16 @@ error. One client connection at a time.
 > open, and `xfined_screenshot_editor` / `xfined_screenshot_viewport` to see
 > the editor with your own eyes before and after any change you make. The
 > screenshots work even when the editor window is covered — always verify the
-> actual UI state visually instead of assuming.
+> actual UI state visually instead of assuming. `xfined_screenshot_editor` arms
+> the capture on its first call and returns the image on the next one, so a
+> "capture just armed" answer means call it again, not that it failed.
+>
+> If you start the editor yourself, launch it as
+> `LevelEditor.exe -project "<project folder>"` so it opens straight into that
+> project instead of waiting on the project picker. On a running editor,
+> `xfined_open_project` switches projects.
+>
+> The project folder is the only writable place. The shared SDK library
+> ("Editor Content") and the linked game install ("DARF Content") are read-only
+> sources: pull assets out of them with `xfined_content_browser_copy`, which
+> puts each one where the engine expects it.
