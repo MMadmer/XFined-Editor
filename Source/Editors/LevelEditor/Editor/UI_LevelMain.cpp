@@ -2130,14 +2130,27 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             }
         }
 
-        SChooseEvents* events = UIChooseForm::GetEvents(UIContentBrowser::CategoryId(cat));
-        if (!events || !events->on_fill)
-        {
-            out = "{\"ok\":false,\"error\":\"category has no enumerator in this build\"}";
-            return true;
-        }
         ChooseItemVec items;
-        events->on_fill(items, 0);
+        if (UIContentBrowser::IsLevelsCategory(cat))
+        {
+            // Levels are editor scenes, not library assets: they have no entry in
+            // the choose-event table, which is why asking for them used to answer
+            // "no enumerator". They come straight off the maps root instead.
+            FS_FileSet lst;
+            if (FS.file_list(lst, _maps_, FS_ListFiles | FS_ClampExt, "*.level"))
+                for (FS_FileSetIt it = lst.begin(); it != lst.end(); ++it)
+                    items.push_back(SChooseItem(it->name.c_str(), ""));
+        }
+        else
+        {
+            SChooseEvents* events = UIChooseForm::GetEvents(UIContentBrowser::CategoryId(cat));
+            if (!events || !events->on_fill)
+            {
+                out = "{\"ok\":false,\"error\":\"category has no enumerator in this build\"}";
+                return true;
+            }
+            events->on_fill(items, 0);
+        }
 
         char filter[256] = {};
         XFinedMCP::GetArg(raw, "filter", filter, sizeof(filter));
@@ -2967,6 +2980,7 @@ void CLevelMain::OnDrawUI()
         UIContentBrowser::Update();
         UIWorldOutliner::Update();
         UIVisualPreview::Update();
+        UIImagePreview::Update();
         EditorProject::DrawUI();
         EditorMod::DrawUI();
         EditorModScene::DrawUI();

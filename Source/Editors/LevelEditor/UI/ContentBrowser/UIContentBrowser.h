@@ -61,6 +61,9 @@ public:
 	static LPCSTR	CategoryName		(int index);		// caption, e.g. "Objects"
 	static u32		CategoryId			(int index);		// EChooseMode id
 	static int		FindCategory		(LPCSTR name);		// by caption, case-insensitive; -1 = unknown
+	// Levels have no EChooseMode - they are scenes, not library assets - so the
+	// callers that enumerate categories have to special-case them
+	static bool		IsLevelsCategory	(int index);
 
 private:
 	struct SFolder
@@ -167,8 +170,12 @@ private:
 	ImTextureID		GetThumb			(LPCSTR name);
 	// queues an offscreen model render; the result is picked up on a later frame
 	void			RequestModelThumbnail(LPCSTR name);
-	// double-click handler: opens the asset's viewer, never touches the scene
-	void			OpenAsset			(LPCSTR name);
+	// Double-click handler: opens the asset's viewer, never touches the scene.
+	// `err` non-null returns the reason instead of popping a dialog, which is
+	// what MCP needs - a modal on an unattended machine is a hang.
+	bool			OpenAsset			(LPCSTR name, xr_string* err = 0);
+	// a Levels listing entry -> the .level file COMMAND_LOAD can open
+	static bool		ResolveLevelFile	(LPCSTR name, string_path& out);
 	void			DropCache			();
 	void			SwitchSource		(int src);
 	// vertical splitter between the folder tree and the tile grid

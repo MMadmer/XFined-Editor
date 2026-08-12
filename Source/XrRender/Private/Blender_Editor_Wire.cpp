@@ -57,7 +57,15 @@ void CBlender_Editor_Wire::Compile	(CBlender_Compile& C)
 	else 
 #endif	//	USE_DX10
 	{
-		C.r_Pass	("editor","simple_color",FALSE,TRUE,TRUE);
+		// simple_color, not editor: this shader is bound both for DU's line
+		// buffers (position + D3DCOLOR) and, in CEditableMesh::RenderEdge, over
+		// a MESH's own render buffers (position/normal/uv). editor.vs consumes
+		// COLOR0, which mesh geometry does not carry - D3D9 tolerated the
+		// mismatch, D3D11 refuses to build the input layout and took the editor
+		// down the moment a level was loaded. simple_color.vs needs only
+		// POSITION and takes its colour from tfactor, which is where every DU
+		// draw puts it anyway (see DU_DRAW_SH_C).
+		C.r_Pass	("simple_color","simple_color",FALSE,TRUE,TRUE);
 		C.r_End		();
 	}
 }

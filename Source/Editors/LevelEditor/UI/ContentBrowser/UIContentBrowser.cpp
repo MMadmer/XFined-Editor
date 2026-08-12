@@ -182,6 +182,11 @@ u32 UIContentBrowser::CategoryId(int index)
 	return (index >= 0 && index < kCategoryCount) ? kCategories[index].id : 0;
 }
 
+bool UIContentBrowser::IsLevelsCategory(int index)
+{
+	return (index >= 0 && index < kCategoryCount) && (kLevelsCategoryId == kCategories[index].id);
+}
+
 int UIContentBrowser::FindCategory(LPCSTR name)
 {
 	if (!name || !name[0]) return -1;
@@ -577,20 +582,67 @@ void UIContentBrowser::DrawFolder(SFolder& f)
 	}
 }
 
+// Turns whatever the Levels listing calls a level into a file COMMAND_LOAD can
+// actually open. The listing clamps the extension off, and a level may be a
+// bare "<name>.level" or a folder holding "<name>\<name>.level", so all the
+// shapes are tried before giving up.
+bool UIContentBrowser::ResolveLevelFile(LPCSTR name, string_path& out)
+{
+	out[0] = 0;
+	if (!name || !name[0])	return false;
+
+	string_path stem;
+	xr_strcpy	(stem, sizeof(stem), name);
+	if (char* dot = strrchr(stem, '.'))
+		if (!strchr(dot, '\\')) *dot = 0;
+
+	LPCSTR leaf = strrchr(stem, '\\');
+	leaf = leaf ? leaf + 1 : stem;
+
+	string_path rel;
+	// as listed, plus the extension
+	xr_sprintf	(rel, sizeof(rel), "%s.level", stem);
+	if (FS.exist(out, _maps_, rel))						return true;
+	// a level folder: <stem>\<leaf>.level
+	xr_sprintf	(rel, sizeof(rel), "%s\\%s.level", stem, leaf);
+	if (FS.exist(out, _maps_, rel))						return true;
+	// already a full path
+	if (FS.exist(name))	{ xr_strcpy(out, sizeof(out), name); return true; }
+
+	return false;
+}
+
 // Double-click action, Unreal-style: open the asset, never modify the scene.
 // Models get the preview window; kinds with a dedicated editor go there; the
 // rest report that they have no viewer yet instead of doing something random.
-void UIContentBrowser::OpenAsset(LPCSTR name)
+// `err` non-null means a caller wants the outcome back instead of a dialog -
+// MCP drives this too, and a modal there would hang the editor on a machine
+// nobody is sitting at.
+bool UIContentBrowser::OpenAsset(LPCSTR name, xr_string* err)
 {
-	if (!name || !name[0]) return;
+#define OPEN_FAILED(...)	do {											\
+		string256 _m; xr_sprintf(_m, sizeof(_m), __VA_ARGS__);			\
+		if (err) *err = _m; else ELog.DlgMsg(mtError, "%s", _m);			\
+		return false; } while(0)
+
+	if (err) err->clear();
+	if (!name || !name[0])	OPEN_FAILED("empty asset name");
 
 	// A level IS the scene: opening one loads it, which is the one case where
 	// the double-click legitimately changes what the editor is working on.
 	// COMMAND_LOAD asks about unsaved changes itself.
 	if (m_Source == 1 && kCategories[m_Category].id == kLevelsCategoryId)
 	{
-		ExecCommand(COMMAND_LOAD, xr_string(name));
-		return;
+		// COMMAND_LOAD feeds its argument straight to FS.r_open and returns FALSE
+		// without a word when that fails - and the listing hands out names with
+		// the extension clamped off, which never opens. Resolve to a real file
+		// first, and say so when there is none.
+		string_path fn;
+		if (!ResolveLevelFile(name, fn))
+			OPEN_FAILED("no .level file behind '%s'", name);
+
+		ExecCommand(COMMAND_LOAD, xr_string(fn));
+		return true;
 	}
 
 	// Library objects (.object) are previewable too - the preview window loads
@@ -627,10 +679,24 @@ void UIContentBrowser::OpenAsset(LPCSTR name)
 		}
 		else if (s_ShowVisual)
 			s_ShowVisual(name);
-		return;
+		return true;
 	}
 
-	ELog.Msg(mtInformation, "No viewer for this asset kind yet: '%s'", name);
+	// Textures get their own window, whatever source they came from. In the SDK
+	// library the name carries no extension, so the category is what says it is
+	// a texture; everywhere else the extension does.
+	const bool is_texture = IsImageExt(name) ||
+							(m_Source == 1 && (kCategories[m_Category].id == smTexture ||
+											   kCategories[m_Category].id == smTextureRaw));
+	if (is_texture)
+	{
+		xr_string img_err;
+		if (UIImagePreview::Show(name, m_Source, &img_err))	return true;
+		OPEN_FAILED("%s: %s", name, img_err.c_str());
+	}
+
+	OPEN_FAILED("no viewer for this asset kind yet: '%s'", name);
+#undef OPEN_FAILED
 }
 
 // depth-first lookup by full path; null when the path is not in the tree
@@ -1016,11 +1082,32 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 	for (u32 i = 0; i < Form->m_Items.size(); ++i)
 		if (0 == _stricmp(Form->m_Items[i].name.c_str(), name)) { found = int(i); break; }
 
+	// The SDK library is split into categories, and a caller naming an asset has
+	// no reason to know which one holds it - a level lives under Levels, a mesh
+	// under Visuals. Sweep them rather than answering "not found" for something
+	// that is plainly there.
+	if (found < 0 && 1 == Form->m_Source)
+	{
+		const u32 was = Form->m_Category;
+		for (int c = 0; c < kCategoryCount && found < 0; ++c)
+		{
+			if (u32(c) == was)	continue;
+			Form->m_Category	= u32(c);
+			Form->m_CurFolder	= "";
+			Form->Refresh		();
+			for (u32 i = 0; i < Form->m_Items.size(); ++i)
+				if (0 == _stricmp(Form->m_Items[i].name.c_str(), name)) { found = int(i); break; }
+		}
+		if (found < 0)
+		{
+			Form->m_Category = was;
+			Form->Refresh();
+		}
+	}
+
 	if (found < 0)
 	{
-		// the same name may live under a different category (Objects/Textures/…);
-		// say so plainly rather than silently doing nothing
-		err = "asset not found in the current source/category";
+		err = "asset not found in this source";
 		return false;
 	}
 
@@ -1034,7 +1121,9 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 	Form->m_Anchor		= Form->m_Selection.back();
 	Form->m_HasAnchor	= true;
 
-	if (open_viewer) Form->OpenAsset(name);
+	// the reveal itself succeeded; a viewer that will not open is worth saying
+	// out loud rather than reporting a bare ok
+	if (open_viewer) return Form->OpenAsset(name, &err);
 	return true;
 }
 
