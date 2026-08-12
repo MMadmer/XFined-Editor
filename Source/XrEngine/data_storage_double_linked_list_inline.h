@@ -18,7 +18,9 @@
 #define CDoubleLinkedList	CDataStorageDoubleLinkedList<sorted>::CDataStorage<_data_storage,_vertex>
 
 TEMPLATE_SPECIALIZATION
-IC	CDoubleLinkedList::CDataStorage			(const u32 vertex_count, const _dist_type _max_distance = _dist_type(u32(-1))) :
+// no default here: the in-class declaration already carries it, and repeating
+// a default argument is a redefinition C++17 rejects (C2572)
+IC	CDoubleLinkedList::CDataStorage			(const u32 vertex_count, const _dist_type _max_distance) :
 	inherited				(vertex_count)
 {
 	m_switch_factor			= _dist_type(1);

@@ -34,8 +34,25 @@ void  ELogCallback(LPCSTR txt)
 //----------------------------------------------------
 CLog ELog;
 //----------------------------------------------------
+// -nodlg: an unattended editor (MCP-driven, smoke scripts) must never sit on a
+// system-modal box - the main loop stops pumping and every remote command
+// times out. The question still goes to the log, together with the answer
+// given for the caller: No for confirmations (never save, never overwrite -
+// the conservative choice; automation that wants the action asks for it
+// explicitly), OK for plain error/info boxes.
+static bool no_dialogs()
+{
+	return !!strstr(GetCommandLine(), "-nodlg");
+}
+
 inline TMsgDlgButtons MessageDlg(const char*text, TMsgDlgType mt, int btn)
 {
+	if (no_dialogs())
+	{
+		Msg("! [dlg suppressed] %s%s", text,
+			(mtConfirmation == mt) ? "  -> auto-answer: No" : "");
+		return (mtConfirmation == mt) ? mrNo : mrOK;
+	}
 	UINT Flags = 0;
 	const char* Title = "";
 	switch (mt)

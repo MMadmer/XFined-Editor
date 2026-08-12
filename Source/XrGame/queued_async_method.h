@@ -226,7 +226,11 @@ struct parameters_tuple4
 		return *this;
 	}
 
-	bool				operator == (parameters_tuple3 const & right) const
+	// was "parameters_tuple3 const &" - a copy-paste from the tuple above that
+	// never instantiated, so the C++14 delayed parse never noticed. C++17
+	// parses eagerly, and a bare template name is an error; the body compares
+	// m_t4, so tuple4 was always the intent.
+	bool				operator == (parameters_tuple4 const & right) const
 	{
 		return	(m_t1 == right.m_t1) &&
 				(m_t2 == right.m_t2) &&

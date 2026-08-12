@@ -43,6 +43,11 @@ template <
 protected:
 	typedef CProblemSolver<T1,T2,T3,T4,T5,T6,T7,T8>	_Graph;
 	typedef typename _Graph::_edge_type				_edge_type;
+	// C++17: bare dependent names are no longer resolved by delayed parsing.
+	// PUBLIC: a_star_inline reaches _PathManager::const_iterator from outside.
+public:
+	typedef typename _Graph::const_iterator			const_iterator;
+protected:
 
 protected:
 	xr_vector<_edge_type>							*m_edge_path;

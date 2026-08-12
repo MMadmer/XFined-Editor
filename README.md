@@ -54,6 +54,26 @@ capture/mirror reasons), `-bc` (allocation-free breadcrumbs to `bc.txt`),
 modal error box: log a symbolised stack trace, write a minidump, terminate —
 mandatory for unattended runs).
 
+### Toolchain and dependencies
+
+The whole tree builds as **C++17** (`cmake/XRayCommon.cmake`). The 2004-era
+AI templates (A*, action planner, path managers) needed dependent-base name
+bridges and duplicate-default-argument removals to survive conformant two-phase
+lookup — semantics untouched, name lookup only.
+
+Vendored dependencies, deliberately pinned:
+
+* **ImGui 1.88-docking** (`Source/Editors/XrEUI`) — carries local patches
+  (modal helpers, DX11 backend wiring); upgrading is a standalone project with
+  no current payoff.
+* **RedImage + stb_image 2.19** — the editor's image decoding (BC1-7 through
+  ispc_texcomp, TGA/PNG/JPG via stb). Input is trusted local game data.
+* **zlib 1.2.3** (`Source/External/zlib`) — consumed only by the offline level
+  compiler (`XrLCLight`), not by the editor runtime.
+* **DirectXTex/Mesh/Math** — not used: the d3dx9 removal (S7) replaced decode
+  with RedImage and mesh optimisation with a built-in Forsyth implementation,
+  so there is nothing left for them to do.
+
 ### AI integration (MCP)
 
 The editor hosts a local automation endpoint on `127.0.0.1:28016` from the

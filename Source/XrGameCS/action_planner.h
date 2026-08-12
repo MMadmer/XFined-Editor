@@ -53,6 +53,15 @@ public:
 	typedef GraphEngineSpace::CWorldProperty		CWorldProperty;
 	typedef GraphEngineSpace::CWorldState			CWorldState;
 	typedef _world_operator							_world_operator;
+	// C++17 two-phase lookup does not search the dependent base for unqualified
+	// names - every base typedef this class speaks in has to be pulled in
+	typedef typename inherited::COperator			COperator;
+	typedef typename inherited::CConditionEvaluator	CConditionEvaluator;
+	typedef typename inherited::_condition_type		_condition_type;
+	typedef typename inherited::_value_type			_value_type;
+	typedef typename inherited::_edge_type			_edge_type;
+	typedef typename inherited::_operator_ptr		_operator_ptr;
+	typedef typename inherited::_condition_evaluator_ptr _condition_evaluator_ptr;
 
 protected:
 	bool						m_initialized;

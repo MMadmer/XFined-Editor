@@ -66,7 +66,7 @@ set(REDIMAGE "${EXT}/RedImage")
 function(redimage_common target)
     set_target_properties(${target} PROPERTIES
         ARCHIVE_OUTPUT_DIRECTORY "${XRAY_LIB}"
-        CXX_STANDARD 14)
+        CXX_STANDARD 17)
     target_compile_definitions(${target} PRIVATE _ITERATOR_DEBUG_LEVEL=0)
     target_include_directories(${target} PRIVATE "${REDIMAGE}")
     # note: no /Oi here — nvtt's nvmath.h defines log2f inline, which C2169s

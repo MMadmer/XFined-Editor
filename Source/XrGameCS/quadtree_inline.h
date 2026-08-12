@@ -283,7 +283,8 @@ IC	void CSQuadTree::all		(xr_vector<_object_type*> &objects, CQuadNode *node, in
 }
 
 TEMPLATE_SPECIALIZATION
-IC	void CSQuadTree::all		(xr_vector<_object_type*> &objects, bool clear = true) const
+// no default here: quadtree.h declares it, and repeating one is C2572 in C++17
+IC	void CSQuadTree::all		(xr_vector<_object_type*> &objects, bool clear) const
 {
 	if (clear)
 		objects.clear			();

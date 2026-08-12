@@ -51,8 +51,10 @@ function(xray_common target)
         # restores the C++03 functional helpers the modern STL dropped
         $<$<COMPILE_LANGUAGE:CXX>:/FI${XRAY_SOURCE}/xr_msvc_stl_compat.h>
     )
-    # /std:c++14 via the standard property so cmake does not fight us
-    set_target_properties(${target} PROPERTIES CXX_STANDARD 14 CXX_STANDARD_REQUIRED ON)
+    # /std:c++17 via the standard property so cmake does not fight us. The
+    # C++03 helpers the modern STL dropped come back through the force-included
+    # xr_msvc_stl_compat.h above, which is standard-agnostic by design.
+    set_target_properties(${target} PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
     if (XRAY_LTO AND CMAKE_BUILD_TYPE STREQUAL "Release")
         target_compile_options(${target} PRIVATE /GL)

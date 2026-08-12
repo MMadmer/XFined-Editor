@@ -115,6 +115,13 @@ protected:
 		_data_storage_constructor,
 		_iteration_type
 	>											inherited;
+	// C++17 two-phase lookup does not search a dependent base for unqualified
+	// names - the base's typedef has to be pulled in explicitly. PUBLIC, like
+	// the base's own: graph_engine reaches CAStar<...>::CDataStorage from
+	// outside, and a protected redeclaration would hide the public one.
+public:
+	typedef typename inherited::CDataStorage	CDataStorage;
+protected:
 	typedef typename CDataStorage::CGraphVertex CGraphVertex;
 	typedef typename CGraphVertex::_dist_type	_dist_type;
 	typedef typename CGraphVertex::_index_type	_index_type;

@@ -46,6 +46,12 @@ protected:
 		_index_type,
 		_iteration_type
 	> _Parameters;
+	// C++17: the bare name below is no longer found through delayed parsing -
+	// say whose const_iterator it is (the same one evaluate() spells out).
+	// PUBLIC: a_star_inline reaches _PathManager::const_iterator from outside.
+public:
+	typedef _Graph::const_iterator const_iterator;
+protected:
 	typedef typename CPathManagerGeneric <
 				_Graph,
 				_DataStorage,
