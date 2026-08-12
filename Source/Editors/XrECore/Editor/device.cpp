@@ -80,6 +80,8 @@ CEditorRenderDevice::~CEditorRenderDevice(){
 
 //extern void Surface_Init();
 #include "../../../xrAPI/xrAPI.h"
+// the fill mode override lives in the render layer's state manager
+#include "../../../xrRender/DX10/StateManager/dx10StateManager.h"
 #include "../../../xrRender/Private/dxRenderFactory.h"
 #include "../../../xrRender/Private/dxUIRender.h"
 #include "../../../xrRender/Private/dxDebugRender.h"
@@ -512,6 +514,11 @@ void CEditorRenderDevice::ApplyFFConstants()
 {
 	if (g_dx11_no_ffconst)	return;
 	EDevice_PushFFConstants	();
+}
+
+void EDevice_SetFillMode(u32 d3d9_fill)
+{
+	StateManager.OverrideFillMode(d3d9_fill);
 }
 
 void EDevice_PushFFConstants()

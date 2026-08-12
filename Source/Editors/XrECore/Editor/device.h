@@ -49,6 +49,11 @@ struct SEditorFixedFunc
 		ZeroMemory(&material,		sizeof(material));
 	}
 };
+
+// Rasterizer fill mode. A free function, and declared here rather than inside
+// the class, because SetRS() below needs it while the render layer's state
+// manager is not visible from this header.
+ECORE_API void			EDevice_SetFillMode(u32 d3d9_fill);
 #endif
 
 //------------------------------------------------------------------------------
@@ -182,7 +187,13 @@ public:
 	// drawing path consumes it. Callers keep their meaning; only the backend
 	// moved. See SEditorFixedFunc below.
 	IC void					SetRS			(D3DRENDERSTATETYPE p1, u32 p2)
-	{ ff.render_state[u32(p1) & (SEditorFixedFunc::RS_MAX-1)] = p2; }
+	{
+		ff.render_state[u32(p1) & (SEditorFixedFunc::RS_MAX-1)] = p2;
+		// The fill mode is NOT fixed-function state - it is rasterizer state,
+		// and D3D11 still has it. Recording it alone left wireframe/point dead
+		// in the viewport, so forward it to the state manager as well.
+		if (D3DRS_FILLMODE == p1) EDevice_SetFillMode(p2);
+	}
 	IC void					SetSS			(u32 sampler, D3DSAMPLERSTATETYPE type, u32 value)
 	{ if (sampler < SEditorFixedFunc::SAMPLERS) ff.sampler_state[sampler][u32(type) & (SEditorFixedFunc::SS_MAX-1)] = value; }
 

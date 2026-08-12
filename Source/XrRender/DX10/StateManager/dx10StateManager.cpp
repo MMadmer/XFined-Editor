@@ -10,6 +10,11 @@ dx10StateManager	StateManager;
 
 dx10StateManager::dx10StateManager()
 {
+	// Reset() keeps the fill-mode override on purpose, so it has to start from a
+	// known value here - Reset() would otherwise read uninitialised memory.
+	m_bOverrideFillMode		= false;
+	m_OverrideFillModeValue	= D3D_FILL_SOLID;
+
 	//	If dx10StateManager would ever own any object
 	//	implement correct state manager
 	Reset();
@@ -51,6 +56,12 @@ void dx10StateManager::Reset()
 	m_bOverrideScissoring = false;
 	m_bOverrideScissoringValue = FALSE;
    m_uiSampleMask = 0xffffffff;
+
+	// The fill-mode override deliberately survives a reset: it is the editor's
+	// view setting, not device state. Reset() runs from OnFrameBegin, which is
+	// AFTER the frame set the mode - clearing it here left the viewport solid
+	// no matter what View > Fill Mode said.
+	if (m_bOverrideFillMode)	ApplyFillModeOverride();
 }
 
 void dx10StateManager::UnmapConstants()
@@ -71,6 +82,10 @@ void dx10StateManager::SetRasterizerState(ID3DRasterizerState* pRState)
 
 	if (m_bOverrideScissoring)
 		EnableScissoring(m_bOverrideScissoringValue);
+	// the pass just brought its own rasterizer state, which is solid-fill for
+	// everything - put the editor's fill mode back on top of it
+	if (m_bOverrideFillMode)
+		ApplyFillModeOverride();
 }
 
 void dx10StateManager::SetDepthStencilState(ID3DDepthStencilState* pDSState)
@@ -402,6 +417,41 @@ void dx10StateManager::EnableScissoring(BOOL bEnable)
 		m_bRSChanged = true;
 		m_RDesc.ScissorEnable = bEnable;
 	}
+}
+
+void dx10StateManager::ApplyFillModeOverride()
+{
+	ValidateRDesc();
+
+	if (m_RDesc.FillMode != m_OverrideFillModeValue)
+	{
+		m_bRSChanged		= true;
+		m_RDesc.FillMode	= m_OverrideFillModeValue;
+	}
+}
+
+void dx10StateManager::OverrideFillMode(u32 d3d9_fill)
+{
+	const bool want = (D3DFILL_SOLID != d3d9_fill);
+	// solid is the normal case and must cost nothing: bail before touching the
+	// description when there is neither an override to install nor one to lift
+	if (!want && !m_bOverrideFillMode)	return;
+
+	if (!want)
+	{
+		// hand the rasterizer back to whatever the pass had asked for
+		m_bOverrideFillMode	= false;
+		m_bRSChanged		= false;
+		m_bRDInvalid		= true;
+		m_bRSNeedApply		= true;
+		return;
+	}
+
+	m_bOverrideFillMode		= true;
+	// D3D11 dropped point fill - wireframe is the closest thing that still
+	// shows the topology, and the editor's "point" mode is a curiosity anyway
+	m_OverrideFillModeValue	= D3D_FILL_WIREFRAME;
+	ApplyFillModeOverride();
 }
 
 void dx10StateManager::OverrideScissoring(bool bOverride, BOOL bValue)

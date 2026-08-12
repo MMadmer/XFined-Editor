@@ -47,8 +47,16 @@ public:
 	//	Functions which override value even if new state was set up.
 	//	Reset value to current state's value if override is disabled.
 	void	OverrideScissoring(bool bOverride = true, BOOL bValue = TRUE);
+	// The editor's fill mode is a device-wide switch (View > Fill Mode, and the
+	// view_mode command), but under D3D11 every shader pass brings its own
+	// prebuilt rasterizer state - so the override has to be re-applied on top of
+	// whatever the pass just set, exactly like the scissoring one above.
+	// Takes a D3DFILL_* value; D3D11 has no point fill, so point draws as
+	// wireframe. Solid clears the override, which is the free path.
+	void	OverrideFillMode(u32 d3d9_fill);
 
 private:
+	void	ApplyFillModeOverride();
 	void	ValidateRDesc();
 	void	ValidateDSDesc();
 	void	ValidateBDesc();
@@ -90,6 +98,8 @@ private:
 
 	bool						m_bOverrideScissoring;
 	BOOL						m_bOverrideScissoringValue;
+	bool						m_bOverrideFillMode;
+	D3D_FILL_MODE				m_OverrideFillModeValue;
    UINT                 m_uiSampleMask;
 };
 
