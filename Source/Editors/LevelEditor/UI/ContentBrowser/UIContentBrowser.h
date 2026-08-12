@@ -41,6 +41,12 @@ public:
 	static bool		RevealAsset			(LPCSTR name, int source, bool open_viewer, xr_string& err);
 	// MCP: what is selected right now, and in which source/folder
 	static void		GetSelection		(int& source, xr_string& folder, xr_vector<xr_string>& sel);
+	// MCP: copy items - or a whole folder, subfolders included - out of a
+	// read-only source into the project. Unlike the menu this never prompts;
+	// `overwrite` decides. `names` is a ';'-separated list and may be empty when
+	// `folder` is given. source/category of -1 keep whatever the browser is on.
+	static bool		McpCopyToProject	(LPCSTR names, LPCSTR folder, int source, int category,
+										 bool overwrite, int& files, xr_string& err);
 
 	// asset categories, shared with the MCP asset commands
 	static int		CategoryCount		();
@@ -103,6 +109,10 @@ private:
 	// where an item lives decides how it is fetched on paste.
 	xr_vector<xr_string>			m_Clipboard;
 	int								m_ClipSource;
+	// ...and the category it was copied from: an Editor Content name is only
+	// resolvable against the aliases of ITS category, and the user is free to
+	// switch categories between the copy and the paste
+	u32								m_ClipCategory;
 
 	// DARF source state
 	bool							m_DarfReady;	// mounted and browsable
@@ -147,6 +157,17 @@ private:
 	void			RequestCopy			(LPCSTR rel);
 	void			CopySelection		();
 	void			DrawCopyConfirm		();
+	// Editor Content -> project. The item is a library reference, so the files
+	// behind it are resolved through the fs.ltx aliases first; see LibFilesFor.
+	// Returns how many files actually landed.
+	int				CopyLibraryItem		(u32 category, LPCSTR ref, bool overwrite, xr_string& err);
+	// copies every item of a folder, subfolders included, out of whichever
+	// read-only source is open. Both trees are flat lists of full names, so
+	// "recursive" is just CollectItems with recursive=true.
+	void			CopyFolderToProject	(LPCSTR path);
+	// the copy itself, with no UI attached: what both the menu and MCP run
+	int				CopyRefsToProject	(u32 category, const xr_vector<xr_string>& names,
+										 bool overwrite, xr_string& err);
 
 	// clipboard
 	void			ClipboardCopy		();

@@ -2,6 +2,7 @@
 #include "..\..\..\XrECore\Editor\EditorGameContent.h"
 #include "..\..\..\XrECore\Editor\EThumbnailVisual.h"
 #include "..\..\..\XrECore\Editor\EDX11Utils.h"
+#include "..\..\..\XrECore\Editor\EditorFileOps.h"
 
 // image formats the thumbnail path can decode directly
 static bool IsImageExt(LPCSTR name)
@@ -63,6 +64,44 @@ static const SCategory kCategories[] =
 };
 static const int kCategoryCount = sizeof(kCategories)/sizeof(kCategories[0]);
 
+// Which files back an "Editor Content" item, per category. An item there is a
+// library REFERENCE without an extension, so copying one into the project means
+// resolving it against the fs.ltx aliases first. More than one entry per row is
+// normal and wanted: a texture is only useful in a mod with its .thm beside it,
+// and the uncompressed source is worth taking when it is there.
+struct SLibFile { LPCSTR alias; LPCSTR ext; };
+static const SLibFile kLibObject[]	= { { "$objects$",		".object"	} };
+static const SLibFile kLibGroup[]	= { { "$groups$",		".group"	} };
+static const SLibFile kLibVisual[]	= { { "$game_meshes$",	".ogf"		},
+										{ "$game_meshes$",	".omf"		} };
+static const SLibFile kLibTexture[]	= { { "$game_textures$",".dds"		},
+										{ "$textures$",		".thm"		},
+										{ "$textures$",		".tga"		} };
+static const SLibFile kLibSound[]	= { { "$game_sounds$",	".ogg"		},
+										{ "$sounds$",		".thm"		},
+										{ "$sounds$",		".wav"		} };
+static const SLibFile kLibLevel[]	= { { "$maps$",			".level"	} };
+
+static const SLibFile* LibFilesFor(u32 category, int& count)
+{
+#define LIB_ROW(v)	do { count = sizeof(v)/sizeof(v[0]); return v; } while(0)
+	if (category == kLevelsCategoryId)	LIB_ROW(kLibLevel);
+	switch (category)
+	{
+	case smObject:		LIB_ROW(kLibObject);
+	case smGroup:		LIB_ROW(kLibGroup);
+	case smVisual:		LIB_ROW(kLibVisual);
+	case smTexture:
+	case smTextureRaw:	LIB_ROW(kLibTexture);
+	case smSoundSource:	LIB_ROW(kLibSound);
+	}
+#undef LIB_ROW
+	// particles, light animations and entity types live inside one shared file
+	// each - there is no per-item file to hand over
+	count = 0;
+	return 0;
+}
+
 // keep at most this many live thumbnail textures
 static const u32 kThumbBudget = 512;
 // DARF only: a game install holds six figures of files, so one frame may
@@ -79,6 +118,7 @@ UIContentBrowser::UIContentBrowser()
 	m_TileSize		= 96.f;
 	m_Tick			= 0;
 	m_ClipSource	= -1;
+	m_ClipCategory	= u32(-1);
 	m_Marquee		= false;
 	m_MarqueeStart	= ImVec2(0, 0);
 	// preferences may not exist yet when the browser is constructed at startup
@@ -191,9 +231,15 @@ void UIContentBrowser::Refresh()
 
 	if (m_Source == 0)
 	{
-		// project Content folder: plain disk scan, names are relative paths
+		// The project's own content, scanned off disk. Both roots are listed:
+		// gamedata is what the engine loads, rawdata what the editor compiles
+		// from - and the copiers write into either depending on the asset, so
+		// showing only one of them hid half of what had just been copied in.
 		if (EditorProject::Active())
-			ScanContentDir(EditorProject::Root(), "Content", m_Items);
+		{
+			ScanContentDir(EditorProject::Root(), "gamedata", m_Items);
+			ScanContentDir(EditorProject::Root(), "rawdata",  m_Items);
+		}
 		m_Root.name = "Content";
 	}
 	else if (m_Source == 2)
@@ -796,18 +842,17 @@ void UIContentBrowser::DrawItemContextMenu(LPCSTR full)
 
 	if (ImGui::MenuItem("Open")) OpenAsset(full);
 
-	if (IsGameSource())
+	if (IsReadOnlySource())
 	{
-		if (ImGui::MenuItem(count > 1 ? "Copy selection to project" : "Copy to project"))
+		int n = 0;
+		// Editor Content items are library refs; a category with no file of its
+		// own (particles, light anims) has nothing to hand over
+		const bool copyable = IsGameSource() || !!LibFilesFor(kCategories[m_Category].id, n);
+		if (ImGui::MenuItem(count > 1 ? "Copy selection to project" : "Copy to project",
+							"", false, copyable) && copyable)
 			CopySelection();
-	}
-	else if (m_Source == 1)
-	{
-		// Editor Content is read-only too, but its items are library refs
-		// rather than files under a root the copier understands
-		ImGui::MenuItem("Copy to project", "", false, false);
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("not wired up yet for Editor Content");
+		if (!copyable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("this category lives inside one shared library file - there is no per-item file to copy");
 	}
 
 	string_path ref;
@@ -874,9 +919,17 @@ void UIContentBrowser::DrawFolderContextMenu(LPCSTR path)
 	}
 
 	ImGui::Separator();
-	ImGui::MenuItem("Copy folder to project", "", false, false);
-	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-		ImGui::SetTooltip("recursive folder copy is not implemented yet - use \"Select contents\" and copy the items");
+	{
+		int n = 0;
+		const bool copyable = IsReadOnlySource() &&
+			(IsGameSource() || !!LibFilesFor(kCategories[m_Category].id, n));
+		if (ImGui::MenuItem("Copy folder to project (recursive)", "", false, copyable) && copyable)
+			CopyFolderToProject(path);
+		if (!copyable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip(IsReadOnlySource()
+				? "this category lives inside one shared library file - there is no per-item file to copy"
+				: "this is the project's own Content - it is already here");
+	}
 
 	if (ImGui::MenuItem("Copy path")) ImGui::SetClipboardText(path);
 
@@ -934,6 +987,71 @@ void UIContentBrowser::GetSelection(int& source, xr_string& folder, xr_vector<xr
 	folder = Form ? Form->m_CurFolder : xr_string("");
 	sel.clear();
 	if (Form) sel = Form->m_Selection;
+}
+
+bool UIContentBrowser::McpCopyToProject(LPCSTR names, LPCSTR folder, int source, int category,
+										bool overwrite, int& files, xr_string& err)
+{
+	files	= 0;
+	err		= "";
+
+	if (!Form) Form = xr_new<UIContentBrowser>();
+
+	if (source >= 0 && source != Form->m_Source)	Form->SwitchSource(source);
+	if (category >= 0)
+	{
+		if (category >= kCategoryCount)	{ err = "unknown category"; return false; }
+		if (u32(category) != Form->m_Category)
+		{
+			Form->m_Category	= u32(category);
+			Form->m_CurFolder	= "";
+			Form->m_NeedRefresh	= true;
+		}
+	}
+	if (Form->m_Source == 0)	{ err = "the project's own Content is a destination, not a source"; return false; }
+
+	// the listing has to be current: the tree is what turns a folder into the
+	// set of items under it, and a source switch leaves it stale
+	if (Form->m_NeedRefresh) Form->Refresh();
+
+	xr_vector<xr_string> list;
+	if (folder && folder[0])
+	{
+		string_path norm;
+		xr_strcpy	(norm, sizeof(norm), folder);
+		for (char* p = norm; *p; ++p) if ('/' == *p) *p = '\\';
+
+		SFolder* f = Form->FindFolder(norm);
+		if (!f)	{ err = "no such folder in this source"; return false; }
+
+		xr_vector<int> ids;
+		Form->CollectItems(*f, ids, true);
+		list.reserve(ids.size());
+		for (u32 i = 0; i < ids.size(); ++i)
+			list.push_back(Form->m_Items[ids[i]].name.c_str());
+	}
+	else if (names && names[0])
+	{
+		// ';'-separated, same convention the file-op commands use
+		string_path buf;
+		xr_strcpy	(buf, sizeof(buf), names);
+		for (char* cursor = buf; cursor && *cursor;)
+		{
+			char* sep = strchr(cursor, ';');
+			if (sep) *sep = 0;
+			while (' ' == *cursor) ++cursor;
+			for (char* e = cursor + xr_strlen(cursor); e > cursor && ' ' == e[-1];) *--e = 0;
+			for (char* p = cursor; *p; ++p) if ('/' == *p) *p = '\\';
+			if (*cursor) list.push_back(cursor);
+			cursor = sep ? sep + 1 : 0;
+		}
+	}
+
+	if (list.empty())	{ err = "nothing to copy - pass 'names' or 'folder'"; return false; }
+
+	files = Form->CopyRefsToProject(kCategories[Form->m_Category].id, list, overwrite, err);
+	Form->m_NeedRefresh = true;
+	return err.empty();
 }
 
 //------------------------------------------------------------------------------
@@ -1071,6 +1189,7 @@ void UIContentBrowser::ClipboardCopy()
 	if (m_Selection.empty()) return;
 	m_Clipboard		= m_Selection;
 	m_ClipSource	= m_Source;
+	m_ClipCategory	= kCategories[m_Category].id;
 	ELog.Msg(mtInformation, "Copied %d item(s).", int(m_Clipboard.size()));
 }
 
@@ -1078,7 +1197,12 @@ bool UIContentBrowser::CanPaste() const
 {
 	if (m_Clipboard.empty())		return false;
 	if (m_Source != 0)				return false;	// destination must be writable
-	if (m_ClipSource != 2)			return false;	// only the game copier exists so far
+	if (m_ClipSource == 0)			return false;	// project -> project is a move, not this
+	if (m_ClipSource == 1)
+	{
+		int n = 0;
+		return !!LibFilesFor(m_ClipCategory, n);
+	}
 	return true;
 }
 
@@ -1086,7 +1210,13 @@ LPCSTR UIContentBrowser::PasteBlockedReason() const
 {
 	if (m_Clipboard.empty())	return "clipboard is empty";
 	if (m_Source != 0)			return "paste only into the project's Content - this source is read-only";
-	if (m_ClipSource != 2)		return "copying out of Editor Content is not wired up yet";
+	if (m_ClipSource == 0)		return "these items are already in the project";
+	if (m_ClipSource == 1)
+	{
+		int n = 0;
+		if (!LibFilesFor(m_ClipCategory, n))
+			return "that category lives inside one shared library file - there is no per-item file to copy";
+	}
 	return "";
 }
 
@@ -1094,13 +1224,31 @@ void UIContentBrowser::ClipboardPaste()
 {
 	if (!CanPaste()) return;
 
-	// CopyToProject mirrors the item's own relative path under the project's
-	// gamedata, so the paste lands where the engine expects to find it rather
-	// than in whatever folder happens to be open.
-	for (u32 i = 0; i < m_Clipboard.size(); ++i)
+	// Both copiers mirror the item's own location - the game one under the
+	// project's gamedata, the library one under whichever root fs.ltx puts that
+	// alias in. The paste lands where the engine expects to find it rather than
+	// in whatever folder happens to be open, which is what a mod needs.
+	if (m_ClipSource == 1)
 	{
-		if (m_WantOverwrite) break;		// a conflict popup owns the rest
-		RequestCopy(m_Clipboard[i].c_str());
+		int files = 0, failed = 0;
+		xr_string last_err;
+		for (u32 i = 0; i < m_Clipboard.size(); ++i)
+		{
+			xr_string err;
+			files += CopyLibraryItem(m_ClipCategory, m_Clipboard[i].c_str(), true, err);
+			if (!err.empty())	{ ++failed; last_err = err; }
+		}
+		if (failed)	ELog.DlgMsg(mtError, "Pasted %d file(s); %d item(s) failed - %s",
+								files, failed, last_err.c_str());
+		else		ELog.Msg(mtInformation, "Pasted %d file(s).", files);
+	}
+	else
+	{
+		for (u32 i = 0; i < m_Clipboard.size(); ++i)
+		{
+			if (m_WantOverwrite) break;		// a conflict popup owns the rest
+			RequestCopy(m_Clipboard[i].c_str());
+		}
 	}
 	m_NeedRefresh = true;
 }
@@ -1155,25 +1303,131 @@ void UIContentBrowser::DrawGridContextMenu()
 	ImGui::EndPopup();
 }
 
+int UIContentBrowser::CopyLibraryItem(u32 category, LPCSTR ref, bool overwrite, xr_string& err)
+{
+	err = "";
+
+	int n = 0;
+	const SLibFile* files = LibFilesFor(category, n);
+	if (!files || !n)
+	{
+		err = "this category has no file of its own - it lives inside a shared library file";
+		return 0;
+	}
+
+	string_path base;
+	xr_strcpy	(base, sizeof(base), ref);
+	// library references come without an extension, but a search result or a
+	// hand-typed name may carry one - strip it so the probes below own the ext
+	if (char* dot = strrchr(base, '.'))
+		if (!strchr(dot, '\\')) *dot = 0;
+
+	EditorFileOps::SReport rep;
+	int hits = 0;
+	for (int i = 0; i < n; ++i)
+	{
+		string_path rel;
+		xr_sprintf	(rel, sizeof(rel), "%s%s", base, files[i].ext);
+		if (EditorFileOps::CopyLibraryFile(files[i].alias, rel, overwrite, rep))
+			++hits;
+	}
+
+	if (!hits)								err = "no file behind this reference";
+	else if (!rep.ok() && !rep.failures.empty())	err = rep.failures[0].reason;
+	return rep.files;
+}
+
 void UIContentBrowser::CopySelection()
 {
-	if (!IsGameSource())
-	{
-		// Editor Content items are library references, not files with a path
-		// under the game root, so the DARF copier cannot take them yet.
-		ELog.DlgMsg(mtInformation,
-			"Copying from Editor Content is not wired up yet - use DARF Content for now.");
-		return;
-	}
 	if (m_Selection.empty())	return;
 
-	// one confirmation per run: RequestCopy queues the first conflict and the
-	// popup drives the rest on the next frames
-	for (u32 i = 0; i < m_Selection.size(); ++i)
+	if (IsGameSource())
 	{
-		if (m_WantOverwrite)	break;
-		RequestCopy(m_Selection[i].c_str());
+		// one confirmation per run: RequestCopy queues the first conflict and the
+		// popup drives the rest on the next frames
+		for (u32 i = 0; i < m_Selection.size(); ++i)
+		{
+			if (m_WantOverwrite)	break;
+			RequestCopy(m_Selection[i].c_str());
+		}
+		return;
 	}
+
+	if (m_Source != 1)	return;		// the project's own Content is a target, not a source
+
+	// Editor Content overwrites outright. Unlike the game install this library
+	// is the editor's own, and the project holds a fresh mirror of whatever was
+	// pulled into it - a per-file prompt while copying a folder full of props
+	// would be unusable, and the report below says exactly what was written.
+	xr_string err;
+	const int files = CopyRefsToProject(kCategories[m_Category].id, m_Selection, true, err);
+
+	m_NeedRefresh = true;
+	if (!err.empty())	ELog.DlgMsg(mtError, "Copied %d file(s), with failures - %s", files, err.c_str());
+	else				ELog.Msg(mtInformation, "Copied %d file(s) into the project.", files);
+}
+
+int UIContentBrowser::CopyRefsToProject(u32 category, const xr_vector<xr_string>& names,
+										bool overwrite, xr_string& err)
+{
+	err = "";
+
+	int files = 0, failed = 0;
+	xr_string last_err;
+	for (u32 i = 0; i < names.size(); ++i)
+	{
+		xr_string one;
+		if (m_Source == 2)
+		{
+			// the game install keeps its own copier: the source may be a file
+			// inside an archive, which only that one can read
+			string_path target = {};
+			bool existed = false;
+			if (EditorGameContent::CopyToProject(names[i].c_str(), overwrite, target, existed, one))
+				++files;
+			else if (existed && !overwrite)
+				one = "already exists (pass overwrite)";
+			if (!one.empty())	{ ++failed; last_err = one; }
+		}
+		else
+		{
+			files += CopyLibraryItem(category, names[i].c_str(), overwrite, one);
+			if (!one.empty())	{ ++failed; last_err = one; }
+		}
+	}
+
+	if (failed)
+	{
+		char head[128];
+		sprintf_s(head, sizeof(head), "%d item(s) failed, first: ", failed);
+		err  = head;
+		err += last_err;
+	}
+	return files;
+}
+
+void UIContentBrowser::CopyFolderToProject(LPCSTR path)
+{
+	SFolder* f = FindFolder(path);
+	if (!f)	return;
+
+	xr_vector<int> ids;
+	CollectItems(*f, ids, true);
+	if (ids.empty())
+	{
+		ELog.Msg(mtInformation, "'%s' holds no items.", path);
+		return;
+	}
+
+	// route through the selection copier so both read-only sources keep one
+	// code path, the game install's overwrite prompt included
+	xr_vector<xr_string> saved;	saved.swap(m_Selection);
+	m_Selection.reserve(ids.size());
+	for (u32 i = 0; i < ids.size(); ++i)
+		m_Selection.push_back(m_Items[ids[i]].name.c_str());
+
+	CopySelection();
+	m_Selection.swap(saved);
 }
 
 void UIContentBrowser::RequestCopy(LPCSTR rel)

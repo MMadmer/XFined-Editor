@@ -359,6 +359,25 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "xfined_content_browser_copy",
+        "description": "Copy assets out of a READ-ONLY source (Editor Content = the shared SDK library, or DARF "
+                       "Content = the linked game install) into the open project. Pass 'names' (';'-separated, as "
+                       "returned by list_assets / darf_list) for individual items, or 'folder' to take everything "
+                       "under it including subfolders. Each asset lands where the engine expects it: an Editor "
+                       "Content object goes to <project>/rawdata/objects/..., a mesh to <project>/gamedata/meshes/..., "
+                       "and a texture brings its .thm along. Never prompts - 'overwrite' decides (default true).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "names": {"type": "string", "description": "';'-separated asset names from list_assets / darf_list"},
+                "folder": {"type": "string", "description": "copy this folder recursively instead of individual names"},
+                "source": {"type": "string", "enum": ["editor", "darf"], "description": "omit to use the current tab"},
+                "category": {"type": "string", "description": "Editor Content category caption, e.g. 'Objects' (omit to use the current one)"},
+                "overwrite": {"type": "boolean", "description": "replace files already in the project (default true)"},
+            },
+        },
+    },
+    {
         "name": "xfined_scene_stats",
         "description": "scene_info plus selection count and camera position/rotation in one call.",
         "inputSchema": {"type": "object", "properties": {}},
@@ -615,6 +634,7 @@ CMD_MAP = {
     "xfined_content_delete": "content_delete",
     "xfined_content_browser_open": "content_browser_open",
     "xfined_content_browser_selection": "content_browser_selection",
+    "xfined_content_browser_copy": "content_browser_copy",
     "xfined_scene_stats": "scene_stats",
     "xfined_camera_get": "camera_get",
     "xfined_camera_set": "camera_set",

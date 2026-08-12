@@ -1441,6 +1441,61 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
         return true;
     }
 
+    // pull assets out of a read-only source into the project: the scriptable
+    // twin of "Copy to project" / "Copy folder to project" in the browser menu
+    if (0 == xr_strcmp(cmd, "content_browser_copy"))
+    {
+        char names[4096] = {}, folder[512] = {}, cat[64] = {};
+        XFinedMCP::GetArg(raw, "names",  names,  sizeof(names));
+        XFinedMCP::GetArg(raw, "folder", folder, sizeof(folder));
+        XFinedMCP::GetArg(raw, "category", cat,  sizeof(cat));
+        // GetArg hands over the raw JSON value, so an escaped "a\\b" arrives
+        // with both slashes - the browser compares names exactly
+        for (char* buf : { names, folder })
+        {
+            for (char* p = buf; *p; ++p) if (*p == '/') *p = '\\';
+            char* w = buf;
+            for (const char* r = buf; *r; ++r)
+                if (!(*r == '\\' && w > buf && w[-1] == '\\')) *w++ = *r;
+            *w = 0;
+        }
+
+        int src = -1;
+        if (!ParseBrowserSource(raw, src))
+        {
+            out = "{\"ok\":false,\"error\":\"source must be project, editor, darf or 0/1/2\"}";
+            return true;
+        }
+
+        int category = -1;
+        if (cat[0])
+        {
+            category = UIContentBrowser::FindCategory(cat);
+            if (category < 0)
+            {
+                out = "{\"ok\":false,\"error\":\"unknown category (see list_assets)\"}";
+                return true;
+            }
+        }
+
+        int files = 0;
+        xr_string err;
+        const bool ok = UIContentBrowser::McpCopyToProject(
+            names, folder, src, category, GetArgBool(raw, "overwrite", true), files, err);
+
+        char head[96];
+        sprintf_s(head, sizeof(head), "{\"ok\":%s,\"files\":%d", ok ? "true" : "false", files);
+        out = head;
+        if (!err.empty())
+        {
+            out += ",\"error\":\"";
+            out += JsonEscapePath(err.c_str());
+            out += "\"";
+        }
+        out += "}";
+        return true;
+    }
+
     if (0 == xr_strcmp(cmd, "content_browser_selection"))
     {
         int src = -1;

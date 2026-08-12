@@ -462,6 +462,73 @@ static bool CopyFromGameArchive(LPCSTR src, LPCSTR dst_dir, bool overwrite, Edit
 	return true;
 }
 
+//------------------------------------------------------------------------------
+// shared SDK library -> project
+//------------------------------------------------------------------------------
+bool EditorFileOps::ProjectMirrorDir(LPCSTR fs_alias, LPCSTR rel, string_path& out, xr_string& err)
+{
+	out[0]	= 0;
+	err		= "";
+
+	if (!EditorProject::Active())		{ err = "no project is open";		return false; }
+
+	FS_Path* P = FS.get_path(fs_alias);
+	FS_Path* R = FS.get_path("$sdk_root$");
+	if (!P || !P->m_Path)				{ err = "unknown fs alias";			return false; }
+	if (!R || !R->m_Path)				{ err = "no sdk root";				return false; }
+
+	// the alias must actually sit below the SDK root, or there is no tail to
+	// mirror and we would be guessing at a destination
+	const size_t root_len = xr_strlen(R->m_Path);
+	if (0 != _strnicmp(P->m_Path, R->m_Path, root_len))
+										{ err = "alias is outside the sdk root"; return false; }
+
+	LPCSTR tail = P->m_Path + root_len;
+	while ('\\' == *tail || '/' == *tail) ++tail;
+
+	string_path acc;
+	xr_sprintf	(acc, sizeof(acc), "%s\\%s", EditorProject::Root(), tail);
+
+	// carry the item's own folders across, so statics\barrel\x.object keeps
+	// landing in ...\objects\statics\barrel
+	string_path sub;
+	xr_strcpy	(sub, sizeof(sub), rel ? rel : "");
+	for (char* p = sub; *p; ++p) if ('/' == *p) *p = '\\';
+	if (char* cut = strrchr(sub, '\\'))
+	{
+		*cut = 0;
+		if (sub[0])
+		{
+			if (acc[0] && '\\' != acc[xr_strlen(acc)-1])	xr_strcat(acc, sizeof(acc), "\\");
+			xr_strcat(acc, sizeof(acc), sub);
+		}
+	}
+
+	// ResolveInProject also proves the result really is inside the project -
+	// the tail comes from fs.ltx, which is not ours to trust blindly
+	return ResolveInProject(acc, out, err);
+}
+
+bool EditorFileOps::CopyLibraryFile(LPCSTR fs_alias, LPCSTR rel, bool overwrite, SReport& rep)
+{
+	if (!rel || !rel[0])	return false;
+
+	string_path src;
+	FS.update_path	(src, fs_alias, rel);
+	if (!FileExists(src))	return false;		// probing a companion that is not there
+
+	string_path dst_dir;
+	xr_string	err;
+	if (!ProjectMirrorDir(fs_alias, rel, dst_dir, err))
+	{
+		Fail(rep, rel, err);
+		return true;		// the file existed - this is a real failure, not a miss
+	}
+
+	Copy(src, dst_dir, false, overwrite, rep);
+	return true;
+}
+
 void EditorFileOps::Copy(LPCSTR src, LPCSTR dst_dir, bool recursive, bool overwrite, SReport& rep)
 {
 	xr_string err;

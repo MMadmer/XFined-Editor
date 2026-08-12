@@ -55,6 +55,19 @@ namespace EditorFileOps
 	ECORE_API void	Move	(LPCSTR src, LPCSTR dst_dir, bool recursive, bool overwrite, SReport& rep);
 	ECORE_API void	Delete	(LPCSTR path, bool recursive, SReport& rep);
 
+	// Where a file living under `fs_alias` belongs once it is inside the project.
+	// fs.ltx builds every alias below the SDK root, so the tail of that root is
+	// what gets mirrored: $objects$ -> <project>\rawdata\objects,
+	// $game_meshes$ -> <project>\gamedata\meshes. `rel` contributes its folder
+	// part, so the asset keeps its place in the tree.
+	ECORE_API bool	ProjectMirrorDir(LPCSTR fs_alias, LPCSTR rel, string_path& out, xr_string& err);
+	// Copies one file out of the shared SDK library (the "Editor Content" source)
+	// into the project, at the mirrored location above. Returns false when the
+	// source is simply absent, which is the normal answer while probing optional
+	// companions (a .thm beside a texture, the .omf beside an .ogf) - only real
+	// errors are recorded in the report.
+	ECORE_API bool	CopyLibraryFile	(LPCSTR fs_alias, LPCSTR rel, bool overwrite, SReport& rep);
+
 	// MCP command handlers: fill the whole JSON response; raw = request line.
 	// 'src' / 'path' accept a ';'-separated list.
 	ECORE_API void	McpCopy		(LPCSTR raw, xr_string& out);
