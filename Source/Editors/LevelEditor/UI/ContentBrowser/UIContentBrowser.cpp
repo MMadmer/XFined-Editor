@@ -45,9 +45,13 @@ void UIContentBrowser::SetVisualPreview(TShowVisual by_name, TShowVisualMem from
 // Categories exposed by the browser. Ids come straight from EChooseMode, so the
 // fill/thumbnail delegates registered in FillChooseEvents are reused verbatim.
 struct SCategory { u32 id; LPCSTR caption; bool placeable; };
+// Levels have no EChooseMode - they are scenes, not library assets - so they get
+// a sentinel id the browser special-cases when filling and when opening.
+static const u32 kLevelsCategoryId = u32(-2);
 static const SCategory kCategories[] =
 {
 	{ smObject,		"Objects",		true  },
+	{ kLevelsCategoryId, "Levels",	false },
 	{ smGroup,		"Groups",		false },
 	{ smVisual,		"Visuals",		false },
 	{ smTexture,	"Textures",		false },
@@ -75,6 +79,8 @@ UIContentBrowser::UIContentBrowser()
 	m_TileSize		= 96.f;
 	m_Tick			= 0;
 	m_ClipSource	= -1;
+	m_Marquee		= false;
+	m_MarqueeStart	= ImVec2(0, 0);
 	// preferences may not exist yet when the browser is constructed at startup
 	if (CLevelPreferences* prefs = dynamic_cast<CLevelPreferences*>(EPrefs))
 		m_TreeWidth	= float(prefs->ContentBrowserTreeWidth);
@@ -209,6 +215,19 @@ void UIContentBrowser::Refresh()
 			m_DarfStatus  = "DARF Content is unavailable: ";
 			m_DarfStatus += err;
 			m_DarfStatus += ".";
+		}
+	}
+	else if (kCategories[m_Category].id == kLevelsCategoryId)
+	{
+		// Levels are editor scenes, not library assets - they have no entry in
+		// the choose-event table, so they are listed straight off the maps root.
+		m_Root.name = "Editor Content";
+		FS_FileSet lst;
+		if (FS.file_list(lst, _maps_, FS_ListFiles | FS_ClampExt, "*.level"))
+		{
+			FS_FileSetIt it = lst.begin(), e = lst.end();
+			for (; it != e; ++it)
+				m_Items.push_back(SChooseItem(it->name.c_str(), ""));
 		}
 	}
 	else
@@ -482,8 +501,21 @@ void UIContentBrowser::OpenAsset(LPCSTR name)
 {
 	if (!name || !name[0]) return;
 
+	// A level IS the scene: opening one loads it, which is the one case where
+	// the double-click legitimately changes what the editor is working on.
+	// COMMAND_LOAD asks about unsaved changes itself.
+	if (m_Source == 1 && kCategories[m_Category].id == kLevelsCategoryId)
+	{
+		ExecCommand(COMMAND_LOAD, xr_string(name));
+		return;
+	}
+
+	// Library objects (.object) are previewable too - the preview window loads
+	// them through CEditableObject when the model pool has nothing under that
+	// name. Without this the most-used category in the browser opened nothing.
 	const bool is_model = IsVisualExt(name) ||
-						  (m_Source == 1 && kCategories[m_Category].id == smVisual);
+						  (m_Source == 1 && (kCategories[m_Category].id == smVisual ||
+											 kCategories[m_Category].id == smObject));
 	if (is_model && (s_ShowVisual || s_ShowVisualMem))
 	{
 		if (m_Source == 2 && s_ShowVisualMem)
@@ -540,8 +572,10 @@ void UIContentBrowser::DrawTiles()
 	if (!cur) cur = &m_Root;
 
 	// rebuilt every frame: a Shift-range means "everything between these two in
-	// the order they are on screen", which only this pass knows
+	// the order they are on screen", which only this pass knows. The rects go
+	// with it, for the rubber-band.
 	m_DrawnOrder.clear();
+	m_DrawnRects.clear();
 
 	xr_vector<int> ids;
 	// with an active search the whole subtree is scanned, otherwise just this folder
@@ -564,14 +598,18 @@ void UIContentBrowser::DrawTiles()
 		{
 			// step out: the parent path is everything before the last separator
 			ImGui::PushID("##cb_up");
-			if (ImGui::Button("..", ImVec2(m_TileSize + 8.f, m_TileSize + 8.f)))
+			ImGui::Button("..", ImVec2(m_TileSize + 8.f, m_TileSize + 8.f));
+			// double click, same as every other folder tile - a single click
+			// here navigated while clicking a folder did not, which is worse
+			// than either rule on its own
+			if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 			{
 				LPCSTR cut = strrchr(m_CurFolder.c_str(), '\\');
 				if (cut)	m_CurFolder.erase(size_t(cut - m_CurFolder.c_str()));
 				else		m_CurFolder.clear();
 				ClearSelection();
 			}
-			if (ImGui::IsItemHovered()) ImGui::SetTooltip("up one folder");
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("up one folder (double click)");
 			ImGui::PopID();
 			drawn++;
 		}
@@ -628,16 +666,37 @@ void UIContentBrowser::DrawTiles()
 
 		// the grid order is what a Shift-range means by "everything between"
 		m_DrawnOrder.push_back(full);
+		const u32 tile_slot = u32(m_DrawnRects.size());
+		m_DrawnRects.push_back(ImVec4(0, 0, 0, 0));	// filled right after the widget
 
 		ImTextureID tex	= GetThumb(full);
 		const bool sel	= IsSelected(full);
-		if (sel) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
 
 		bool clicked;
 		if (tex)	clicked = ImGui::ImageButton(tex, ImVec2(m_TileSize, m_TileSize));
 		else		clicked = ImGui::Button(leaf, ImVec2(m_TileSize + 8.f, m_TileSize + 8.f));
 
-		if (sel) ImGui::PopStyleColor();
+		{
+			const ImVec2 ra = ImGui::GetItemRectMin();
+			const ImVec2 rb = ImGui::GetItemRectMax();
+			m_DrawnRects[tile_slot] = ImVec4(ra.x, ra.y, rb.x, rb.y);
+		}
+
+		// Selection has to be visible ON the thumbnail: tinting ImGuiCol_Button
+		// only colours the few pixels of frame the image does not cover, which
+		// is why selecting looked like nothing happened. Unreal draws a wash
+		// plus a bright border over the tile - same here, on the foreground
+		// draw list so it lands above the image.
+		if (sel)
+		{
+			const ImVec2	a	= ImGui::GetItemRectMin();
+			const ImVec2	b	= ImGui::GetItemRectMax();
+			ImDrawList*		dl	= ImGui::GetWindowDrawList();
+			const ImVec4	hl	= ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive);
+			dl->AddRectFilled(a, b, ImGui::GetColorU32(ImVec4(hl.x, hl.y, hl.z, 0.35f)), 3.f);
+			dl->AddRect      (a, b, ImGui::GetColorU32(ImVec4(0.30f, 0.65f, 1.00f, 1.f)), 3.f, 0, 2.5f);
+		}
+
 		if (clicked)
 		{
 			const ImGuiIO& io = ImGui::GetIO();
@@ -694,12 +753,16 @@ void UIContentBrowser::DrawTiles()
 	DrawGridContextMenu();
 	HandleShortcuts();
 
-	// clicking empty space clears the selection, as every file browser does.
-	// IsWindowHovered + !IsAnyItemHovered keeps tiles and popups out of it.
-	if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
-		!ImGui::IsAnyItemHovered() &&
-		ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+	// clicking empty space clears the selection, as every file browser does -
+	// but only a bare click, so it does not fight the rubber-band below
+	if (!m_Marquee &&
+		ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
+		!ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive() &&
+		ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+		!ImGui::GetIO().KeyCtrl)
 		ClearSelection();
+
+	UpdateMarquee();
 
 	if (!drawn) ImGui::TextDisabled(m_Filter.IsActive() ? "nothing matches the search" : "empty folder");
 	else if (matched > drawn)
@@ -826,6 +889,54 @@ void UIContentBrowser::DrawFolderContextMenu(LPCSTR path)
 }
 
 //------------------------------------------------------------------------------
+// MCP entry points
+//------------------------------------------------------------------------------
+bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr_string& err)
+{
+	if (!name || !name[0])	{ err = "empty asset name"; return false; }
+	Show();									// the panel has to exist to show anything
+	if (!Form)				{ err = "content browser unavailable"; return false; }
+
+	if (source >= 0 && source <= 2 && source != Form->m_Source)
+		Form->SwitchSource(source);
+
+	// the listing is rebuilt lazily; the lookup below needs it now
+	if (Form->m_NeedRefresh) Form->Refresh();
+
+	int found = -1;
+	for (u32 i = 0; i < Form->m_Items.size(); ++i)
+		if (0 == _stricmp(Form->m_Items[i].name.c_str(), name)) { found = int(i); break; }
+
+	if (found < 0)
+	{
+		// the same name may live under a different category (Objects/Textures/…);
+		// say so plainly rather than silently doing nothing
+		err = "asset not found in the current source/category";
+		return false;
+	}
+
+	// navigate to the folder that holds it, clear any search that would hide it
+	LPCSTR	cut = strrchr(name, '\\');
+	Form->m_CurFolder	= cut ? xr_string(name).substr(0, size_t(cut - name)) : xr_string("");
+	Form->m_Filter.Clear();
+
+	Form->m_Selection.clear();
+	Form->m_Selection.push_back(name);
+	Form->m_Anchor = name;
+
+	if (open_viewer) Form->OpenAsset(name);
+	return true;
+}
+
+void UIContentBrowser::GetSelection(int& source, xr_string& folder, xr_vector<xr_string>& sel)
+{
+	source = Form ? Form->m_Source : -1;
+	folder = Form ? Form->m_CurFolder : xr_string("");
+	sel.clear();
+	if (Form) sel = Form->m_Selection;
+}
+
+//------------------------------------------------------------------------------
 // selection
 //------------------------------------------------------------------------------
 bool UIContentBrowser::IsSelected(LPCSTR full) const
@@ -870,6 +981,61 @@ void UIContentBrowser::SelectItem(LPCSTR full, bool additive, bool range)
 	m_Selection.clear();
 	m_Selection.push_back(full);
 	m_Anchor = full;
+}
+
+//------------------------------------------------------------------------------
+// Rubber-band selection. Starts on empty grid space (a press over a tile is that
+// tile's click, or the start of a drag&drop), extends while held, and selects
+// everything the band touches. Ctrl keeps what was already selected, which is
+// how Unreal and every file manager behave.
+//------------------------------------------------------------------------------
+void UIContentBrowser::UpdateMarquee()
+{
+	const ImGuiIO&	io		= ImGui::GetIO();
+	const bool		inside	= ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+
+	if (!m_Marquee)
+	{
+		// only empty space starts a band, and never while a drag&drop is live
+		if (inside && !ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive() &&
+			ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+		{
+			m_Marquee		= true;
+			m_MarqueeStart	= io.MousePos;
+			m_MarqueeBase	= io.KeyCtrl ? m_Selection : xr_vector<xr_string>();
+		}
+		return;
+	}
+
+	const ImVec2 a(_min(m_MarqueeStart.x, io.MousePos.x), _min(m_MarqueeStart.y, io.MousePos.y));
+	const ImVec2 b(_max(m_MarqueeStart.x, io.MousePos.x), _max(m_MarqueeStart.y, io.MousePos.y));
+
+	// a click without movement is not a band - let the empty-space click clear
+	const bool dragged = (b.x - a.x) > 3.f || (b.y - a.y) > 3.f;
+
+	if (dragged)
+	{
+		m_Selection = m_MarqueeBase;
+		for (u32 i = 0; i < m_DrawnRects.size() && i < m_DrawnOrder.size(); ++i)
+		{
+			const ImVec4& r = m_DrawnRects[i];
+			// plain AABB overlap: touched counts as selected
+			if (r.z < a.x || r.x > b.x || r.w < a.y || r.y > b.y)	continue;
+			if (!IsSelected(m_DrawnOrder[i].c_str()))
+				m_Selection.push_back(m_DrawnOrder[i]);
+		}
+		if (!m_Selection.empty()) m_Anchor = m_Selection.back();
+
+		ImDrawList* dl = ImGui::GetWindowDrawList();
+		dl->AddRectFilled(a, b, ImGui::GetColorU32(ImVec4(0.30f, 0.65f, 1.00f, 0.20f)));
+		dl->AddRect      (a, b, ImGui::GetColorU32(ImVec4(0.30f, 0.65f, 1.00f, 0.90f)));
+	}
+
+	if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+	{
+		m_Marquee = false;
+		m_MarqueeBase.clear();
+	}
 }
 
 void UIContentBrowser::ApplyPendingRange()

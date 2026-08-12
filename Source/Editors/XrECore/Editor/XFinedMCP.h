@@ -43,4 +43,10 @@ public:
 	// Caller owns the result and must Release it. Returns null on failure or on
 	// a wrongly sized buffer.
 	static void*	PixelsToTexture(const U32Vec& pixels);
+
+	// Counterpart of PixelsToTexture, and the right way to drop what a
+	// choose-event thumbnail adapter returns. Which COM interface actually sits
+	// behind the pointer is a build detail (SRV vs IDirect3DTexture9), so the
+	// release belongs next to the creation, not at every call site.
+	static void		ReleaseTexture(void* texture);
 };

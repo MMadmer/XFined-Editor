@@ -24,13 +24,16 @@ namespace
 
 	//--------------------------------------------------------------------------
 	// Temporaries: released whichever way we leave the function.
+	// D3D9 only - SDX11Target owns its own lifetime.
 	//--------------------------------------------------------------------------
+#if !defined(USE_DX11)
 	struct SScopedSurface
 	{
 		IDirect3DSurface9*	s;
 							SScopedSurface	()	{ s = 0; }
 							~SScopedSurface	()	{ _RELEASE(s); }
 	};
+#endif
 
 	//--------------------------------------------------------------------------
 	// We are a guest inside somebody else's frame, so everything we poke gets
@@ -355,7 +358,14 @@ namespace
 #if defined(USE_DX11)
 		// the guard puts the caller's render target and viewport back; nothing
 		// else here needs unwinding
-		return drawn ? DX11ReadbackToPixels(target.rt, w, h, out, false) : false;
+		if (!drawn || !DX11ReadbackToPixels(target.rt, w, h, out, false))
+			return false;
+		// Pin alpha, exactly as the D3D9 branch below does. The colour write mask
+		// leaves alpha enabled, so the background clear and any alpha-tested
+		// surface put non-opaque values in here - and PixelsToTexture uploads the
+		// buffer verbatim, which is what made browser tiles look washed out.
+		for (u32 i = 0; i < out.size(); ++i)	out[i] |= 0xff000000;
+		return true;
 #else
 		catch (...)
 		{

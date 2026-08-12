@@ -366,10 +366,10 @@ bool EditorGameContent::ResolvePlaceable(LPCSTR rel_path, string_path& ref)
 //------------------------------------------------------------------------------
 // MCP
 //------------------------------------------------------------------------------
-static void JsonAppendPath(xr_string& out, LPCSTR s)
+void EditorGameContent::JsonAppendPath(xr_string& out, LPCSTR s)
 {
 	// backslashes travel as forward slashes, same as the core MCP layer
-	for (const char* p = s; *p; ++p)
+	for (const char* p = s ? s : ""; *p; ++p)
 	{
 		if (*p == '"') { out += "'"; continue; }
 		out += (*p == '\\') ? '/' : *p;

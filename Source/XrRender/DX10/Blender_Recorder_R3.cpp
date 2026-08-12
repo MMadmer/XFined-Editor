@@ -40,10 +40,36 @@ void CBlender_Compile::r_CullMode(D3DCULL Mode)
 	RS.SetRS(	D3DRS_CULLMODE,	(u32)Mode);
 }
 
+// "$null" / "$baseN" are fixed-function stage aliases: they name a slot in the
+// shader's texture list rather than a file. Stage_Texture resolved them, but the
+// programmable path never did, so every blender that forwards its oT_Name here
+// (BlenderDefault and friends) asked the loader for a file literally called
+// "$base0" and got a placeholder back - which is why the whole scene, gizmo
+// included, drew black under D3D11.
+static LPCSTR ResolveStageAlias(const sh_list& lst, LPCSTR name)
+{
+	if ('$' != name[0])				return name;
+	if (0 == xr_strcmp(name,"$null"))	return 0;
+
+	if (0 == strncmp(name,"$base",5) && name[5] >= '0' && name[5] <= '7' && !name[6])
+	{
+		const u32 id = u32(name[5] - '0');
+		// missing slot: fall back to the base texture instead of killing the
+		// editor the way the fixed-function path did
+		if (id < lst.size())		return lst[id].c_str();
+		if (!lst.empty())			return lst[0].c_str();
+		return 0;
+	}
+	return name;
+}
+
 void CBlender_Compile::r_dx10Texture(LPCSTR ResourceName,	LPCSTR texture)
 {
 	VERIFY(ResourceName);
 	if (!texture) return;
+
+	texture					= ResolveStageAlias(L_textures, texture);
+	if (!texture)			return;
 	//
 	string256				TexName;
 	xr_strcpy				(TexName,texture);

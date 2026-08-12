@@ -286,6 +286,79 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_content_copy",
+        "description": "Copy files or folders INTO the project. 'src' is a file/folder path or a ';'-separated "
+                       "list of them; relative paths are taken against the project root, absolute paths are "
+                       "allowed and a src that is not on disk is looked up in the linked game's archives "
+                       "(same paths darf_list returns). 'dst' is the destination FOLDER and must be inside the "
+                       "project — writing anywhere else is refused, including via '..'. recursive defaults to "
+                       "true, overwrite to false. Returns real counts plus per-item 'errors' and 'skips'.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "src": {"type": "string", "description": "file/folder, or several separated by ';'"},
+                "dst": {"type": "string", "description": "destination folder inside the project"},
+                "recursive": {"type": "boolean"},
+                "overwrite": {"type": "boolean"},
+            },
+            "required": ["src", "dst"],
+        },
+    },
+    {
+        "name": "xfined_content_move",
+        "description": "Move files or folders inside the project. Same arguments as content_copy, but BOTH src "
+                       "and dst must be inside the project: the game install and the shared Editor Content are "
+                       "read-only sources, so moving out of them (which would delete from them) is refused with "
+                       "an explanation. recursive defaults to true, overwrite to false.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "src": {"type": "string", "description": "file/folder, or several separated by ';'"},
+                "dst": {"type": "string", "description": "destination folder inside the project"},
+                "recursive": {"type": "boolean"},
+                "overwrite": {"type": "boolean"},
+            },
+            "required": ["src", "dst"],
+        },
+    },
+    {
+        "name": "xfined_content_delete",
+        "description": "Delete files or folders inside the project. 'path' is one entry or a ';'-separated list. "
+                       "recursive defaults to false, so a non-empty folder is reported instead of being wiped. "
+                       "Anything outside the project root — and the project root itself — is refused.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "file/folder, or several separated by ';'"},
+                "recursive": {"type": "boolean"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_content_browser_open",
+        "description": "Reveal an asset in the editor's Content Browser: opens the panel, switches source when "
+                       "asked, navigates to the folder holding it and selects it. 'name' as returned by "
+                       "list_assets (or darf_list for the game source). 'source' is project / editor / darf "
+                       "(omit to stay on the current tab). open=true also opens the asset's viewer, the same "
+                       "thing a double click does.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "asset name from list_assets / darf_list"},
+                "source": {"type": "string", "enum": ["project", "editor", "darf"]},
+                "open": {"type": "boolean", "description": "also open the viewer (default false)"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "xfined_content_browser_selection",
+        "description": "What the Content Browser is showing right now: whether it is open, the active source, "
+                       "the current folder and the list of selected assets.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "xfined_scene_stats",
         "description": "scene_info plus selection count and camera position/rotation in one call.",
         "inputSchema": {"type": "object", "properties": {}},
@@ -537,6 +610,11 @@ CMD_MAP = {
     "xfined_game_link": "game_link",
     "xfined_darf_list": "darf_list",
     "xfined_darf_copy": "darf_copy",
+    "xfined_content_copy": "content_copy",
+    "xfined_content_move": "content_move",
+    "xfined_content_delete": "content_delete",
+    "xfined_content_browser_open": "content_browser_open",
+    "xfined_content_browser_selection": "content_browser_selection",
     "xfined_scene_stats": "scene_stats",
     "xfined_camera_get": "camera_get",
     "xfined_camera_set": "camera_set",

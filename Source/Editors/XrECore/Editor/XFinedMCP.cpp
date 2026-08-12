@@ -199,6 +199,17 @@ void* XFinedMCP::PixelsToTexture(const U32Vec& pixels)
 #endif
 }
 
+void XFinedMCP::ReleaseTexture(void* texture)
+{
+	if (!texture) return;
+#if defined(USE_DX11)
+	((ID3D11ShaderResourceView*)texture)->Release();
+#else
+	((IDirect3DBaseTexture9*)texture)->Release();
+#endif
+}
+
+#if !defined(USE_DX11)
 // captures the editor window through GDI — works even when fully covered
 static bool WindowToPngBase64(HWND wnd, xr_string& out)
 {
@@ -227,11 +238,6 @@ static bool WindowToPngBase64(HWND wnd, xr_string& out)
 		::SelectObject(mem_dc, old);
 		if (ok)
 		{
-#if defined(USE_DX11)
-			// the DIB is already 32bpp B8G8R8X8 in top-down rows, which is what
-			// the encoder takes - the D3D detour existed only for D3DX
-			ok = PixelsToPngBase64((const u32*)bits, u32(w), u32(h), out);
-#else
 			// wrap the pixels into a D3D surface so D3DX encodes the png
 			IDirect3DSurface9* surf = 0;
 			if (SUCCEEDED(HW.pDevice->CreateOffscreenPlainSurface(w, h, D3DFMT_X8R8G8B8, D3DPOOL_SYSTEMMEM, &surf, NULL)) && surf)
@@ -248,7 +254,6 @@ static bool WindowToPngBase64(HWND wnd, xr_string& out)
 				surf->Release();
 			}
 			else ok = false;
-#endif
 		}
 	}
 	if (bmp) ::DeleteObject(bmp);
@@ -256,6 +261,7 @@ static bool WindowToPngBase64(HWND wnd, xr_string& out)
 	::ReleaseDC(wnd, wnd_dc);
 	return ok;
 }
+#endif	//	!USE_DX11
 
 //------------------------------------------------------------------------------
 // command execution — main thread only

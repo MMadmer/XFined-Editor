@@ -4,6 +4,8 @@
 #include "../../../../XrRender/Private/FVisual.h"
 #include "../../../../XrRender/Private/FHierrarhyVisual.h"
 #include "../../../../XrRender/Public/KinematicsAnimated.h"
+// library objects (.object) draw through CEditableObject::RenderSingle
+#include "../../../XrECore/Editor/EditObject.h"
 
 extern BOOL ENGINE_API g_bRendering;
 
@@ -313,6 +315,7 @@ namespace
 UIVisualPreview::UIVisualPreview()
 {
 	m_Visual		= nullptr;
+	m_Editable		= nullptr;
 	m_Type			= u32(-1);
 	m_Verts			= 0;
 	m_Tris			= 0;
@@ -355,7 +358,7 @@ void UIVisualPreview::Show(LPCSTR visual_name)
 
 	if (!visual_name||!visual_name[0])	return;
 	// already showing this one - just bring the window forward
-	if (Form->m_Visual&&(0==xr_strcmp(Form->m_Name.c_str(),visual_name)))	return;
+	if ((Form->m_Visual||Form->m_Editable)&&(0==xr_strcmp(Form->m_Name.c_str(),visual_name)))	return;
 
 	Form->ReleaseVisual	();
 	Form->m_Name		= visual_name;
@@ -363,7 +366,17 @@ void UIVisualPreview::Show(LPCSTR visual_name)
 	if (!IsDeviceUsable())	{ Form->m_Error = "render device is not ready"; return; }
 
 	string_path fn;
-	if (!ResolveVisualFile(visual_name,fn))	{ Form->m_Error = "file not found"; return; }
+	if (!ResolveVisualFile(visual_name,fn))
+	{
+		// no engine visual under that name - it may still be a library object,
+		// which is what the Objects category of the content browser hands us
+		string_path obj_fn;
+		FS.update_path	(obj_fn,_objects_,EFS.ChangeFileExt(visual_name,".object").c_str());
+		if (FS.exist(obj_fn))	{ ShowObject(visual_name); return; }
+
+		Form->m_Error = "file not found";
+		return;
+	}
 
 	IReader* test = FS.r_open(fn);
 	if (!test)								{ Form->m_Error = "cannot open file"; return; }
@@ -427,6 +440,32 @@ void UIVisualPreview::ShowFromMemory(LPCSTR title, const void* data, u32 size)
 	Form->SetVisual	(v,Form->m_Name.c_str());
 }
 
+void UIVisualPreview::ShowObject(LPCSTR object_name)
+{
+	if (!Form) Form = xr_new<UIVisualPreview>();
+	Form->bOpen		= true;
+	Form->m_Focus	= true;
+
+	if (!object_name||!object_name[0])	return;
+	if ((Form->m_Visual||Form->m_Editable)&&(0==xr_strcmp(Form->m_Name.c_str(),object_name)))	return;
+
+	Form->ReleaseVisual	();
+	Form->m_Name		= object_name;
+
+	if (!IsDeviceUsable())	{ Form->m_Error = "render device is not ready"; return; }
+
+	string_path fn;
+	FS.update_path	(fn,_objects_,EFS.ChangeFileExt(object_name,".object").c_str());
+	if (!FS.exist(fn))	{ Form->m_Error = "file not found"; return; }
+
+	// a private copy, exactly like the thumbnail renderer: the shared library
+	// instance is not ours to hold on to across frames
+	CEditableObject* obj = xr_new<CEditableObject>(object_name);
+	if (!obj->Load(fn))	{ xr_delete(obj); Form->m_Error = "cannot load object"; return; }
+
+	Form->SetEditable	(obj,object_name);
+}
+
 void UIVisualPreview::Close()
 {
 	xr_delete(Form);
@@ -460,6 +499,22 @@ void UIVisualPreview::SetVisual(IRenderVisual* v, LPCSTR name)
 	ResetCamera	();
 }
 
+void UIVisualPreview::SetEditable(CEditableObject* o, LPCSTR name)
+{
+	m_Editable	= o;
+	m_Name		= name?name:"";
+	m_Error		= "";
+	// a library object is not an engine visual, so there is no MT_* for it;
+	// DrawInfo reports the kind from m_Editable instead
+	m_Type		= u32(-1);
+	m_Verts		= u32(o->GetVertexCount());
+	m_Tris		= u32(o->GetFaceCount());
+	m_Bones		= u16(o->BoneCount());
+
+	m_Box		= o->GetBox();
+	ResetCamera	();
+}
+
 void UIVisualPreview::ReleaseVisual()
 {
 	if (m_Visual)
@@ -470,6 +525,7 @@ void UIVisualPreview::ReleaseVisual()
 		::Render->model_Delete(m_Visual,TRUE);
 		g_bRendering	= saved_rendering;
 	}
+	xr_delete	(m_Editable);
 	m_Visual	= nullptr;
 	m_Type		= u32(-1);
 	m_Verts		= 0;
@@ -581,7 +637,7 @@ void UIVisualPreview::ResetCamera()
 //------------------------------------------------------------------------------
 void UIVisualPreview::RenderToTarget(u32 w, u32 h)
 {
-	if (!m_Visual||!IsDeviceUsable())	return;
+	if ((!m_Visual&&!m_Editable)||!IsDeviceUsable())	return;
 #if defined(USE_DX11)
 	if (!m_Target.valid())				return;
 
@@ -650,9 +706,10 @@ void UIVisualPreview::RenderToTarget(u32 w, u32 h)
 	// model is thrown away before it is ever drawn
 	RImplementation.ViewBase.CreateFromMatrix(EDevice->mFullTransform,FRUSTUM_P_ALL);
 
-	RImplementation.model_RenderSingle(m_Visual,Fidentity,1.f);
+	if (m_Visual)	RImplementation.model_RenderSingle(m_Visual,Fidentity,1.f);
+	else			m_Editable->RenderSingle(Fidentity);
 
-	if (m_ShowBones)
+	if (m_ShowBones&&m_Visual)
 	{
 		if (IKinematics* K = m_Visual->dcast_PKinematics())
 		{
@@ -710,7 +767,7 @@ void UIVisualPreview::DrawViewport()
 	const bool hovered	= ImGui::IsItemHovered();
 	const bool active	= ImGui::IsItemActive();
 
-	if (!m_Visual)
+	if (!m_Visual&&!m_Editable)
 	{
 		// nothing loaded - do not sit on a render target either
 		ReleaseTarget	();
@@ -780,15 +837,17 @@ void UIVisualPreview::DrawInfo()
 		ImGui::TextColored(ImVec4(1.f,0.4f,0.4f,1.f),"%s: %s",m_Name.c_str(),m_Error.c_str());
 		return;
 	}
-	if (!m_Visual)
+	if (!m_Visual&&!m_Editable)
 	{
 		ImGui::TextDisabled("no model - double click an asset in the content browser");
 		return;
 	}
 
 	ImGui::Text		("%s",m_Name.c_str());
-	if (m_Bones)	ImGui::Text("%s | %u verts | %u tris | %u bones",VisualTypeName(m_Type),m_Verts,m_Tris,u32(m_Bones));
-	else			ImGui::Text("%s | %u verts | %u tris",VisualTypeName(m_Type),m_Verts,m_Tris);
+	// library objects carry no MT_* type - name the format instead
+	LPCSTR kind		= m_Editable ? "library object" : VisualTypeName(m_Type);
+	if (m_Bones)	ImGui::Text("%s | %u verts | %u tris | %u bones",kind,m_Verts,m_Tris,u32(m_Bones));
+	else			ImGui::Text("%s | %u verts | %u tris",kind,m_Verts,m_Tris);
 
 	Fvector size;	m_Box.getsize(size);
 	ImGui::Text		("size %.2f x %.2f x %.2f  (%.2f..%.2f, %.2f..%.2f, %.2f..%.2f)",

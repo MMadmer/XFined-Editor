@@ -22,6 +22,10 @@ namespace
 	// between the request that arms it and the follow-up that reads the frame
 	const u32	CAPTURE_ARM_MS		= 6000;
 	const u32	CAPTURE_PERIOD_MS	= 100;
+	// how long a mirrored frame still counts as "what is on screen". Without
+	// this the first request after the arm window lapsed would happily hand back
+	// the frame the PREVIOUS session mirrored - minutes old, reported as ok.
+	const u32	CAPTURE_FRESH_MS	= 1000;
 }
 
 void	DX11ArmFrameCapture()
@@ -32,6 +36,9 @@ void	DX11ArmFrameCapture()
 bool	DX11GetFrameCapture(U32Vec& out, u32& w, u32& h)
 {
 	if (!g_frame_w || !g_frame_h || g_frame_px.empty())	return false;
+	// unsigned arithmetic keeps this right across a GetTickCount wrap
+	if (!g_last_mirror || (::GetTickCount() - g_last_mirror) > CAPTURE_FRESH_MS)
+		return false;
 	out	= g_frame_px;
 	w	= g_frame_w;
 	h	= g_frame_h;

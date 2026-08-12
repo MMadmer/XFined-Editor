@@ -536,6 +536,31 @@ void CTexture::Load		()
 				//pSurface = ::RImplementation.texture_load	(*cName,mem);
 				pSurface = ::RImplementation.texture_load	(*cName,mem, true);
 
+#ifdef REDITOR
+				// Models browsed out of the linked game install reference textures
+				// that live in its archives, and those are mounted in a private
+				// registry the editor FS deliberately cannot see - so the lookup
+				// above misses and the preview renders black. Fall back to reading
+				// the bytes out of that registry. Read-only, and only ever after
+				// the editor's own content failed to provide the texture.
+				if (!pSurface)
+				{
+					// defined in Editors\XrECore\Editor\EGameTexture.cpp
+					extern ID3DBaseTexture* EditorGameContent_LoadTexture(LPCSTR name, u32& mem);
+					if (ID3DBaseTexture* from_game = EditorGameContent_LoadTexture(*cName, mem))
+					{
+						pSurface				= from_game;
+						flags.bLoadedAsStaging	= FALSE;
+						bCreateView				= true;
+						flags.MemoryUsage		= mem;
+						if (pSurface)
+							CHK_DX(HW.pDevice->CreateShaderResourceView(pSurface, NULL, &m_pSRView));
+						PostLoad();
+						return;
+					}
+				}
+#endif
+
 				if (GetUsage() == D3D_USAGE_STAGING)
 				{
 					flags.bLoadedAsStaging = TRUE;

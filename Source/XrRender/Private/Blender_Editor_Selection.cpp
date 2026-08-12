@@ -56,7 +56,14 @@ void	CBlender_Editor_Selection::Compile	(CBlender_Compile& C)
 	else 
 #endif	//	USE_DX10
 	{
-		C.r_Pass	("editor","simple_color",FALSE,TRUE,FALSE,TRUE,D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA);
+		// simple_color, not editor: the selection highlight is drawn over MESH
+		// geometry (position/normal/uv), and editor.vs consumes COLOR0, which
+		// that geometry does not carry. D3D9 tolerated a vertex shader reading
+		// an element the declaration lacked; D3D11 refuses to build the input
+		// layout at all, which took the editor down the moment anything was
+		// selected. simple_color.vs needs only POSITION and takes its colour
+		// from tfactor - exactly what a flat highlight wants.
+		C.r_Pass	("simple_color","simple_color",FALSE,TRUE,FALSE,TRUE,D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA);
 		C.r_End		();
 	}
 }

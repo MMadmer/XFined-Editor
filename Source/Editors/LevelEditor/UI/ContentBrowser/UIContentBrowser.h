@@ -33,6 +33,15 @@ public:
 	typedef void (*TShowVisualMem)	(LPCSTR title, const void* data, u32 size);
 	static void		SetVisualPreview	(TShowVisual by_name, TShowVisualMem from_memory);
 
+	// MCP: reveal an asset in the browser - switches source and category when
+	// needed, navigates to the folder holding it, selects it and optionally
+	// opens its viewer (the double-click action). Returns false + a reason when
+	// the asset is not in the current listing.
+	//   source: -1 keeps the current one, else 0 project / 1 editor / 2 game
+	static bool		RevealAsset			(LPCSTR name, int source, bool open_viewer, xr_string& err);
+	// MCP: what is selected right now, and in which source/folder
+	static void		GetSelection		(int& source, xr_string& folder, xr_vector<xr_string>& sel);
+
 	// asset categories, shared with the MCP asset commands
 	static int		CategoryCount		();
 	static LPCSTR	CategoryName		(int index);		// caption, e.g. "Objects"
@@ -81,6 +90,12 @@ private:
 	xr_vector<xr_string>			m_Selection;
 	xr_string						m_Anchor;
 	xr_vector<xr_string>			m_DrawnOrder;
+	// screen rect of each drawn tile, parallel to m_DrawnOrder - the rubber-band
+	// needs to know what it swept over
+	xr_vector<ImVec4>				m_DrawnRects;
+	bool							m_Marquee;
+	ImVec2							m_MarqueeStart;
+	xr_vector<xr_string>			m_MarqueeBase;	// selection when the drag began
 	xr_string						m_PendingRange;
 	xr_string						m_Dragged;
 
@@ -126,6 +141,8 @@ private:
 	void			SelectItem			(LPCSTR full, bool additive, bool range);
 	void			ClearSelection		();
 	void			ApplyPendingRange	();
+	// rubber-band selection over the tile grid
+	void			UpdateMarquee		();
 
 	void			RequestCopy			(LPCSTR rel);
 	void			CopySelection		();

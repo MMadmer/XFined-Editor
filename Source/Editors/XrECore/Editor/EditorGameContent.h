@@ -73,4 +73,9 @@ namespace EditorGameContent
 	// MCP command handlers: fill the full JSON response; raw = request line
 	ECORE_API void	McpList			(LPCSTR raw, xr_string& out);
 	ECORE_API void	McpCopy			(LPCSTR raw, xr_string& out);
+
+	// shared JSON value emitter: backslashes travel as forward slashes, quotes
+	// fold to apostrophes. Used by every MCP responder in this layer so the
+	// escaping rules stay in one place.
+	ECORE_API void	JsonAppendPath	(xr_string& out, LPCSTR s);
 }

@@ -2,6 +2,7 @@
 #pragma hdrstop
 
 #include "EThumbnail.h"
+#include "EDX11Utils.h"
 #ifndef XR_EPROPS_EXPORTS
 	#include "ImageManager.h"
 #endif
@@ -205,14 +206,23 @@ void ETextureThumbnail::Update(ImTextureID& Texture)
             fn_img = EFS.ChangeFileExt(m_Name.c_str(), ".dds");
             u32	mem = 0;
 #if defined(USE_DX11)
-            // texture_load hands back the resource; ImGui binds a view, so make
-            // one and drop the resource - the view keeps its own reference.
-            if (ID3DBaseTexture* res = ::RImplementation.texture_load(fn_img.c_str(), mem))
+            // RedImage first: it decodes BC1-BC7 on the CPU and yields an
+            // UNCOMPRESSED B8G8R8A8 texture. texture_load would hand back the
+            // compressed resource as-is, which draws fine but cannot be read
+            // back - that is what breaks the asset_preview MCP command.
+            Texture = DX11TextureFromFile(fn);
+            // still keep the engine loader for whatever RedImage cannot parse
+            if (!Texture)
             {
-                ID3D11ShaderResourceView* view = nullptr;
-                if (SUCCEEDED(HW.pDevice->CreateShaderResourceView(res, nullptr, &view)))
-                    Texture = view;
-                _RELEASE(res);
+                if (ID3DBaseTexture* res = ::RImplementation.texture_load(fn_img.c_str(), mem))
+                {
+                    // ImGui binds a view, so make one and drop the resource -
+                    // the view keeps its own reference
+                    ID3D11ShaderResourceView* view = nullptr;
+                    if (SUCCEEDED(HW.pDevice->CreateShaderResourceView(res, nullptr, &view)))
+                        Texture = view;
+                    _RELEASE(res);
+                }
             }
 #else
             Texture = ::RImplementation.texture_load(fn_img.c_str(), mem);

@@ -2,6 +2,7 @@
 #include "..\..\XrAPI\xrGameManager.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\..\XrECore\Editor\EditorGameContent.h"
+#include "..\..\XrECore\Editor\EditorFileOps.h"
 #include "..\..\XrECore\Editor\EThumbnailVisual.h"
 #include "EditorModScene.h"
 #include "Utils\Cursor3D.h"
@@ -1179,8 +1180,9 @@ static bool GetArgBool(LPCSTR raw, LPCSTR field, bool def)
     if (!k) return def;
     const char* c = strchr(k + xr_strlen(pat), ':');
     if (!c) return def;
-    while (*++c == ' ') {}
-    return 0 == strncmp(c, "true", 4);
+    // quotes are stepped over so {"open":"1"} reads the same as {"open":1}
+    while (*++c == ' ' || *c == '"') {}
+    return 0 == strncmp(c, "true", 4) || *c == '1';
 }
 
 static int GetArgInt(LPCSTR raw, LPCSTR field, int def)
@@ -1219,6 +1221,58 @@ static xr_string JsonEscapePath(LPCSTR text)
         out += *c;
     }
     return out;
+}
+
+// Content-browser source argument: "project" / "editor" / "darf", or 0 / 1 / 2.
+// The value is read straight off the request line because XFinedMCP::GetArg only
+// ever returns QUOTED values - a bare {"source":2} would make it latch onto the
+// next field's quote instead. Returns false only when a value is present but
+// unrecognised; an absent argument leaves the browser on its current tab.
+static bool ParseBrowserSource(LPCSTR raw, int& src)
+{
+    src = -1;
+    static const char pat[] = "\"source\"";
+    const char* k = raw ? strstr(raw, pat) : 0;
+    if (!k) return true;
+    const char* c = strchr(k + (sizeof(pat) - 1), ':');
+    if (!c) return true;
+    while (*++c == ' ') {}
+
+    char val[64] = {};
+    if (*c == '"')
+    {
+        const char* e = strchr(c + 1, '"');
+        if (!e) return false;
+        u32 n = u32(e - c - 1);
+        if (n >= sizeof(val)) n = sizeof(val) - 1;
+        CopyMemory(val, c + 1, n);
+    }
+    else
+    {
+        u32 n = 0;
+        while (n + 1 < sizeof(val) && c[n] && c[n] != ',' && c[n] != '}' && c[n] != ' ')
+        {
+            val[n] = c[n];
+            ++n;
+        }
+    }
+    if (!val[0])						return true;
+    if (0 == _stricmp(val, "project"))	{ src = 0; return true; }
+    if (0 == _stricmp(val, "editor"))	{ src = 1; return true; }
+    if (0 == _stricmp(val, "darf"))		{ src = 2; return true; }
+    if (val[0] == '-' || (val[0] >= '0' && val[0] <= '9')) { src = atoi(val); return true; }
+    return false;
+}
+
+static LPCSTR BrowserSourceName(int src)
+{
+    switch (src)
+    {
+    case 0:		return "project";
+    case 1:		return "editor";
+    case 2:		return "darf";
+    default:	return "";
+    }
 }
 
 // object names are lowercased on SetName - make lookups case-insensitive
@@ -1328,6 +1382,91 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "game_link"))			{ EditorProject::McpGameLink(raw, out);			return true; }
     if (0 == xr_strcmp(cmd, "darf_list"))			{ EditorGameContent::McpList(raw, out);			return true; }
     if (0 == xr_strcmp(cmd, "darf_copy"))			{ EditorGameContent::McpCopy(raw, out);			return true; }
+
+    // file management: writes and deletes are clamped to the project folder
+    // inside EditorFileOps, which is where the path normalisation lives
+    if (0 == xr_strcmp(cmd, "content_copy"))		{ EditorFileOps::McpCopy(raw, out);				return true; }
+    if (0 == xr_strcmp(cmd, "content_move"))		{ EditorFileOps::McpMove(raw, out);				return true; }
+    if (0 == xr_strcmp(cmd, "content_delete"))		{ EditorFileOps::McpDelete(raw, out);			return true; }
+
+    // reveal an asset in the content browser: the panel-driving twin of
+    // asset_preview, which only ever renders offscreen
+    if (0 == xr_strcmp(cmd, "content_browser_open"))
+    {
+        char name[512] = {};
+        if (!XFinedMCP::GetArg(raw, "name", name, sizeof(name)) || !name[0])
+        {
+            out = "{\"ok\":false,\"error\":\"missing 'name' argument (see list_assets / darf_list)\"}";
+            return true;
+        }
+        for (char* p = name; *p; ++p) if (*p == '/') *p = '\\';
+        // GetArg hands over the raw JSON value, so an escaped "a\\b" arrives with
+        // both slashes - the browser compares names exactly
+        {
+            char* w = name;
+            for (const char* r = name; *r; ++r)
+                if (!(*r == '\\' && w > name && w[-1] == '\\')) *w++ = *r;
+            *w = 0;
+        }
+
+        int src = -1;
+        if (!ParseBrowserSource(raw, src))
+        {
+            out = "{\"ok\":false,\"error\":\"source must be project, editor, darf or 0/1/2\"}";
+            return true;
+        }
+
+        xr_string err;
+        if (!UIContentBrowser::RevealAsset(name, src, GetArgBool(raw, "open", false), err))
+        {
+            out = "{\"ok\":false,\"error\":\"";
+            out += JsonEscapePath(err.c_str());
+            out += "\"}";
+            return true;
+        }
+
+        // report where it actually landed - RevealAsset may have switched source
+        int cur = -1;
+        xr_string folder;
+        xr_vector<xr_string> sel;
+        UIContentBrowser::GetSelection(cur, folder, sel);
+        char head[128];
+        sprintf_s(head, sizeof(head), "{\"ok\":true,\"source\":%d,\"source_name\":\"%s\",\"folder\":\"",
+            cur, BrowserSourceName(cur));
+        out = head;
+        out += JsonEscapePath(folder.c_str());
+        out += "\",\"name\":\"";
+        out += JsonEscapePath(name);
+        out += "\"}";
+        return true;
+    }
+
+    if (0 == xr_strcmp(cmd, "content_browser_selection"))
+    {
+        int src = -1;
+        xr_string folder;
+        xr_vector<xr_string> sel;
+        UIContentBrowser::GetSelection(src, folder, sel);
+
+        char head[192];
+        sprintf_s(head, sizeof(head), "{\"ok\":true,\"open\":%s,\"source\":%d,\"source_name\":\"%s\",\"folder\":\"",
+            UIContentBrowser::IsOpen() ? "true" : "false", src, BrowserSourceName(src));
+        out = head;
+        out += JsonEscapePath(folder.c_str());
+        out += "\",\"count\":";
+        char tail[32];
+        sprintf_s(tail, sizeof(tail), "%u,\"selection\":[", u32(sel.size()));
+        out += tail;
+        for (u32 i = 0; i < sel.size(); ++i)
+        {
+            if (i) out += ",";
+            out += "\"";
+            out += JsonEscapePath(sel[i].c_str());
+            out += "\"";
+        }
+        out += "]}";
+        return true;
+    }
 
     if (0 == xr_strcmp(cmd, "camera_get"))
     {
@@ -2013,7 +2152,7 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             void* tex = XFinedMCP::PixelsToTexture(pixels);
             xr_string png;
             const bool encoded = tex && XFinedMCP::TextureToPngBase64(tex, png);
-            if (tex) ((IDirect3DBaseTexture9*)tex)->Release();
+            XFinedMCP::ReleaseTexture(tex);
             if (!encoded)
             {
                 out = "{\"ok\":false,\"error\":\"cannot encode the rendered preview\"}";
@@ -2086,7 +2225,7 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             }
             xr_string png;
             const bool encoded = XFinedMCP::TextureToPngBase64(tex, png);
-            ((IDirect3DBaseTexture9*)tex)->Release();
+            XFinedMCP::ReleaseTexture(tex);
             if (!encoded)
             {
                 out = "{\"ok\":false,\"error\":\"cannot encode the rendered preview\"}";
@@ -2128,7 +2267,7 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
         }
         xr_string png;
         const bool ok = XFinedMCP::TextureToPngBase64((void*)tex, png);
-        ((IDirect3DBaseTexture9*)tex)->Release();
+        XFinedMCP::ReleaseTexture((void*)tex);
         if (!ok)
         {
             out = "{\"ok\":false,\"error\":\"cannot encode the thumbnail\"}";

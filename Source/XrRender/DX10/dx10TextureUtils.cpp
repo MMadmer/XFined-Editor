@@ -13,11 +13,16 @@ TextureFormatPairs	TextureFormatList[] =
 {
 	{ D3DFMT_UNKNOWN,		DXGI_FORMAT_UNKNOWN },
 		//D3DFMT_R8G8B8 Not available 
-	{ D3DFMT_A8R8G8B8,		DXGI_FORMAT_R8G8B8A8_UNORM },	// Not available
+	// A8R8G8B8 names the channels in register order, so the BYTES in memory run
+	// B,G,R,A - which is DXGI_FORMAT_B8G8R8A8_UNORM, not R8G8B8A8. Mapping it to
+	// RGBA swaps red and blue in every uncompressed texture: a rusty barrel
+	// renders navy blue. The "not available" note below is a DX10 leftover -
+	// B8G8R8A8 is core in D3D11.
+	{ D3DFMT_A8R8G8B8,		DXGI_FORMAT_B8G8R8A8_UNORM },
 	// DXGI has no X8 variant; the alpha channel simply goes unused. Needed
 	// because HW.Caps.fTarget is X8R8G8B8 and the editor creates its viewport
 	// render target with it - without this the RT cannot be created at all.
-	{ D3DFMT_X8R8G8B8,		DXGI_FORMAT_R8G8B8A8_UNORM },
+	{ D3DFMT_X8R8G8B8,		DXGI_FORMAT_B8G8R8A8_UNORM },
 	//	TODO: DX10: Remove. Need only for nullrt
 	//{ D3DFMT_R5G6B5,		DXGI_FORMAT_B5G6R5_UNORM },		// Not available 
 	{ D3DFMT_R5G6B5,		DXGI_FORMAT_R8G8B8A8_UNORM },		// Not available 

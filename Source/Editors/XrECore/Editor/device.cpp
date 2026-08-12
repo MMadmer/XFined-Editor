@@ -553,6 +553,7 @@ void EDevice_PushFFConstants()
 
 	RCache.set_c	("ffp_ambient", a.r, a.g, a.b, 1.f);
 	RCache.set_c	("ffp_params",  float(count), 0.f, 0.f, 0.f);
+
 	for (int i=0; i<count; ++i)
 	{
 		RCache.set_ca	("ffp_light_dir",   u32(i), dirs[i]);

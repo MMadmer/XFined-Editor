@@ -13,6 +13,7 @@
 #endif
 
 class IRenderVisual;
+class CEditableObject;
 
 class UIVisualPreview : public XrUI
 {
@@ -28,6 +29,10 @@ public:
 	// same, but the block comes from memory - assets inside the game archives
 	// never hit the disk
 	static void		ShowFromMemory		(LPCSTR title, const void* data, u32 size);
+	// library object (.object under $objects$). That is the editor's own asset
+	// format, not an engine visual, so the model pool cannot touch it - it gets
+	// its own private CEditableObject and draws through RenderSingle.
+	static void		ShowObject			(LPCSTR object_name);
 	static void		Close				();
 	static IC bool	IsOpen				() { return !!Form; }
 	static void		Update				();		// draws if open
@@ -45,8 +50,9 @@ public:
 private:
 	static UIVisualPreview*	Form;
 
-	// model
+	// model: exactly one of these is live at a time
 	IRenderVisual*	m_Visual;
+	CEditableObject* m_Editable;
 	xr_string		m_Name;
 	u32				m_Type;			// MT_*
 	u32				m_Verts;
@@ -82,6 +88,7 @@ private:
 	bool			m_RTFailed;		// creation refused - stop retrying every frame
 
 	void			SetVisual			(IRenderVisual* v, LPCSTR name);
+	void			SetEditable			(CEditableObject* o, LPCSTR name);
 	void			ReleaseVisual		();
 	void			ReleaseTarget		();
 	bool			EnsureTarget		(u32 w, u32 h);
