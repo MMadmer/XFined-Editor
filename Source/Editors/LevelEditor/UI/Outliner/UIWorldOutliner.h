@@ -54,6 +54,14 @@ private:
 	ObjClassID						m_AnchorClass;
 	int								m_AnchorRow;
 
+	// auto-scroll: a selection change that did NOT come from this panel brings
+	// the first selected row into view. The target pointer lives one Draw() -
+	// it is resolved and consumed within the same frame's scene walk, so it
+	// can never dangle across scene edits.
+	u32								m_SelSignature;
+	CCustomObject*					m_ScrollTarget;
+	bool							m_SkipNextScroll;
+
 	// scene edits are deferred: the tree must not mutate while it iterates
 	CCustomObject*					m_PendingDelete;
 	CCustomObject*					m_PendingRename;
@@ -70,7 +78,8 @@ private:
 	void			DrawRenamePopup		();
 	bool			ApplyRename			();
 	void			RunPending			();
-	int				SelectionCount		() const;
+	// one scene walk per frame: count, change signature, first selected object
+	int				ScanSelection		(u32& sig, CCustomObject*& first) const;
 
 	// plain viewport-pick semantics: drop the selection, take this object
 	static void		PickObject			(CCustomObject* obj);

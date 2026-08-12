@@ -15,6 +15,9 @@ UIWorldOutliner::UIWorldOutliner()
 	m_SelectedOnlyApplied	= false;
 	m_AnchorClass			= OBJCLASS_DUMMY;
 	m_AnchorRow				= -1;
+	m_SelSignature			= 0;
+	m_ScrollTarget			= nullptr;
+	m_SkipNextScroll		= false;
 	m_PendingDelete			= nullptr;
 	m_PendingRename			= nullptr;
 	m_OpenRenamePopup		= false;
@@ -144,14 +147,25 @@ void UIWorldOutliner::ApplyFilter()
 	m_SelectedOnlyApplied	= m_SelectedOnly;
 }
 
-int UIWorldOutliner::SelectionCount() const
+int UIWorldOutliner::ScanSelection(u32& sig, CCustomObject*& first) const
 {
-	int n = 0;
+	// selected pointers folded in scene order: any change of the selected set
+	// - grow, shrink or swap - lands on a different value
+	int n	= 0;
+	sig		= 2166136261u;
+	first	= nullptr;
 	for (u32 i = 0; i < m_Groups.size(); ++i)
 	{
 		const SGroup& g = m_Groups[i];
 		for (u32 k = 0; k < g.objects.size(); ++k)
-			if (g.objects[k]->Selected()) ++n;
+		{
+			CCustomObject* o = g.objects[k];
+			if (!o->Selected()) continue;
+			++n;
+			if (!first) first = o;
+			sig = sig * 16777619u + u32(size_t(o));
+			sig = sig * 16777619u + u32(size_t(o) >> 32);
+		}
 	}
 	return n;
 }
@@ -165,6 +179,8 @@ void UIWorldOutliner::PickObject(CCustomObject* obj)
 	obj->Select(TRUE);
 	if (LTools->CurrentClassID() != obj->FClassID)
 		LTools->SetTarget(obj->FClassID, 0);
+	// the row is already under the cursor - recentring it would yank the list
+	if (Form) Form->m_SkipNextScroll = true;
 	UI->RedrawScene(true);
 }
 
@@ -266,6 +282,7 @@ void UIWorldOutliner::DrawRow(SGroup& g, int row, CCustomObject* obj)
 
 	// selection is read from the scene every frame, so viewport picks show here
 	const bool sel = !!obj->Selected();
+	const bool scroll_here = (obj == m_ScrollTarget);
 	if (ImGui::Selectable(obj->GetName(), sel, ImGuiSelectableFlags_AllowDoubleClick,
 		ImVec2(0.f, ImGui::GetFrameHeight())))
 	{
@@ -283,12 +300,14 @@ void UIWorldOutliner::DrawRow(SGroup& g, int row, CCustomObject* obj)
 			const int b = _max(m_AnchorRow, row);
 			for (int i = a; i <= b && i < int(g.shown.size()); ++i)
 				g.objects[g.shown[i]]->Select(TRUE);
+			m_SkipNextScroll = true;
 			UI->RedrawScene(true);
 		}
 		else if (io.KeyCtrl)
 		{
 			obj->Select(sel ? FALSE : TRUE);
 			m_AnchorClass = g.cls; m_AnchorRow = row;
+			m_SkipNextScroll = true;
 			UI->RedrawScene(true);
 		}
 		else
@@ -296,6 +315,12 @@ void UIWorldOutliner::DrawRow(SGroup& g, int row, CCustomObject* obj)
 			PickObject(obj);
 			m_AnchorClass = g.cls; m_AnchorRow = row;
 		}
+	}
+	// after the Selectable, so the scroll centres on the full row rect
+	if (scroll_here)
+	{
+		ImGui::SetScrollHereY(0.5f);
+		m_ScrollTarget = nullptr;
 	}
 
 	if (ImGui::BeginPopupContextItem("ctx"))
@@ -312,6 +337,7 @@ void UIWorldOutliner::DrawRow(SGroup& g, int row, CCustomObject* obj)
 			Scene->SelectObjects(true, g.cls);
 			if (LTools->CurrentClassID() != g.cls)
 				LTools->SetTarget(g.cls, 0);
+			m_SkipNextScroll = true;
 			UI->RedrawScene(true);
 		}
 		if (ImGui::MenuItem(cur_vis ? "Hide" : "Show"))
@@ -340,8 +366,15 @@ void UIWorldOutliner::DrawGroup(SGroup& g)
 	const bool filtering = Filtering();
 	if (filtering && g.shown.empty()) return;	// empty groups vanish while filtering
 
+	// the scroll target forces its group open and its row through the clipper -
+	// otherwise a collapsed node or the clipped-out range would swallow the jump
+	int target_row = -1;
+	if (m_ScrollTarget)
+		for (int i = 0; i < int(g.shown.size()); ++i)
+			if (g.objects[g.shown[i]] == m_ScrollTarget) { target_row = i; break; }
+
 	ImGui::PushID(int(g.cls));
-	if (filtering) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+	if (filtering || target_row >= 0) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
 
 	int flags = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen;
 	const bool open = filtering
@@ -353,6 +386,8 @@ void UIWorldOutliner::DrawGroup(SGroup& g)
 		// thousands of rows per group - only the visible slice is submitted
 		ImGuiListClipper clipper;
 		clipper.Begin(int(g.shown.size()), ImGui::GetFrameHeightWithSpacing());
+		if (target_row >= 0)
+			clipper.ForceDisplayRangeByIndices(target_row, target_row + 1);
 		while (clipper.Step())
 			for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
 				DrawRow(g, row, g.objects[g.shown[row]]);
@@ -423,6 +458,20 @@ void UIWorldOutliner::Draw()
 		0 != xr_strcmp(m_FilterApplied.c_str(), m_Filter))
 		ApplyFilter();
 
+	// selection changes made OUTSIDE this panel (viewport picks, MCP) scroll
+	// the first selected row into view; the panel's own clicks flag
+	// m_SkipNextScroll, since their row is already visible
+	u32 sel_sig;
+	CCustomObject* sel_first;
+	const int sel_count = ScanSelection(sel_sig, sel_first);
+	if (sel_sig != m_SelSignature)
+	{
+		m_SelSignature = sel_sig;
+		if (!m_SkipNextScroll && sel_first)
+			m_ScrollTarget = sel_first;
+		m_SkipNextScroll = false;
+	}
+
 	ImGui::SetNextItemWidth(-220.f);
 	ImGui::InputTextWithHint("##filter", "search", m_Filter, sizeof(m_Filter));
 	ImGui::SameLine();
@@ -440,9 +489,11 @@ void UIWorldOutliner::Draw()
 			DrawGroup(m_Groups[i]);
 	}
 	ImGui::EndChild();
+	// a target the filter hid never reaches DrawRow - one frame is its lifetime
+	m_ScrollTarget = nullptr;
 
 	ImGui::Separator();
-	ImGui::Text("%d objects, %d selected", m_TotalObjects, SelectionCount());
+	ImGui::Text("%d objects, %d selected", m_TotalObjects, sel_count);
 
 	if (m_OpenRenamePopup)
 	{
