@@ -547,13 +547,19 @@ ImTextureID UIContentBrowser::GetThumb(LPCSTR name)
 		}
 	}
 
-	// evict coldest entries once the budget is blown
+	// Evict the coldest entry once the budget is blown - but NEVER one touched
+	// this frame. A tile drawn this frame has its view recorded in an ImGui
+	// draw list that has not been rendered yet; releasing it here hands the
+	// driver a freed pointer at render time, which is exactly the flaky
+	// igd10um64xe crash a folder bigger than the budget (prop: 759 textures vs
+	// 512) produced. Strict '<' against m_Tick is the whole fix: a folder that
+	// outgrows the budget simply keeps its tiles cached while it is on screen.
 	if (m_Thumbs.size() >= kThumbBudget)
 	{
 		u32 oldest = m_Tick;
 		ThumbMapIt victim = m_Thumbs.end();
 		for (ThumbMapIt i = m_Thumbs.begin(); i != m_Thumbs.end(); ++i)
-			if (i->second.last_used <= oldest) { oldest = i->second.last_used; victim = i; }
+			if (i->second.last_used < oldest) { oldest = i->second.last_used; victim = i; }
 		if (victim != m_Thumbs.end())
 		{
 #if defined(USE_DX11)
@@ -707,6 +713,19 @@ bool UIContentBrowser::OpenAsset(LPCSTR name, xr_string* err)
 		else if (s_ShowVisual)
 			s_ShowVisual(name);
 		return true;
+	}
+
+	// Textures get their own window, whatever source they came from. In the SDK
+	// library the name carries no extension, so the category is what says it is
+	// a texture; everywhere else the extension does.
+	const bool is_texture = IsImageExt(name) ||
+							(m_Source == 1 && (kCategories[m_Category].id == smTexture ||
+											   kCategories[m_Category].id == smTextureRaw));
+	if (is_texture)
+	{
+		xr_string img_err;
+		if (UIImagePreview::Show(name, m_Source, &img_err))	return true;
+		OPEN_FAILED("%s: %s", name, img_err.c_str());
 	}
 
 	OPEN_FAILED("no viewer for this asset kind yet: '%s'", name);

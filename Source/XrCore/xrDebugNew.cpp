@@ -47,23 +47,119 @@ extern bool shared_str_initialized;
 
 #ifndef MASTER_GOLD
 #	define USE_OWN_ERROR_MESSAGE_WINDOW
-#else // DEBUG
-#	define USE_OWN_MINI_DUMP
-#endif // DEBUG
+#endif // MASTER_GOLD
+// a dump costs nothing and a crash without one costs a repro session
+#define USE_OWN_MINI_DUMP
 
 XRCORE_API	xrDebug		Debug;
 
 static bool	error_after_dialog = false;
 
+// An unattended run (agents driving the editor over MCP, smoke scripts) must
+// never sit on a system-modal error box: log, dump, die - a dead process is
+// diagnosable, a stuck dialog is not.
+static bool no_dialogs()
+{
+	return !!strstr(GetCommandLine(), "-nodlg");
+}
+
+//------------------------------------------------------------------------------
+// The real stack walk. The stock editor printed the words "stack trace:" and
+// nothing else, which turned every crash into a repro hunt. The .pdb files sit
+// next to the binaries, so DbgHelp can resolve names and lines in-process.
+//------------------------------------------------------------------------------
+#pragma comment(lib, "dbghelp.lib")
+
+static xrCriticalSection	s_stack_lock;
+static bool					s_sym_ready = false;
+
+static void EnsureSymbols()
+{
+	if (s_sym_ready)	return;
+	::SymSetOptions	(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
+	// invade=TRUE registers every loaded module; the default search path
+	// includes each module's own folder, which is where the build puts the pdbs
+	s_sym_ready		= !!::SymInitialize(::GetCurrentProcess(), NULL, TRUE);
+}
+
+void LogStackTraceCtx (LPCSTR header, CONTEXT* ctx_in)
+{
+	if (!shared_str_initialized || !ctx_in)
+		return;
+
+	s_stack_lock.Enter	();
+	EnsureSymbols		();
+	Msg					("%s", header);
+
+	CONTEXT			ctx		= *ctx_in;		// StackWalk64 rewrites it
+	STACKFRAME64	frame	= {};
+#if defined(_M_X64) || defined(_M_AMD64)
+	const DWORD		machine	= IMAGE_FILE_MACHINE_AMD64;
+	frame.AddrPC.Offset		= ctx.Rip;
+	frame.AddrFrame.Offset	= ctx.Rbp;
+	frame.AddrStack.Offset	= ctx.Rsp;
+#else
+	const DWORD		machine	= IMAGE_FILE_MACHINE_I386;
+	frame.AddrPC.Offset		= ctx.Eip;
+	frame.AddrFrame.Offset	= ctx.Ebp;
+	frame.AddrStack.Offset	= ctx.Esp;
+#endif
+	frame.AddrPC.Mode = frame.AddrFrame.Mode = frame.AddrStack.Mode = AddrModeFlat;
+
+	HANDLE	proc	= ::GetCurrentProcess();
+	HANDLE	thread	= ::GetCurrentThread();
+
+	char	sym_buf[sizeof(SYMBOL_INFO) + 256];
+	for (int i = 0; i < 64; ++i)
+	{
+		if (!::StackWalk64(machine, proc, thread, &frame, &ctx, NULL,
+						   ::SymFunctionTableAccess64, ::SymGetModuleBase64, NULL))
+			break;
+		if (!frame.AddrPC.Offset)
+			break;
+
+		const DWORD64 base = ::SymGetModuleBase64(proc, frame.AddrPC.Offset);
+
+		char module[96] = "?";
+		if (base)
+		{
+			char path[MAX_PATH] = {};
+			if (::GetModuleFileNameA((HMODULE)base, path, sizeof(path)))
+			{
+				LPCSTR leaf = strrchr(path, '\\');
+				xr_strcpy(module, sizeof(module), leaf ? leaf + 1 : path);
+			}
+		}
+
+		SYMBOL_INFO* sym	= (SYMBOL_INFO*)sym_buf;
+		ZeroMemory			(sym_buf, sizeof(sym_buf));
+		sym->SizeOfStruct	= sizeof(SYMBOL_INFO);
+		sym->MaxNameLen		= 255;
+		DWORD64			disp64	= 0;
+		DWORD			disp32	= 0;
+		IMAGEHLP_LINE64	li		= { sizeof(IMAGEHLP_LINE64) };
+
+		const bool have_sym		= !!::SymFromAddr(proc, frame.AddrPC.Offset, &disp64, sym);
+		const bool have_line	= have_sym && !!::SymGetLineFromAddr64(proc, frame.AddrPC.Offset, &disp32, &li);
+
+		if (have_line)
+			Msg("  [%2d] %s!%s+0x%x  (%s:%d)", i, module, sym->Name, u32(disp64), li.FileName, int(li.LineNumber));
+		else if (have_sym)
+			Msg("  [%2d] %s!%s+0x%x", i, module, sym->Name, u32(disp64));
+		else
+			Msg("  [%2d] %s+0x%llx", i, module, base ? (frame.AddrPC.Offset - base) : frame.AddrPC.Offset);
+	}
+
+	FlushLog			();
+	s_stack_lock.Leave	();
+}
 
 void LogStackTrace	(LPCSTR header)
 {
-	if (!shared_str_initialized)
-		return;
-
-
-	Msg				("%s",header);
-
+	CONTEXT ctx			= {};
+	ctx.ContextFlags	= CONTEXT_FULL;
+	::RtlCaptureContext	(&ctx);
+	LogStackTraceCtx	(header, &ctx);
 }
 
 void xrDebug::gather_info		(const char *expression, const char *description, const char *argument0, const char *argument1, const char *file, int line, const char *function, LPSTR assertion_info, u32 const assertion_info_size)
@@ -123,13 +219,13 @@ void xrDebug::gather_info		(const char *expression, const char *description, con
 #endif // USE_MEMORY_MONITOR
 
 	if (!IsDebuggerPresent() && !strstr(GetCommandLine(),"-no_call_stack_assert")) {
-		if (shared_str_initialized)
-			Msg			("stack trace:\n");
+		// the log gets the real frames now, not just the header
+		LogStackTrace	("stack trace:");
 
 #ifdef USE_OWN_ERROR_MESSAGE_WINDOW
 		buffer			+= xr_sprintf(buffer,assertion_size - u32(buffer - buffer_base),"stack trace:%s%s",endline,endline);
 #endif // USE_OWN_ERROR_MESSAGE_WINDOW
-		
+
 
 		if (shared_str_initialized)
 			FlushLog	();
@@ -182,11 +278,20 @@ void xrDebug::backend	(const char *expression, const char *description, const ch
 
 	FlushLog			();
 
+	// headless runs must not wait for a click that is never coming
+	if (no_dialogs())
+	{
+		Msg					("! fatal error under -nodlg, terminating");
+		FlushLog			();
+		CS.Leave			();
+		TerminateProcess	(GetCurrentProcess(), 3);
+	}
+
 #ifdef XRCORE_STATIC
 	MessageBox			(NULL,assertion_info,"X-Ray error",MB_OK|MB_ICONERROR|MB_SYSTEMMODAL);
 #else
 #	ifdef USE_OWN_ERROR_MESSAGE_WINDOW
-		int					result = 
+		int					result =
 			MessageBox(
 				NULL,
 				assertion_info,
@@ -593,11 +698,8 @@ LONG WINAPI UnhandledFilter	(_EXCEPTION_POINTERS *pExceptionInfo)
 	format_message			(error_message,sizeof(error_message));
 
 	if (!error_after_dialog && !strstr(GetCommandLine(),"-no_call_stack_assert")) {
-		CONTEXT				save = *pExceptionInfo->ContextRecord;
-		*pExceptionInfo->ContextRecord = save;
-
-		if (shared_str_initialized)
-			Msg				("stack trace:\n");
+		// the exception context IS the crash site - walk it, not our own frame
+		LogStackTraceCtx	("stack trace:", pExceptionInfo->ContextRecord);
 
 		if (!IsDebuggerPresent())
 		{
@@ -622,11 +724,23 @@ LONG WINAPI UnhandledFilter	(_EXCEPTION_POINTERS *pExceptionInfo)
 	if (shared_str_initialized)
 		FlushLog			();
 
-#ifndef USE_OWN_ERROR_MESSAGE_WINDOW
-#	ifdef USE_OWN_MINI_DUMP
-		save_mini_dump		(pExceptionInfo);
-#	endif // USE_OWN_MINI_DUMP
-#else // USE_OWN_ERROR_MESSAGE_WINDOW
+	// the dump is written BEFORE any dialog: it must exist even when nobody is
+	// there to click, and even when the dialog itself dies
+#ifdef USE_OWN_MINI_DUMP
+	save_mini_dump			(pExceptionInfo);
+#endif // USE_OWN_MINI_DUMP
+
+	if (no_dialogs())
+	{
+		if (shared_str_initialized)
+		{
+			Msg				("! unhandled exception under -nodlg, terminating");
+			FlushLog		();
+		}
+		TerminateProcess	(GetCurrentProcess(), 3);
+	}
+
+#ifdef USE_OWN_ERROR_MESSAGE_WINDOW
 	if (!error_after_dialog) {
 		if (Debug.get_on_dialog())
 			Debug.get_on_dialog()	(true);

@@ -2980,6 +2980,7 @@ void CLevelMain::OnDrawUI()
         UIContentBrowser::Update();
         UIWorldOutliner::Update();
         UIVisualPreview::Update();
+        UIImagePreview::Update();
         EditorProject::DrawUI();
         EditorMod::DrawUI();
         EditorModScene::DrawUI();
