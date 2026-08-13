@@ -149,7 +149,8 @@ TOOLS = [
                        "Without 'target' the module deploys to the LINKED GAME (game_link): <game>/modules/<id>. "
                        "NOT mods/ - that one is JSGME's folder, and a module in it is a module "
                        "JSGME offers to copy over the game. "
-                       "The module export mirrors the project (stale files in the target module are deleted); "
+                       "The module export is a CLEAN build: the target module folder is emptied first, so a file "
+                       "the project no longer has cannot survive there; "
                        "a target inside the game's gamedata is refused - mods never merge into the game tree.",
         "inputSchema": {
             "type": "object",

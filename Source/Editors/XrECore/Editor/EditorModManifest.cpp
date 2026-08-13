@@ -492,43 +492,6 @@ static bool InsideGameGamedata(LPCSTR path)
 	return 0 == _strnicmp(path, guard, n) && (path[n] == 0 || path[n] == '\\');
 }
 
-// Module export mirrors: a file that disappeared from the project must
-// disappear from the exported module too, or every rename leaves a stale
-// twin behind. Only ever pointed at <target>\modules\<id> sub-parts - folders
-// this exporter owns outright.
-static void DeleteOrphansRec(LPCSTR dst, LPCSTR src)
-{
-	WIN32_FIND_DATAA fd;
-	string_path mask;
-	sprintf_s(mask, "%s\\*", dst);
-	HANDLE h = ::FindFirstFileA(mask, &fd);
-	if (INVALID_HANDLE_VALUE == h) return;
-	do
-	{
-		if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
-		string_path d, s;
-		sprintf_s(d, "%s\\%s", dst, fd.cFileName);
-		sprintf_s(s, "%s\\%s", src, fd.cFileName);
-		const DWORD sa = ::GetFileAttributesA(s);
-		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-		{
-			if (INVALID_FILE_ATTRIBUTES == sa || !(sa & FILE_ATTRIBUTE_DIRECTORY))
-			{
-				// gone from the project (or turned into a file): drop the tree
-				string_path sub;
-				sprintf_s(sub, "%s", d);
-				DeleteOrphansRec(sub, s);	// empties it even when src vanished
-				::RemoveDirectoryA(d);
-			}
-			else
-				DeleteOrphansRec(d, s);
-		}
-		else if (INVALID_FILE_ATTRIBUTES == sa || (sa & FILE_ATTRIBUTE_DIRECTORY))
-			::DeleteFileA(d);
-	} while (::FindNextFileA(h, &fd));
-	::FindClose(h);
-}
-
 // A module that brings its OWN game mode has to put the checkbox on the
 // new-game screen itself - the engine cannot, that screen is built in Lua by
 // the game. Three generated files do it, one set per module however many modes
@@ -779,7 +742,43 @@ static bool WriteModeRegistration(LPCSTR project_root, const EditorMod::SManifes
 	return true;
 }
 
-// what DeleteOrphansRec would remove, without removing it
+// Empties a folder, keeping the folder itself. The module export starts from
+// this: a build is CLEAN, so whatever the previous one left - a part the author
+// has since deleted, a file they renamed, a whole folder that is no longer part
+// of the project - is gone before the new one is written. Mirroring folder by
+// folder could not do that: it only ever visited the parts the project still
+// had, so anything the project stopped having stayed in the module forever.
+static int WipeTree(LPCSTR dir)
+{
+	int removed = 0;
+	WIN32_FIND_DATAA fd;
+	string_path mask;
+	sprintf_s(mask, "%s\\*", dir);
+	HANDLE h = ::FindFirstFileA(mask, &fd);
+	if (INVALID_HANDLE_VALUE == h) return 0;
+	do
+	{
+		if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+		string_path p;
+		sprintf_s(p, "%s\\%s", dir, fd.cFileName);
+		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			removed += WipeTree(p);
+			::RemoveDirectoryA(p);
+		}
+		else
+		{
+			// a read-only file (came off a CD, or the game marked it) still goes
+			::SetFileAttributesA(p, FILE_ATTRIBUTE_NORMAL);
+			if (::DeleteFileA(p)) ++removed;
+		}
+	} while (::FindNextFileA(h, &fd));
+	::FindClose(h);
+	return removed;
+}
+
+// How much of the target the clean build would throw away, without throwing it
+// away - the export asks this before wiping a folder that may not be its own.
 static int CountOrphansRec(LPCSTR dst, LPCSTR src)
 {
 	int n = 0;
@@ -907,9 +906,6 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 	else
 	{
 		string_path a, b;
-		sprintf_s(a, "%s\\mod.ltx", project_root);
-		sprintf_s(b, "%s\\mod.ltx", dst);
-		if (::CopyFileA(a, b, FALSE)) ++files;
 
 		// What ships is "everything the author made", not a fixed list of five
 		// folder names: a module may keep any layout it likes and publish it
@@ -935,10 +931,10 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 			}
 		}
 
-		// The mirror sweep below deletes anything in the target that the
-		// project no longer has - harmless when the target is this project's
-		// own output, destructive when it is somebody else's module that
-		// happens to share the id. Say so before touching it.
+		// The build is CLEAN: the target module folder is emptied first, so what
+		// ends up there is exactly this build and nothing a previous one left.
+		// That is destructive when the target is somebody else's module that
+		// happens to share the id - so say so, and only wipe once told to.
 		if (!confirmed && DirExists(dst))
 		{
 			int stale = 0;
@@ -958,16 +954,23 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 			}
 		}
 
+		if (const int wiped = WipeTree(dst))
+			Msg("* [XMS] clean build: %d stale file(s) removed from %s", wiped, dst);
+
+		sprintf_s(a, "%s\\mod.ltx", project_root);
+		sprintf_s(b, "%s\\mod.ltx", dst);
+		if (::CopyFileA(a, b, FALSE)) ++files;
+
 		for (u32 i = 0; i < parts.size(); ++i)
 		{
 			sprintf_s(src, "%s\\%s", project_root, parts[i].c_str());
 			sprintf_s(b, "%s\\%s", dst, parts[i].c_str());
-			// mirror semantics: what left the project leaves the module, or
-			// every rename ships a stale twin alongside the new file
-			if (DirExists(b)) DeleteOrphansRec(b, src);
-			if (!DirExists(src)) { ::RemoveDirectoryA(b); continue; }
+			if (!DirExists(src)) continue;
 			// the patch readme is authoring help, not module content
 			files += CopyTreeCount(src, b, (0 == _stricmp(parts[i].c_str(), "patch")) ? "_readme.txt" : 0);
+			// a part that carried nothing leaves no folder behind either -
+			// RemoveDirectory only succeeds on an empty one, which is the test
+			::RemoveDirectoryA(b);
 		}
 
 		// loose files the author dropped in the root travel too
