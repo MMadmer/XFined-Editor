@@ -42,7 +42,10 @@ public:
 	// a double click on a model just reports that no viewer is installed.
 	typedef void (*TShowVisual)		(LPCSTR visual_name);
 	typedef void (*TShowVisualMem)	(LPCSTR title, const void* data, u32 size);
-	static void		SetVisualPreview	(TShowVisual by_name, TShowVisualMem from_memory);
+	// `object_from_memory` takes the editor's .object format rather than an
+	// engine .ogf - the project source hands over raw file bytes for both
+	static void		SetVisualPreview	(TShowVisual by_name, TShowVisualMem from_memory,
+										 TShowVisualMem object_from_memory);
 
 	// MCP: reveal an asset in the browser - switches source and category when
 	// needed, navigates to the folder holding it, selects it and optionally
@@ -176,6 +179,12 @@ private:
 	u32								m_ThumbsThisFrame;
 
 	void			Refresh				();
+	// Refresh(), plus the project check that has to precede it: the panel can
+	// be drawn (and listed empty) before -project has opened anything, and
+	// nothing invalidated that listing afterwards.
+	void			EnsureListing		();
+	// project the listing was built for; "" when none was open
+	xr_string						m_ListedProject;
 	void			BuildTree			();
 	// creates the folder chain for `path` and returns its node
 	SFolder*		EnsureFolder		(LPCSTR path);

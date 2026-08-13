@@ -33,6 +33,9 @@ public:
 	// format, not an engine visual, so the model pool cannot touch it - it gets
 	// its own private CEditableObject and draws through RenderSingle.
 	static void		ShowObject			(LPCSTR object_name);
+	// same from memory: a project's own .object is outside $objects$ and outside
+	// the editor FS entirely, so the caller reads it off the disk itself
+	static void		ShowObjectFromMemory(LPCSTR title, const void* data, u32 size);
 	static void		Close				();
 	static IC bool	IsOpen				() { return !!Form; }
 	static void		Update				();		// draws if open

@@ -440,6 +440,37 @@ void UIVisualPreview::ShowFromMemory(LPCSTR title, const void* data, u32 size)
 	Form->SetVisual	(v,Form->m_Name.c_str());
 }
 
+void UIVisualPreview::ShowObjectFromMemory(LPCSTR title, const void* data, u32 size)
+{
+	if (!Form) Form = xr_new<UIVisualPreview>();
+	Form->bOpen		= true;
+	Form->m_Focus	= true;
+
+	Form->ReleaseVisual	();
+	Form->m_Name		= (title&&title[0])?title:"<memory>";
+
+	if (!data||(0==size))	{ Form->m_Error = "empty block"; return; }
+	if (!IsDeviceUsable())	{ Form->m_Error = "render device is not ready"; return; }
+
+	// A project's .object is not under $objects$ - and, the project living
+	// outside the SDK root, not in the editor FS at all - so ShowObject's
+	// by-name resolution can never find it. Load the bytes we were handed.
+	//
+	// Load(IReader&) takes the object BODY, not the file: the file-based
+	// overload opens EOBJ_CHUNK_OBJECT_BODY first, and handing it the whole
+	// file asserts on the missing version chunk.
+	IReader reader	((void*)data,int(size));
+	IReader* body	= reader.open_chunk(EOBJ_CHUNK_OBJECT_BODY);
+	if (!body)	{ Form->m_Error = "not an .object file"; return; }
+
+	CEditableObject* obj = xr_new<CEditableObject>(Form->m_Name.c_str());
+	const bool loaded = obj->Load(*body);
+	body->close();
+	if (!loaded)	{ xr_delete(obj); Form->m_Error = "cannot load object"; return; }
+
+	Form->SetEditable	(obj,Form->m_Name.c_str());
+}
+
 void UIVisualPreview::ShowObject(LPCSTR object_name)
 {
 	if (!Form) Form = xr_new<UIVisualPreview>();
@@ -965,7 +996,8 @@ namespace
 		SVisualPreviewHooks()
 		{
 			// content browser: double click routes here instead of spawning
-			UIContentBrowser::SetVisualPreview(&UIVisualPreview::Show,&UIVisualPreview::ShowFromMemory);
+			UIContentBrowser::SetVisualPreview(&UIVisualPreview::Show,&UIVisualPreview::ShowFromMemory,
+											   &UIVisualPreview::ShowObjectFromMemory);
 			// device reset: our render target must die before HW.Reset
 			g_pOnEditorDeviceResetBegin	= &UIVisualPreview::OnDeviceResetBegin;
 			g_pOnEditorDeviceResetEnd	= &UIVisualPreview::OnDeviceResetEnd;

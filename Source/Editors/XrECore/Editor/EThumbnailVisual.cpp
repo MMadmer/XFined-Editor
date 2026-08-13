@@ -551,11 +551,44 @@ ECORE_API bool RenderObjectThumbnail(LPCSTR object_name, U32Vec& out)
 	return result;
 }
 //------------------------------------------------------------------------------
+
+ECORE_API bool RenderObjectThumbnailFromMemory(LPCSTR debug_name, const void* data, u32 size, U32Vec& out)
+{
+	out.clear();
+	if (!data||(0==size))				return false;
+	if (!IsDeviceUsable())				return false;
+
+	// A project's own .object is not in $objects$ and, living outside the SDK
+	// root, is not registered in the editor FS at all - so the by-name path
+	// above can never reach it. The bytes come straight off the disk instead.
+	//
+	// Load(IReader&) reads the object BODY, not the file: the file-based
+	// overload opens EOBJ_CHUNK_OBJECT_BODY first, and feeding it the whole
+	// file asserts on the missing version chunk.
+	IReader reader	((void*)data,int(size));
+	IReader* body	= reader.open_chunk(EOBJ_CHUNK_OBJECT_BODY);
+	if (!body)
+	{
+		Msg("!Object thumbnail: '%s' is not an .object file.",(debug_name&&debug_name[0])?debug_name:"<memory>");
+		return false;
+	}
+
+	CEditableObject* obj = xr_new<CEditableObject>((debug_name&&debug_name[0])?debug_name:"$memory$");
+	bool result = false;
+	if (obj->Load(*body))
+		result = RenderVisualToPixels(0,obj,out);
+	xr_delete(obj);
+	body->close();
+
+	if (!result)	out.clear();
+	return result;
+}
+//------------------------------------------------------------------------------
 // deferred queue
 //------------------------------------------------------------------------------
 namespace
 {
-	enum EThumbSource { tsVisualName, tsVisualBytes, tsEditableObject };
+	enum EThumbSource { tsVisualName, tsVisualBytes, tsEditableObject, tsEditableObjectBytes };
 
 	struct SThumbRequest
 	{
@@ -612,6 +645,18 @@ ECORE_API void QueueVisualThumbnailFromMemory(LPCSTR key, const void* data, u32 
 	r.bytes.assign((const u8*)data,(const u8*)data+size);
 }
 
+ECORE_API void QueueObjectThumbnailFromMemory(LPCSTR key, const void* data, u32 size)
+{
+	if (!key||!key[0]||!data||(0==size))	return;
+	if (FindRequest(key))					return;
+	s_Requests.push_back(SThumbRequest());
+	SThumbRequest& r = s_Requests.back();
+	r.key		= key;
+	r.name		= key;		// logging only
+	r.source	= tsEditableObjectBytes;
+	r.bytes.assign((const u8*)data,(const u8*)data+size);
+}
+
 ECORE_API bool TakeVisualThumbnail(LPCSTR key, U32Vec& out, bool& failed)
 {
 	out.clear();
@@ -650,6 +695,9 @@ ECORE_API void FlushVisualThumbnailQueue(u32 max_requests)
 				break;
 			case tsEditableObject:
 				ok = RenderObjectThumbnail(r.name.c_str(),r.pixels);
+				break;
+			case tsEditableObjectBytes:
+				ok = RenderObjectThumbnailFromMemory(r.name.c_str(),r.bytes.data(),u32(r.bytes.size()),r.pixels);
 				break;
 			default:
 				ok = RenderVisualThumbnail(r.name.c_str(),r.pixels);

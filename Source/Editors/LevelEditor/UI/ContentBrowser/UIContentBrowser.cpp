@@ -26,6 +26,42 @@ static bool IsVisualExt(LPCSTR name)
 	return ext && !_stricmp(ext, ".ogf");
 }
 
+// the editor's own model format - engine visuals are .ogf, sources are .object
+static bool IsObjectExt(LPCSTR name)
+{
+	LPCSTR ext = name ? strrchr(name, '.') : 0;
+	return ext && !_stricmp(ext, ".object");
+}
+
+// Nothing under the project root is registered in the editor FS: a project may
+// live anywhere (My Documents by default) and only $maps$ is remounted into it,
+// so FS.r_open on a project file always fails. Project bytes come off the disk
+// directly - the same reason images already load through DX11TextureFromFile.
+static bool ReadProjectFile(LPCSTR rel, xr_vector<u8>& out)
+{
+	out.clear();
+	if (!rel || !rel[0] || !EditorProject::Active()) return false;
+
+	string_path abs;
+	sprintf_s(abs, "%s\\%s", EditorProject::Root(), rel);
+	HANDLE h = ::CreateFileA(abs, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+							 FILE_ATTRIBUTE_NORMAL, NULL);
+	if (INVALID_HANDLE_VALUE == h) return false;
+
+	LARGE_INTEGER size;
+	if (!::GetFileSizeEx(h, &size) || size.QuadPart <= 0 || size.QuadPart > (64 << 20))
+	{
+		::CloseHandle(h);
+		return false;
+	}
+	out.resize(size_t(size.QuadPart));
+	DWORD read = 0;
+	const bool ok = !!::ReadFile(h, out.data(), DWORD(out.size()), &read, NULL) && read == out.size();
+	::CloseHandle(h);
+	if (!ok) out.clear();
+	return ok;
+}
+
 // "meshes\dynamics\box\box_1a.ogf" -> "dynamics\box\box_1a", the form
 // ::Render->model_Create expects (relative to $game_meshes$, no extension)
 static void ToVisualName(LPCSTR path, char* dst, u32 dst_size)
@@ -43,11 +79,14 @@ UIContentBrowser* UIContentBrowser::Form = nullptr;
 // filled in by the preview window when it is compiled into the build
 static UIContentBrowser::TShowVisual	s_ShowVisual	= 0;
 static UIContentBrowser::TShowVisualMem	s_ShowVisualMem	= 0;
+static UIContentBrowser::TShowVisualMem	s_ShowObjectMem	= 0;
 
-void UIContentBrowser::SetVisualPreview(TShowVisual by_name, TShowVisualMem from_memory)
+void UIContentBrowser::SetVisualPreview(TShowVisual by_name, TShowVisualMem from_memory,
+										TShowVisualMem object_from_memory)
 {
 	s_ShowVisual	= by_name;
 	s_ShowVisualMem	= from_memory;
+	s_ShowObjectMem	= object_from_memory;
 }
 
 // Categories exposed by the browser. Ids come straight from EChooseMode, so the
@@ -248,6 +287,23 @@ static void ScanContentDir(const char* base, const char* rel, ChooseItemVec& out
 	::FindClose(h);
 }
 
+void UIContentBrowser::EnsureListing()
+{
+	// A project opening, closing or changing invalidates the whole listing.
+	// Without this the panel keeps whatever it scanned first - and with
+	// -project it is drawn once BEFORE the project opens, so it kept an empty
+	// tree and every reveal answered "asset not found in this source".
+	LPCSTR root = EditorProject::Active() ? EditorProject::Root() : "";
+	if (0 != xr_strcmp(m_ListedProject.c_str(), root))
+	{
+		m_ListedProject	= root;
+		m_NeedRefresh	= true;
+		m_CurFolder.clear();
+		ClearSelection();
+	}
+	if (m_NeedRefresh) Refresh();
+}
+
 void UIContentBrowser::Refresh()
 {
 	m_NeedRefresh	= false;
@@ -433,12 +489,13 @@ void UIContentBrowser::RequestModelThumbnail(LPCSTR name)
 	}
 	else if (m_Source == 0)
 	{
-		char abs[MAX_PATH];
-		sprintf_s(abs, "%s\\%s", EditorProject::Root(), name);
-		if (IReader* r = FS.r_open(abs))
+		xr_vector<u8> bytes;
+		if (ReadProjectFile(name, bytes))
 		{
-			QueueVisualThumbnailFromMemory(name, r->pointer(), (u32)r->length());
-			FS.r_close(r);
+			// .object is the editor's source format and .ogf the engine's; both
+			// render offscreen, but through different loaders
+			if (IsObjectExt(name))	QueueObjectThumbnailFromMemory(name, bytes.data(), u32(bytes.size()));
+			else					QueueVisualThumbnailFromMemory(name, bytes.data(), u32(bytes.size()));
 		}
 	}
 	else
@@ -463,7 +520,9 @@ ImTextureID UIContentBrowser::GetThumb(LPCSTR name)
 	// frame loop drains outside the scene (see EThumbnailVisual.h). Rendering
 	// inline would mean closing the editor's scene from inside its own ImGui
 	// pass, and any throw in between takes the next frame down with it.
-	const bool needs_render = IsVisualExt(name);
+	// .object counts here too: in the project source it is the usual way a model
+	// arrives, and it has no baked .thm beside it the way the SDK library does
+	const bool needs_render = IsVisualExt(name) || (m_Source == 0 && IsObjectExt(name));
 	const bool will_render	= needs_render ||
 							  (m_Source == 1 && kCategories[m_Category].id == smVisual);
 	if (will_render)
@@ -727,10 +786,12 @@ bool UIContentBrowser::OpenAsset(LPCSTR name, xr_string* err)
 	// Library objects (.object) are previewable too - the preview window loads
 	// them through CEditableObject when the model pool has nothing under that
 	// name. Without this the most-used category in the browser opened nothing.
-	const bool is_model = IsVisualExt(name) ||
+	// A project's own .object opens like a library one: it is the most common
+	// thing in there, and it used to fall through to "no viewer for this kind".
+	const bool is_model = IsVisualExt(name) || IsObjectExt(name) ||
 						  (m_Source == 1 && (kCategories[m_Category].id == smVisual ||
 											 kCategories[m_Category].id == smObject));
-	if (is_model && (s_ShowVisual || s_ShowVisualMem))
+	if (is_model && (s_ShowVisual || s_ShowVisualMem || s_ShowObjectMem))
 	{
 		if (m_Source == 2 && s_ShowVisualMem)
 		{
@@ -746,15 +807,16 @@ bool UIContentBrowser::OpenAsset(LPCSTR name, xr_string* err)
 			}
 			EditorGameContent::FreeBytes(bytes);
 		}
-		else if (m_Source == 0 && s_ShowVisualMem)
+		else if (m_Source == 0)
 		{
-			char abs[MAX_PATH];
-			sprintf_s(abs, "%s\\%s", EditorProject::Root(), name);
-			if (IReader* r = FS.r_open(abs))
-			{
-				s_ShowVisualMem(name, r->pointer(), (u32)r->length());
-				FS.r_close(r);
-			}
+			// off the disk: nothing under the project root is in the editor FS
+			xr_vector<u8> bytes;
+			if (!ReadProjectFile(name, bytes))
+				OPEN_FAILED("can't read '%s' from the project folder", name);
+			const bool is_object = IsObjectExt(name);
+			if (is_object && s_ShowObjectMem)		s_ShowObjectMem(name, bytes.data(), u32(bytes.size()));
+			else if (!is_object && s_ShowVisualMem)	s_ShowVisualMem(name, bytes.data(), u32(bytes.size()));
+			else									OPEN_FAILED("no viewer registered for '%s'", name);
 		}
 		else if (s_ShowVisual)
 			s_ShowVisual(name);
@@ -1202,7 +1264,7 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 		Form->SwitchSource(source);
 
 	// the listing is rebuilt lazily; the lookup below needs it now
-	if (Form->m_NeedRefresh) Form->Refresh();
+	Form->EnsureListing();
 
 	int found = -1;
 	for (u32 i = 0; i < Form->m_Items.size(); ++i)
@@ -2055,7 +2117,7 @@ void UIContentBrowser::Draw()
 	m_Tick++;
 	m_ThumbsThisFrame = 0;
 	if (!ImGui::IsMouseDragging(ImGuiMouseButton_Left)) m_Dragged.clear();
-	if (m_NeedRefresh) Refresh();
+	EnsureListing();
 
 	// toolbar: UE-style source switch, then the category combo for the shared library
 	{

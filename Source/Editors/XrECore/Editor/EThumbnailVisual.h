@@ -32,6 +32,11 @@ ECORE_API bool RenderVisualThumbnailFromMemory(LPCSTR debug_name, const void* da
 // objects have no baked .thm, and this is the only way to preview those.
 ECORE_API bool RenderObjectThumbnail(LPCSTR object_name, U32Vec& out);
 
+// Same, from memory. A project's own .object lives outside the SDK root, so it
+// is in neither $objects$ nor the editor FS at all - the by-name call above can
+// never reach it and the caller has to hand over the bytes.
+ECORE_API bool RenderObjectThumbnailFromMemory(LPCSTR debug_name, const void* data, u32 size, U32Vec& out);
+
 //------------------------------------------------------------------------------
 // Deferred queue - the safe way to ask for a thumbnail from UI code
 //
@@ -57,6 +62,10 @@ ECORE_API void QueueObjectThumbnail(LPCSTR key, LPCSTR object_name);
 // Queues a request whose OGF bytes come from memory. The block is copied, so
 // the caller may free it immediately.
 ECORE_API void QueueVisualThumbnailFromMemory(LPCSTR key, const void* data, u32 size);
+
+// Same for .object bytes - the project source reads its files off the disk
+// itself, since nothing under the project root is in the editor FS.
+ECORE_API void QueueObjectThumbnailFromMemory(LPCSTR key, const void* data, u32 size);
 
 // Result poll. Returns true once the request finished and fills `out`; the
 // entry is consumed. `failed` tells a finished-but-unrenderable request apart
