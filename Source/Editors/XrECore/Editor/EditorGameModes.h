@@ -29,6 +29,35 @@ public:
 					SMode() : campaign(false), available(true) {}
 	};
 
+	// Where one more campaign checkbox fits on the new-game screen, measured on
+	// the layout the linked game really ships: the row goes under the last one
+	// of the campaign column, the frame around that column grows to hold it and
+	// whatever sat below the frame is pushed down by the same amount. Every
+	// number here comes from the file - nothing about Dead Air's own layout is
+	// assumed, so a screen replaced by a global mod is measured on its terms.
+	struct SSlotShift
+	{
+		xr_string	node;			// direct child of main_dialog
+		int			y;				// its new y
+	};
+	struct SSlot
+	{
+		xr_string			layout;			// gamedata-relative layout file
+		int					check_x, check_y, check_w, check_h;
+		int					cap_x, cap_y, cap_w, cap_h;
+		int					step;			// row pitch of the column
+		xr_string			frame_node;		// grown to fit the row; empty = none found
+		int					frame_height;
+		xr_vector<SSlotShift> shift;		// pushed down by the growth
+							SSlot() : check_x(0), check_y(0), check_w(30), check_h(21),
+									  cap_x(0), cap_y(0), cap_w(160), cap_h(20),
+									  step(25), frame_height(0) {}
+	};
+	// rows is how many checkboxes are being added at once; skip_module keeps a
+	// module from tripping over the rows it itself added last export
+	static bool		SuggestSlot			(LPCSTR layout_rel, int rows, LPCSTR skip_module,
+										 SSlot& out, xr_string& err);
+
 	// Scans the linked install (and the XMS modules under its mods\ folder).
 	// Cached; Invalidate() forces the next call to re-read. False + reason when
 	// nothing could be read - the caller still gets the "no mode" entry.

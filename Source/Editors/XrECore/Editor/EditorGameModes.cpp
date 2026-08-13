@@ -28,6 +28,16 @@ xr_string Cp1251ToUtf8(LPCSTR src)
 	return out;
 }
 
+// mod.ltx is written by this editor, so its captions are already UTF-8 - but a
+// hand-written manifest may well be cp1251 like every other file in the game.
+// Valid UTF-8 is left alone; anything else is read as cp1251.
+xr_string CaptionFromManifest(LPCSTR src)
+{
+	if (!src) return xr_string();
+	const int ok = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, src, -1, NULL, 0);
+	return ok > 0 ? xr_string(src) : Cp1251ToUtf8(src);
+}
+
 // whole item of the linked game as a string; empty when it is not there
 xr_string ReadGameText(LPCSTR rel)
 {
@@ -51,9 +61,17 @@ int AttrInt(const xr_string& text, size_t tag_at, LPCSTR attr, int def)
 	if (close == xr_string::npos) return def;
 	char pat[32];
 	sprintf_s(pat, "%s=\"", attr);
-	const size_t at = text.find(pat, tag_at);
-	if (at == xr_string::npos || at > close) return def;
-	return atoi(text.c_str() + at + xr_strlen(pat));
+	const size_t len = xr_strlen(pat);
+	// the name has to START where it is found: "x=" also lives inside "max=",
+	// and "height=" inside "item_height=", and both are real X-Ray attributes
+	for (size_t at = text.find(pat, tag_at); at != xr_string::npos && at < close;
+		 at = text.find(pat, at + len))
+	{
+		const char before = at ? text[at - 1] : ' ';
+		if (before == ' ' || before == '\t' || before == '\r' || before == '\n')
+			return atoi(text.c_str() + at + len);
+	}
+	return def;
 }
 
 // new_game_metro_mode -> metro, new_game_good_loot -> good_loot
@@ -64,6 +82,32 @@ xr_string NormalizeId(const xr_string& config_key)
 	const size_t n = id.size();
 	if (n > 5 && 0 == _stricmp(id.c_str() + n - 5, "_mode"))	id.erase(n - 5);
 	return id;
+}
+
+// Lua block comments hide whole InitCheck calls: Dead Air's story and azazel
+// checkboxes sit inside --[[ ... --]] with the call itself unprefixed, so a
+// per-line check alone would call them live.
+bool InsideBlockComment(const xr_string& script, size_t at)
+{
+	bool block = false;
+	for (size_t i = 0; i + 1 < at; ++i)
+	{
+		if (block)
+		{
+			if (script[i] == ']' && script[i + 1] == ']') { block = false; ++i; }
+			continue;
+		}
+		if (script[i] != '-' || script[i + 1] != '-') continue;
+		// --[[ opens a block; anything else is a line comment, skip to its end
+		if (i + 3 < at && script[i + 2] == '[' && script[i + 3] == '[') { block = true; i += 3; }
+		else
+		{
+			const size_t eol = script.find('\n', i);
+			if (eol == xr_string::npos || eol >= at) return block;
+			i = eol;
+		}
+	}
+	return block;
 }
 
 // A checkbox is only real when the script creates it: Dead Air ships several
@@ -82,7 +126,8 @@ bool CheckboxLive(const xr_string& script, const xr_string& node)
 		xr_string line = script.substr(bol, at - bol);
 		size_t first = line.find_first_not_of(" \t");
 		const bool commented = (first != xr_string::npos) && 0 == strncmp(line.c_str() + first, "--", 2);
-		if (!commented && line.find("InitCheck") != xr_string::npos) return true;
+		if (!commented && line.find("InitCheck") != xr_string::npos && !InsideBlockComment(script, at))
+			return true;
 		at += needle.size();
 	}
 	return false;
@@ -92,10 +137,22 @@ bool CheckboxLive(const xr_string& script, const xr_string& node)
 // install actually ships. Scans every text xml once, on demand.
 void ResolveCaptions(xr_vector<EditorGameModes::SMode>& modes)
 {
-	xr_vector<xr_string> pending;
+	// caption still holds the string id at this point; a parallel flag records
+	// what has been resolved, because a resolved caption is arbitrary text and
+	// cannot be told from an id by looking at it
+	xr_vector<xr_string> string_ids(modes.size());
+	bool any = false;
 	for (u32 i = 0; i < modes.size(); ++i)
-		if (!modes[i].caption.empty()) pending.push_back(modes[i].caption);	// holds the string id for now
-	if (pending.empty()) return;
+	{
+		string_ids[i] = modes[i].caption;
+		modes[i].caption.clear();
+		if (!string_ids[i].empty()) any = true;
+	}
+	if (!any)
+	{
+		for (u32 i = 0; i < modes.size(); ++i) modes[i].caption = modes[i].id;
+		return;
+	}
 
 	const int total = EditorGameContent::Count();
 	for (int i = 0; i < total; ++i)
@@ -111,9 +168,9 @@ void ResolveCaptions(xr_vector<EditorGameModes::SMode>& modes)
 		for (u32 m = 0; m < modes.size(); ++m)
 		{
 			EditorGameModes::SMode& mode = modes[m];
-			if (mode.caption.empty() || mode.caption[0] != 's') continue;	// already resolved
+			if (string_ids[m].empty() || !mode.caption.empty()) continue;	// nothing to look up, or done
 			xr_string pat = "id=\"";
-			pat += mode.caption;
+			pat += string_ids[m];
 			pat += "\"";
 			const size_t at = text.find(pat);
 			if (at == xr_string::npos) continue;
@@ -127,8 +184,81 @@ void ResolveCaptions(xr_vector<EditorGameModes::SMode>& modes)
 
 	// a string id nobody defines stays readable rather than becoming noise
 	for (u32 m = 0; m < modes.size(); ++m)
-		if (modes[m].caption.empty() || modes[m].caption[0] == 's')
+		if (modes[m].caption.empty())
 			modes[m].caption = modes[m].id;
+}
+
+// ---------------------------------------------------------------------------
+// layout measuring, for SuggestSlot
+// ---------------------------------------------------------------------------
+
+struct SNode
+{
+	xr_string	name;
+	size_t		at;					// offset of '<'
+	int			x, y, w, h;
+};
+
+// Direct children of <main_dialog>, with their rect. Enough of an XML scan for
+// a game UI file: comments, declarations and self-closing tags are recognised,
+// everything else is a plain open/close pair.
+void ScanDialogChildren(const xr_string& ui, xr_vector<SNode>& out)
+{
+	const size_t root = ui.find("<main_dialog");
+	if (root == xr_string::npos) return;
+	size_t pos = ui.find('>', root);
+	if (pos == xr_string::npos) return;
+	++pos;
+
+	int depth = 0;
+	while (pos < ui.size())
+	{
+		const size_t lt = ui.find('<', pos);
+		if (lt == xr_string::npos) break;
+		pos = lt + 1;
+		if (pos >= ui.size()) break;
+
+		if (0 == ui.compare(pos, 3, "!--"))
+		{
+			const size_t end = ui.find("-->", pos);
+			pos = (end == xr_string::npos) ? ui.size() : end + 3;
+			continue;
+		}
+		if (ui[pos] == '?' || ui[pos] == '!')
+		{
+			const size_t end = ui.find('>', pos);
+			pos = (end == xr_string::npos) ? ui.size() : end + 1;
+			continue;
+		}
+		if (ui[pos] == '/')
+		{
+			if (0 == depth) break;			// </main_dialog>
+			--depth;
+			const size_t end = ui.find('>', pos);
+			pos = (end == xr_string::npos) ? ui.size() : end + 1;
+			continue;
+		}
+
+		size_t name_end = pos;
+		while (name_end < ui.size() && (isalnum((u8)ui[name_end]) || ui[name_end] == '_')) ++name_end;
+		const size_t close = ui.find('>', name_end);
+		if (close == xr_string::npos) break;
+		const bool self_closing = ui[close - 1] == '/';
+
+		if (0 == depth)
+		{
+			SNode n;
+			n.name	= ui.substr(pos, name_end - pos);
+			n.at	= lt;
+			n.x		= AttrInt(ui, lt, "x", -1);
+			n.y		= AttrInt(ui, lt, "y", -1);
+			n.w		= AttrInt(ui, lt, "width", -1);
+			n.h		= AttrInt(ui, lt, "height", -1);
+			out.push_back(n);
+		}
+		if (!self_closing) ++depth;
+		pos = close + 1;
+	}
 }
 
 // [provides_mode] of every XMS module installed in the linked game
@@ -190,7 +320,7 @@ void ScanInstalledModules(xr_vector<EditorGameModes::SMode>& out)
 				pending.source	= fd.cFileName;
 			}
 			else if (0 == _stricmp(key.c_str(), "title") && !pending.id.empty())
-				pending.caption = Cp1251ToUtf8(val.c_str());
+				pending.caption = CaptionFromManifest(val.c_str());
 		}
 		if (!pending.id.empty()) out.push_back(pending);
 	} while (::FindNextFileA(h, &fd));
@@ -292,6 +422,200 @@ bool EditorGameModes::Scan(xr_string& err)
 	s_Modes = kept;
 
 	ScanInstalledModules(s_Modes);
+	return true;
+}
+
+// Rows other installed modules already appended to this screen. Their patches
+// are plain files under <game>\mods\<id>\patch\*.xmlp, so the answer is on
+// disk: without this every module that adds a mode would compute the same row
+// and the checkboxes would sit on top of each other.
+static int RowsTakenByModules(LPCSTR layout_file, int column_x, LPCSTR skip_module)
+{
+	LPCSTR game = EditorProject::GameRoot();
+	if (!game || !game[0] || !layout_file) return 0;
+
+	int lowest = 0;
+	string_path mask;
+	sprintf_s(mask, "%s\\mods\\*", game);
+	WIN32_FIND_DATAA fd;
+	HANDLE h = ::FindFirstFileA(mask, &fd);
+	if (INVALID_HANDLE_VALUE == h) return 0;
+	do
+	{
+		if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))	continue;
+		if (fd.cFileName[0] == '.')								continue;
+		if (skip_module && 0 == _stricmp(fd.cFileName, skip_module)) continue;
+
+		string_path pmask;
+		sprintf_s(pmask, "%s\\mods\\%s\\patch\\*.xmlp", game, fd.cFileName);
+		WIN32_FIND_DATAA pf;
+		HANDLE ph = ::FindFirstFileA(pmask, &pf);
+		if (INVALID_HANDLE_VALUE == ph) continue;
+		do
+		{
+			string_path file;
+			sprintf_s(file, "%s\\mods\\%s\\patch\\%s", game, fd.cFileName, pf.cFileName);
+			HANDLE f = ::CreateFileA(file, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+									 FILE_ATTRIBUTE_NORMAL, NULL);
+			if (INVALID_HANDLE_VALUE == f) continue;
+			xr_string text;
+			LARGE_INTEGER size;
+			if (::GetFileSizeEx(f, &size) && size.QuadPart > 0 && size.QuadPart < (1 << 20))
+			{
+				xr_vector<char> buf(size_t(size.QuadPart) + 1, 0);
+				DWORD read = 0;
+				if (::ReadFile(f, buf.data(), DWORD(size.QuadPart), &read, NULL)) text = buf.data();
+			}
+			::CloseHandle(f);
+			if (text.empty() || text.find(layout_file) == xr_string::npos) continue;
+
+			size_t pos = 0;
+			while ((pos = text.find("<check_", pos)) != xr_string::npos)
+			{
+				const int x = AttrInt(text, pos, "x", -1);
+				const int y = AttrInt(text, pos, "y", -1);
+				if (y > lowest && x >= 0 && abs(x - column_x) <= 4) lowest = y;
+				pos += 7;
+			}
+		} while (::FindNextFileA(ph, &pf));
+		::FindClose(ph);
+	} while (::FindNextFileA(h, &fd));
+	::FindClose(h);
+	return lowest;
+}
+
+bool EditorGameModes::SuggestSlot(LPCSTR layout_rel, int rows, LPCSTR skip_module,
+								  SSlot& out, xr_string& err)
+{
+	err.clear();
+	out = SSlot();
+	out.layout = layout_rel ? layout_rel : "";
+	if (rows < 1) rows = 1;
+
+	xr_string mount_err;
+	if (!EditorGameContent::EnsureMounted(mount_err))
+	{
+		err = mount_err.empty() ? xr_string("no game linked") : mount_err;
+		return false;
+	}
+	const xr_string ui = ReadGameText(layout_rel);
+	if (ui.empty()) { err = "layout not found in the linked game"; return false; }
+
+	xr_vector<SNode> nodes;
+	ScanDialogChildren(ui, nodes);
+	if (nodes.empty()) { err = "the layout has no main_dialog children"; return false; }
+
+	// which column takes campaigns: the one the <dar2_mode> header sits over,
+	// or - on a screen without headers - simply the leftmost checkbox column
+	int x_mode = -1, x_option = -1;
+	if (const size_t at = ui.find("<dar2_mode"); at != xr_string::npos)		x_mode   = AttrInt(ui, at, "x", -1);
+	if (const size_t at = ui.find("<dar2_option"); at != xr_string::npos)	x_option = AttrInt(ui, at, "x", -1);
+
+	xr_vector<const SNode*> checks;
+	for (u32 i = 0; i < nodes.size(); ++i)
+		if (0 == _strnicmp(nodes[i].name.c_str(), "check_", 6) && nodes[i].x >= 0 && nodes[i].y >= 0)
+			checks.push_back(&nodes[i]);
+	if (checks.empty()) { err = "the layout has no checkboxes to sit next to"; return false; }
+
+	int column_x = checks[0]->x;
+	for (u32 i = 1; i < checks.size(); ++i)
+	{
+		const int x = checks[i]->x;
+		if (x_mode >= 0 && x_option >= 0)
+		{
+			const bool campaign	= abs(x - x_mode) <= abs(x - x_option);
+			const bool have		= abs(column_x - x_mode) <= abs(column_x - x_option);
+			if (campaign && !have) column_x = x;			// first campaign column wins
+		}
+		else if (x < column_x)
+			column_x = x;									// no headers: leftmost
+	}
+
+	// The row itself: same geometry as the column's last checkbox, one step
+	// down. The step is the SMALLEST gap between rows, not the largest - a
+	// column with a visual break in it would otherwise push the new row off
+	// the dialog entirely.
+	const SNode* last = 0;
+	int step = 0;
+	for (u32 i = 0; i < checks.size(); ++i)
+	{
+		if (abs(checks[i]->x - column_x) > 4) continue;
+		if (!last || checks[i]->y > last->y)
+		{
+			const int gap = last ? (checks[i]->y - last->y) : 0;
+			if (gap > 0 && (step <= 0 || gap < step)) step = gap;
+			last = checks[i];
+		}
+	}
+	if (!last) { err = "the campaign column is empty"; return false; }
+	if (step <= 0) step = (last->h > 0 ? last->h : 21) + 4;
+	out.step = step;
+
+	out.check_x	= last->x;
+	out.check_w	= last->w > 0 ? last->w : 30;
+	out.check_h	= last->h > 0 ? last->h : 21;
+
+	// start below whatever is already there, base layout or another module
+	const char* layout_file = strrchr(out.layout.c_str(), '\\');
+	layout_file = layout_file ? layout_file + 1 : out.layout.c_str();
+	const int taken = RowsTakenByModules(layout_file, out.check_x, skip_module);
+	out.check_y	= (taken > last->y ? taken : last->y) + step;
+
+	// The label: the sibling cap_ node of that same checkbox, when there is one.
+	// Its y is kept as an OFFSET from the checkbox - the two are not always
+	// flush (the 4:3 layout sets the label 5px lower), and copying the offset
+	// keeps the new row looking like every other one.
+	out.cap_x	= out.check_x + out.check_w;
+	out.cap_y	= out.check_y;
+	xr_string cap_name = "cap_" + last->name;
+	for (u32 i = 0; i < nodes.size(); ++i)
+		if (0 == _stricmp(nodes[i].name.c_str(), cap_name.c_str()))
+		{
+			if (nodes[i].x > 0) out.cap_x = nodes[i].x;
+			if (nodes[i].w > 0) out.cap_w = nodes[i].w;
+			if (nodes[i].h > 0) out.cap_h = nodes[i].h;
+			if (nodes[i].y >= 0) out.cap_y = out.check_y + (nodes[i].y - last->y);
+			break;
+		}
+
+	// The frame around the column: the smallest node that holds the last row.
+	// Growing it keeps the added checkbox inside the border instead of under
+	// it. The containment test is fuzzy on purpose - in the stock layout the
+	// checkbox column pokes a few pixels out of its own frame, and an exact
+	// test would then pick the outer frame and grow the wrong thing.
+	const int kSlack = 8;
+	const SNode* frame = 0;
+	for (u32 i = 0; i < nodes.size(); ++i)
+	{
+		const SNode& n = nodes[i];
+		if (n.x < 0 || n.y < 0 || n.w <= 0 || n.h <= 0)					continue;
+		if (0 == _strnicmp(n.name.c_str(), "check_", 6))					continue;
+		if (0 == _strnicmp(n.name.c_str(), "cap_", 4))					continue;
+		if (n.x > last->x + kSlack || n.y > last->y + kSlack)			continue;
+		if (n.x + n.w + kSlack < last->x + out.check_w)					continue;
+		if (n.y + n.h + kSlack < last->y + out.check_h)					continue;
+		if (!frame || (n.w * n.h) < (frame->w * frame->h))				frame = &n;
+	}
+
+	const int row_bottom = out.check_y + (rows - 1) * step + out.check_h;
+	if (frame && frame->y + frame->h < row_bottom + 4)
+	{
+		const int grown	= row_bottom + 4 - frame->y;
+		const int delta	= grown - frame->h;
+		out.frame_node		= frame->name;
+		out.frame_height	= grown;
+
+		// everything that started below the frame moves down with it
+		for (u32 i = 0; i < nodes.size(); ++i)
+		{
+			const SNode& n = nodes[i];
+			if (&n == frame || n.y < frame->y + frame->h)	continue;
+			SSlotShift s;
+			s.node	= n.name;
+			s.y		= n.y + delta;
+			out.shift.push_back(s);
+		}
+	}
 	return true;
 }
 

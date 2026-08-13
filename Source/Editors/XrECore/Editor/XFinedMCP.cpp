@@ -63,7 +63,12 @@ bool XFinedMCP::GetArg(LPCSTR raw, LPCSTR field, char* dst, u32 dst_size)
 			case 'f':	ch = '\f';	break;
 			case 'u':
 				{
-					// \uXXXX: only the ascii range survives a char buffer
+					// \uXXXX -> UTF-8. Not every argument is a path or an id any
+					// more: a game mode's title is text the player reads, and
+					// folding it to '?' would ship a mod whose campaign has no
+					// name. The sender escapes everything above ascii (json.dumps
+					// defaults to ensure_ascii), so this is the ONLY way non-latin
+					// text arrives.
 					int v = 0, got = 0;
 					for (; got < 4; ++got)
 					{
@@ -75,9 +80,42 @@ bool XFinedMCP::GetArg(LPCSTR raw, LPCSTR field, char* dst, u32 dst_size)
 						v = v * 16 + h;
 						++r;
 					}
-					ch = (4 == got && v > 0 && v < 128) ? char(v) : '?';
+					if (4 != got) { ch = '?'; break; }
+
+					// a high surrogate takes its partner with it
+					if (v >= 0xD800 && v <= 0xDBFF && r[1] == '\\' && r[2] == 'u')
+					{
+						const char* keep = r;
+						int lo = 0, got2 = 0;
+						r += 2;
+						for (; got2 < 4; ++got2)
+						{
+							const char d = r[1];
+							const int  h = (d >= '0' && d <= '9') ? d - '0'
+										 : (d >= 'a' && d <= 'f') ? d - 'a' + 10
+										 : (d >= 'A' && d <= 'F') ? d - 'A' + 10 : -1;
+							if (h < 0) break;
+							lo = lo * 16 + h;
+							++r;
+						}
+						if (4 == got2 && lo >= 0xDC00 && lo <= 0xDFFF)
+							v = 0x10000 + ((v - 0xD800) << 10) + (lo - 0xDC00);
+						else
+							r = keep;
+					}
+
+					char utf[4];
+					int n = 0;
+					if (v < 0x80)			{ utf[n++] = char(v); }
+					else if (v < 0x800)		{ utf[n++] = char(0xC0 | (v >> 6));   utf[n++] = char(0x80 | (v & 0x3F)); }
+					else if (v < 0x10000)	{ utf[n++] = char(0xE0 | (v >> 12));  utf[n++] = char(0x80 | ((v >> 6) & 0x3F));
+											  utf[n++] = char(0x80 | (v & 0x3F)); }
+					else					{ utf[n++] = char(0xF0 | (v >> 18));  utf[n++] = char(0x80 | ((v >> 12) & 0x3F));
+											  utf[n++] = char(0x80 | ((v >> 6) & 0x3F)); utf[n++] = char(0x80 | (v & 0x3F)); }
+					for (int i = 0; i < n && w + 1 < dst_size; ++i)
+						dst[w++] = utf[i];
+					continue;
 				}
-				break;
 			default:	ch = *r;	break;		// \" \\ \/ and anything unknown
 			}
 		}

@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "EditorGameContent.h"
 #include "EditorGameModes.h"
 #include "EditorModManifest.h"
 #include "EditorProject.h"
@@ -60,6 +61,42 @@ static bool WriteTextFile(const char* path, const char* text)
 	const bool ok = !!::WriteFile(h, text, len, &wr, NULL) && wr == len;
 	::CloseHandle(h);
 	return ok;
+}
+
+// Everything the game reads as text is cp1251; ImGui hands us UTF-8. Only
+// captions travel this way - ids and keys are ascii by construction. A caption
+// that is not valid UTF-8 was written by hand in cp1251 already and is passed
+// through: converting it would turn every Cyrillic letter into '?'.
+static xr_string Utf8ToCp1251(const char* src)
+{
+	xr_string out;
+	if (!src || !src[0]) return out;
+	const int wide_len = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, src, -1, NULL, 0);
+	if (wide_len <= 0) { out = src; return out; }
+	xr_vector<wchar_t> wide(wide_len);
+	::MultiByteToWideChar(CP_UTF8, 0, src, -1, wide.data(), wide_len);
+	const int ansi_len = ::WideCharToMultiByte(1251, 0, wide.data(), -1, NULL, 0, NULL, NULL);
+	if (ansi_len <= 0) { out = src; return out; }
+	xr_vector<char> ansi(ansi_len);
+	::WideCharToMultiByte(1251, 0, wide.data(), -1, ansi.data(), ansi_len, "?", NULL);
+	out = ansi.data();
+	return out;
+}
+
+static xr_string XmlEscape(const char* src)
+{
+	xr_string out;
+	for (const char* c = src; c && *c; ++c)
+	{
+		switch (*c)
+		{
+		case '&':	out += "&amp;";		break;
+		case '<':	out += "&lt;";		break;
+		case '>':	out += "&gt;";		break;
+		default:	out += *c;			break;
+		}
+	}
+	return out;
 }
 
 static void Trim(xr_string& s)
@@ -506,6 +543,228 @@ static void DeleteOrphansRec(LPCSTR dst, LPCSTR src)
 	::FindClose(h);
 }
 
+// A module that brings its OWN game mode has to put the checkbox on the
+// new-game screen itself - the engine cannot, that screen is built in Lua by
+// the game. Three generated files do it, one set per module however many modes
+// it declares:
+//
+//   patch\xms_modes.xmlp            the checkboxes + labels, appended to the
+//                                   screen's main_dialog
+//   gamedata\configs\text\rus\<module id>_modes.xml   the captions
+//   scripts\mode_register.script    creates the controls at runtime and writes
+//                                   the [character_creation] keys the engine
+//                                   turns back into active XMS modes
+//
+// The names are fixed, not derived from the mode: renaming a mode rewrites the
+// same three files instead of leaving a stale checkbox behind in the project.
+// The string table is the one file that lands in the shared game namespace, so
+// that one carries the module id - two modules must not fight over it.
+//
+// mode_register is the name the engine reserves for generated startup code;
+// scripts\register.script stays the author's own and is never touched here.
+//
+// Written only when the manifest declares a mode; a module targeting an
+// existing mode needs none of it.
+static bool WriteModeRegistration(LPCSTR project_root, const EditorMod::SManifest& m, xr_string& err)
+{
+	if (m.provides_modes.empty()) return true;
+
+	// Never trust the manifest here: it may have been hand-written or made by
+	// an older build, and these ids become file names, XML node names and Lua
+	// identifiers. An id like "..\..\x" or one with a quote in it would write
+	// outside the project or emit a file the game cannot parse.
+	xr_vector<EditorMod::SProvidesMode> modes;
+	for (u32 i = 0; i < m.provides_modes.size(); ++i)
+	{
+		const xr_string& id = m.provides_modes[i].id;
+		if (id.empty()) continue;
+		if (!EditorMod::ValidateModeId(id.c_str()) || id.size() > 64)
+		{
+			err  = "invalid declared mode id '" + id + "' (allowed: a-z 0-9 _ . -, up to 64 chars)";
+			return false;
+		}
+		modes.push_back(m.provides_modes[i]);
+	}
+	if (modes.empty()) return true;
+
+	string_path path;
+	xr_string body;
+	body.resize(8192);
+
+	// ---- xml: one control pair per mode, below the campaign column ----------
+	// The rows go under the last one already there - the game's own, plus any
+	// another module added - and the frame around the column grows to hold
+	// them, pushing whatever sat below it down. Only layouts the linked game
+	// actually ships are patched; a patch aimed at a missing file is just a
+	// warning in the player's log.
+	static const char* kTargets[] = { "ui_mm_faction_select_16.xml", "ui_mm_faction_select.xml" };
+	xr_string xmlp = "<?xml version=\"1.0\" encoding=\"windows-1251\"?>\r\n";
+	int targets = 0;
+	for (int t = 0; t < 2; ++t)
+	{
+		string_path rel;
+		sprintf_s(rel, "configs\\ui\\%s", kTargets[t]);
+		EditorGameModes::SSlot slot;
+		xr_string slot_err;
+		if (!EditorGameModes::SuggestSlot(rel, (int)modes.size(), m.id.c_str(), slot, slot_err))
+			continue;
+		++targets;
+
+		sprintf_s(&body[0], body.size(), "<xms-patch target=\"ui\\%s\">\r\n", kTargets[t]);
+		xmlp += body.c_str();
+		if (!slot.frame_node.empty())
+		{
+			sprintf_s(&body[0], body.size(),
+				"\t<set-attr node=\"main_dialog:%s\" name=\"height\" value=\"%d\"/>\r\n",
+				slot.frame_node.c_str(), slot.frame_height);
+			xmlp += body.c_str();
+		}
+		for (u32 s = 0; s < slot.shift.size(); ++s)
+		{
+			sprintf_s(&body[0], body.size(),
+				"\t<set-attr node=\"main_dialog:%s\" name=\"y\" value=\"%d\"/>\r\n",
+				slot.shift[s].node.c_str(), slot.shift[s].y);
+			xmlp += body.c_str();
+		}
+		xmlp += "\t<append into=\"main_dialog\">\r\n";
+		for (u32 i = 0; i < modes.size(); ++i)
+		{
+			const xr_string node	= "check_" + modes[i].id + "_mode";
+			const xr_string string_id = "st_cap_" + node;
+			const int dy = int(i) * slot.step;
+			sprintf_s(&body[0], body.size(),
+				"\t\t<cap_%s x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" stretch=\"1\">\r\n"
+				"\t\t\t<text r=\"170\" g=\"170\" b=\"170\" font=\"letterica16\" align=\"l\" vert_align=\"c\">%s</text>\r\n"
+				"\t\t</cap_%s>\r\n"
+				"\t\t<%s x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" stretch=\"1\">\r\n"
+				"\t\t</%s>\r\n",
+				node.c_str(), slot.cap_x, slot.cap_y + dy, slot.cap_w, slot.cap_h,
+				string_id.c_str(), node.c_str(),
+				node.c_str(), slot.check_x, slot.check_y + dy, slot.check_w, slot.check_h,
+				node.c_str());
+			xmlp += body.c_str();
+		}
+		xmlp += "\t</append>\r\n</xms-patch>\r\n";
+	}
+	if (!targets)
+	{
+		err = "the linked game has no new-game screen layout - nowhere to put the mode checkbox";
+		return false;
+	}
+	sprintf_s(path, "%s\\patch", project_root);
+	CreateDirChain(path);
+	sprintf_s(path, "%s\\patch\\xms_modes.xmlp", project_root);
+	if (!WriteTextFile(path, xmlp.c_str())) { err = "cannot write the mode xml patch"; return false; }
+
+	// ---- text: what the player reads ----------------------------------------
+	// String tables are cp1251 like the rest of the game; the manifest caption
+	// comes out of ImGui as UTF-8, so it is converted on the way out.
+	xr_string strings = "<?xml version=\"1.0\" encoding=\"windows-1251\"?>\r\n<string_table>\r\n";
+	for (u32 i = 0; i < modes.size(); ++i)
+	{
+		const xr_string& title	= modes[i].title.empty() ? modes[i].id : modes[i].title;
+		const xr_string caption	= XmlEscape(Utf8ToCp1251(title.c_str()).c_str());
+		sprintf_s(&body[0], body.size(),
+			"\t<string id=\"st_cap_check_%s_mode\">\r\n"
+			"\t\t<text>%s</text>\r\n"
+			"\t</string>\r\n",
+			modes[i].id.c_str(), caption.c_str());
+		strings += body.c_str();
+	}
+	strings += "</string_table>\r\n";
+	sprintf_s(path, "%s\\gamedata\\configs\\text\\rus", project_root);
+	CreateDirChain(path);
+	sprintf_s(path, "%s\\gamedata\\configs\\text\\rus\\%s_modes.xml", project_root, m.id.c_str());
+	if (!WriteTextFile(path, strings.c_str())) { err = "cannot write the mode caption"; return false; }
+
+	// ---- script: create the control and store the choice --------------------
+	// Runs from the engine's registrar pass (xms.load_registrars). faction_ui is
+	// a luabind class, so its methods are wrapped by assignment - xms.hook only
+	// resolves plain _G tables. Everything is pcall-guarded: a game whose screen
+	// was replaced by another mod must still reach the menu, just without the
+	// checkbox, and the log says so.
+	sprintf_s(&body[0], body.size(),
+		"-- generated by XFined Editor for module '%s'\r\n"
+		"-- Puts this module's game mode(s) on the new-game screen.\r\n"
+		"-- Rewritten on every export - edit the manifest, not this file.\r\n"
+		"-- (scripts\\register.script is yours; nothing here touches it.)\r\n"
+		"local MODES = {\r\n",
+		m.id.c_str());
+	xr_string lua = body.c_str();
+	for (u32 i = 0; i < modes.size(); ++i)
+	{
+		sprintf_s(&body[0], body.size(),
+			"    { id = \"%s\", node = \"main_dialog:check_%s_mode\","
+			" cap = \"main_dialog:cap_check_%s_mode\", key = \"new_game_%s_mode\" },\r\n",
+			modes[i].id.c_str(), modes[i].id.c_str(), modes[i].id.c_str(), modes[i].id.c_str());
+		lua += body.c_str();
+	}
+	lua +=
+		"}\r\n"
+		"\r\n"
+		"local ok_screen, screen = pcall(function() return ui_mm_faction_select end)\r\n"
+		"local cls = ok_screen and screen and screen.faction_ui\r\n"
+		"if not cls then\r\n"
+		"    xms.log(\"! xms modes: no new-game screen, they can only be set from the console\")\r\n"
+		"    return\r\n"
+		"end\r\n"
+		"\r\n"
+		"-- The controls, added after the stock ones. The screen keeps its\r\n"
+		"-- CScriptXmlInit local, so this parses the same layout again - the engine\r\n"
+		"-- picks the aspect variant, exactly as the base call does.\r\n"
+		"local base_init = cls.InitControls\r\n"
+		"if type(base_init) == \"function\" then\r\n"
+		"    cls.InitControls = function(self, f)\r\n"
+		"        base_init(self, f)\r\n"
+		"        self.xms_checks = {}\r\n"
+		"        local xml = CScriptXmlInit()\r\n"
+		"        xml:ParseFile(\"ui_mm_faction_select.xml\")\r\n"
+		"        for i = 1, #MODES do\r\n"
+		"            local m = MODES[i]\r\n"
+		"            local ok, err = pcall(function()\r\n"
+		"                xml:InitStatic(m.cap, self.dialog)\r\n"
+		"                self.xms_checks[m.id] = xml:InitCheck(m.node, self.dialog)\r\n"
+		"                self:Register(self.xms_checks[m.id], m.node)\r\n"
+		"            end)\r\n"
+		"            if not ok then xms.log(\"! \" .. m.id .. \" checkbox: \" .. tostring(err)) end\r\n"
+		"        end\r\n"
+		"    end\r\n"
+		"else\r\n"
+		"    xms.log(\"! xms modes: InitControls missing, checkboxes skipped\")\r\n"
+		"end\r\n"
+		"\r\n"
+		"-- The choice, written where the engine reads active modes from. Only the\r\n"
+		"-- literal true counts as ticked, on this side and in the game's own\r\n"
+		"-- is_*_mode helpers alike.\r\n"
+		"local base_start = cls.OnStartGame\r\n"
+		"if type(base_start) == \"function\" then\r\n"
+		"    cls.OnStartGame = function(self, ...)\r\n"
+		"        pcall(function()\r\n"
+		"            local cfg = axr_main and axr_main.config\r\n"
+		"            if not cfg then return end\r\n"
+		"            for i = 1, #MODES do\r\n"
+		"                local m = MODES[i]\r\n"
+		"                local ck = self.xms_checks and self.xms_checks[m.id]\r\n"
+		"                cfg:w_value(\"character_creation\", m.key, ck and ck:GetCheck() and true or nil)\r\n"
+		"            end\r\n"
+		"        end)\r\n"
+		"        return base_start(self, ...)\r\n"
+		"    end\r\n"
+		"else\r\n"
+		"    xms.log(\"! xms modes: OnStartGame missing, nothing will be stored\")\r\n"
+		"end\r\n"
+		"\r\n"
+		"xms.log(\"game mode(s) registered on the new-game screen: \" .. #MODES)\r\n";
+
+	sprintf_s(path, "%s\\scripts", project_root);
+	CreateDirChain(path);
+	sprintf_s(path, "%s\\scripts\\mode_register.script", project_root);
+	if (!WriteTextFile(path, lua.c_str())) { err = "cannot write the mode registrar script"; return false; }
+
+	Msg("* [XMS] %d game mode(s) registered for %d layout(s)", int(modes.size()), targets);
+	return true;
+}
+
 // what DeleteOrphansRec would remove, without removing it
 static int CountOrphansRec(LPCSTR dst, LPCSTR src)
 {
@@ -556,6 +815,11 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 		return false;
 	}
 
+	// A declared mode is worthless until the player can tick it, so the files
+	// that put it on the new-game screen are generated as part of the export.
+	if (!flat && !WriteModeRegistration(project_root, m, err))
+		return false;
+
 	char target[MAX_PATH] = {};
 	NormalizePath(target_root ? target_root : "", target, sizeof(target));
 	if (!target[0])							{ err = "target folder not set"; return false; }
@@ -595,10 +859,18 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 		rep += m.id;
 		rep += "'\r\n\r\n";
 		char line[128];
-		if (!c_patch && !c_spawn && !c_scripts && !c_levels && m.mode.empty())
+		if (!c_patch && !c_spawn && !c_scripts && !c_levels && m.mode.empty() && m.provides_modes.empty())
 			rep += "fully vanilla-compatible\r\n";
 		else
 		{
+			// a flat overlay has no way to add a checkbox to the new-game screen
+			if (!m.provides_modes.empty())
+			{
+				rep += "declared mode: ";
+				rep += m.provides_modes[0].id;
+				rep += " - NOT registered: a flat overlay cannot add it to the "
+					   "new-game screen, export as a module for that\r\n";
+			}
 			if (c_patch)	{ sprintf_s(line, "patch: %d file(s) - NOT exported (XMS-only)\r\n", c_patch); rep += line; }
 			if (c_spawn)	{ sprintf_s(line, "spawn: %d file(s) - NOT exported (XMS-only)\r\n", c_spawn); rep += line; }
 			if (c_scripts)	{ sprintf_s(line, "scripts: %d file(s) - NOT exported (XMS-only)\r\n", c_scripts); rep += line; }
@@ -734,6 +1006,9 @@ static char					s_EdAfter[1024]		= {};
 static char					s_EdBefore[1024]	= {};
 static char					s_EdConflicts[2048]	= {};
 static char					s_Target[MAX_PATH]	= {};
+// measured once per modal opening: reading the game's layout is not frame work
+static bool					s_SlotChecked		= false;
+static char					s_SlotText[256]		= {};
 
 static void ProjectIni(char* dst, u32 size)
 {
@@ -764,6 +1039,7 @@ void EditorMod::RequestEditManifest()
 	JoinList(s_Keep.after, s_EdAfter, sizeof(s_EdAfter), "\n");
 	JoinList(s_Keep.before, s_EdBefore, sizeof(s_EdBefore), "\n");
 	JoinList(s_Keep.conflicts, s_EdConflicts, sizeof(s_EdConflicts), "\n");
+	s_SlotChecked = false;
 	s_WantManifest = true;
 }
 
@@ -867,7 +1143,7 @@ static void DrawManifestModal()
 				ImGui::EndCombo();
 			}
 			ImGui::SameLine();
-			if (ImGui::Button("Rescan")) { EditorGameModes::Invalidate(); }
+			if (ImGui::Button("Rescan")) { EditorGameModes::Invalidate(); s_SlotChecked = false; }
 
 			if (modes.empty())
 				ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "%s",
@@ -877,8 +1153,60 @@ static void DrawManifestModal()
 		else if (2 == kind)
 		{
 			ImGui::InputText("mode id", s_EdPModeId, sizeof(s_EdPModeId));
-			ImGui::InputText("mode title (string id)", s_EdPModeTitle, sizeof(s_EdPModeTitle));
-			ImGui::TextDisabled("the id the module gates on, and the string the player will see");
+			ImGui::InputText("mode title", s_EdPModeTitle, sizeof(s_EdPModeTitle));
+			ImGui::TextDisabled("the id the module gates on, and the name the player will see");
+
+			// A mode nobody can tick does not exist. Export generates the three
+			// files that put it on the new-game screen; measuring where the row
+			// lands takes reading the game's layout, so it is done once and
+			// refreshed by Rescan rather than every frame.
+			if (!s_SlotChecked)
+			{
+				s_SlotChecked = true;
+				EditorGameModes::SSlot slot;
+				xr_string slot_err;
+				if (EditorGameModes::SuggestSlot("configs\\ui\\ui_mm_faction_select_16.xml", 1, s_EdId, slot, slot_err) ||
+					EditorGameModes::SuggestSlot("configs\\ui\\ui_mm_faction_select.xml", 1, s_EdId, slot, slot_err))
+					sprintf_s(s_SlotText, "export adds the checkbox at %d,%d of the new-game screen",
+							  slot.check_x, slot.check_y);
+				else
+					sprintf_s(s_SlotText, "no new-game screen in the linked game: %s", slot_err.c_str());
+			}
+			ImGui::TextDisabled("%s", s_SlotText);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip(
+					"Export writes three files into the project and keeps them in sync:\n"
+					"  patch\\<id>_mode.xmlp                     the checkbox and its label\n"
+					"  gamedata\\configs\\text\\rus\\<id>_mode.xml  the caption above\n"
+					"  scripts\\mode_register.script             hooks the screen at startup\n"
+					"Edit the manifest, not those files - they are rewritten every export.\n"
+					"scripts\\register.script is yours and is never touched.");
+		}
+
+		// What the mode gate actually covers. Level work is gated - spawn ops,
+		// collision, ai-map, visuals and the game graph all ask ModuleApplies -
+		// but files, configs and scripts mount at engine start, before any mode
+		// is picked, so they apply in every game. Saying so here beats a player
+		// wondering why a weapon rebalance leaked into another campaign.
+		if (kind > 0)
+		{
+			string_path probe;
+			sprintf_s(probe, "%s\\gamedata", EditorProject::Root());
+			const int n_gamedata = CountFilesRec(probe, 0);
+			sprintf_s(probe, "%s\\patch", EditorProject::Root());
+			const int n_patch = CountFilesRec(probe, "_readme.txt");
+			if (n_gamedata || n_patch)
+			{
+				ImGui::Spacing();
+				ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f),
+					"note: %d file(s) and %d config patch(es) are NOT mode-gated",
+					n_gamedata, n_patch);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip(
+						"Level work (spawns, collision, ai-map, visuals, the game graph) applies only in\n"
+						"the chosen mode. Files under gamedata\\ and patches under patch\\ mount when the\n"
+						"engine starts, before a mode is picked, so they apply in every game.");
+			}
 		}
 	}
 	const bool mode_ok = EditorMod::ValidateModeId(s_EdMode);
@@ -1117,6 +1445,18 @@ void EditorMod::McpSetManifest(LPCSTR raw, xr_string& out)
 	}
 	if (XFinedMCP::GetArg(raw, "provides_mode_title", v, sizeof(v)) && !m.provides_modes.empty())
 		m.provides_modes[0].title = v;
+	// The targeting choice itself. "default" cannot be inferred - a module with
+	// no mode set either targets the ordinary game on purpose or was never
+	// decided, and only the caller knows which - so it is stated explicitly;
+	// picking a mode states it implicitly.
+	if (XFinedMCP::GetArg(raw, "target", v, sizeof(v)))
+	{
+		if (0 != _stricmp(v, "default") && 0 != _stricmp(v, "existing") && 0 != _stricmp(v, "new"))
+			{ out = "{\"ok\":false,\"error\":\"invalid target (allowed: default, existing, new)\"}"; return; }
+		m.target = v;
+	}
+	else if (!m.provides_modes.empty())	m.target = "new";
+	else if (!m.mode.empty())			m.target = "existing";
 	if (XFinedMCP::GetArg(raw, "requires", v, sizeof(v)))	SplitList(m.requires_list, v, ',');
 	if (XFinedMCP::GetArg(raw, "after", v, sizeof(v)))		SplitList(m.after, v, ',');
 	if (XFinedMCP::GetArg(raw, "before", v, sizeof(v)))		SplitList(m.before, v, ',');

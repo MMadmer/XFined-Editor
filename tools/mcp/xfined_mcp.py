@@ -116,7 +116,11 @@ TOOLS = [
         "name": "xfined_mod_set_manifest",
         "description": "Update fields of the active project's mod.ltx. Strings: id (validated, [a-z0-9_.-]+), "
                        "name, version, mode (game mode the module is limited to; empty = all modes). "
-                       "provides_mode_id/provides_mode_title declare a new game mode (empty id drops it). "
+                       "provides_mode_id/provides_mode_title declare a new game mode (empty id drops it) - "
+                       "export then generates the checkbox that puts it on the new-game screen. "
+                       "target states which of the three the module is built for and is REQUIRED before "
+                       "an export succeeds; it is inferred from mode/provides_mode when omitted, but "
+                       "'the ordinary game' has to be said out loud (target=default). "
                        "Comma-joined lists: requires, after, before, conflicts "
                        "(a present-but-empty string clears the list). Omitted fields keep their value.",
         "inputSchema": {
@@ -127,7 +131,10 @@ TOOLS = [
                 "version": {"type": "string"},
                 "mode": {"type": "string", "description": "target game mode id, empty = all modes"},
                 "provides_mode_id": {"type": "string", "description": "declare a new game mode (empty = remove)"},
-                "provides_mode_title": {"type": "string", "description": "string id for the declared mode title"},
+                "provides_mode_title": {"type": "string", "description": "the mode name the player will see"},
+                "target": {"type": "string", "enum": ["default", "existing", "new"],
+                           "description": "what this module is built for: the ordinary game, a mode already "
+                                          "in the linked game, or a mode it brings itself"},
                 "requires": {"type": "string"},
                 "after": {"type": "string"},
                 "before": {"type": "string"},
@@ -778,6 +785,15 @@ def reply(msg_id, result=None, error=None):
 
 
 def main():
+    # MCP speaks UTF-8; a Windows console hands Python cp1251 unless told
+    # otherwise, which turned every non-latin argument (a game mode's name, a
+    # search term) into mojibake on the way in and back out again.
+    for stream in (sys.stdin, sys.stdout):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+
     for line in sys.stdin:
         line = line.strip()
         if not line:
