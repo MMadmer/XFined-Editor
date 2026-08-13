@@ -262,13 +262,14 @@ void ScanDialogChildren(const xr_string& ui, xr_vector<SNode>& out)
 }
 
 // [provides_mode] of every XMS module installed in the linked game
-void ScanInstalledModules(xr_vector<EditorGameModes::SMode>& out)
-{
-	LPCSTR game = EditorProject::GameRoot();
-	if (!game || !game[0]) return;
+// Modules live in <game>\modules\; <game>\mods\ is the folder JSGME manages and
+// still holds anything installed before the split, so both are read.
+static const char* kModuleRoots[] = { "modules", "mods" };
 
+void ScanModuleRoot(LPCSTR game, LPCSTR root, xr_vector<EditorGameModes::SMode>& out)
+{
 	string_path mask;
-	sprintf_s(mask, "%s\\mods\\*", game);
+	sprintf_s(mask, "%s\\%s\\*", game, root);
 	WIN32_FIND_DATAA fd;
 	HANDLE h = ::FindFirstFileA(mask, &fd);
 	if (INVALID_HANDLE_VALUE == h) return;
@@ -278,7 +279,7 @@ void ScanInstalledModules(xr_vector<EditorGameModes::SMode>& out)
 		if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, ".."))	continue;
 
 		string_path manifest;
-		sprintf_s(manifest, "%s\\mods\\%s\\mod.ltx", game, fd.cFileName);
+		sprintf_s(manifest, "%s\\%s\\%s\\mod.ltx", game, root, fd.cFileName);
 		HANDLE f = ::CreateFileA(manifest, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
 								 FILE_ATTRIBUTE_NORMAL, NULL);
 		if (INVALID_HANDLE_VALUE == f) continue;
@@ -325,6 +326,28 @@ void ScanInstalledModules(xr_vector<EditorGameModes::SMode>& out)
 		if (!pending.id.empty()) out.push_back(pending);
 	} while (::FindNextFileA(h, &fd));
 	::FindClose(h);
+}
+
+// [provides_mode] of every XMS module installed in the linked game
+void ScanInstalledModules(xr_vector<EditorGameModes::SMode>& out)
+{
+	LPCSTR game = EditorProject::GameRoot();
+	if (!game || !game[0]) return;
+
+	const u32 was = (u32)out.size();
+	for (int r = 0; r < 2; ++r)
+	{
+		xr_vector<EditorGameModes::SMode> found;
+		ScanModuleRoot(game, kModuleRoots[r], found);
+		// the same module in both roots declares its mode once
+		for (u32 i = 0; i < found.size(); ++i)
+		{
+			bool dup = false;
+			for (u32 j = was; j < out.size() && !dup; ++j)
+				dup = (0 == _stricmp(out[j].id.c_str(), found[i].id.c_str()));
+			if (!dup) out.push_back(found[i]);
+		}
+	}
 }
 } // namespace
 
@@ -426,17 +449,15 @@ bool EditorGameModes::Scan(xr_string& err)
 }
 
 // Rows other installed modules already appended to this screen. Their patches
-// are plain files under <game>\mods\<id>\patch\*.xmlp, so the answer is on
-// disk: without this every module that adds a mode would compute the same row
-// and the checkboxes would sit on top of each other.
-static int RowsTakenByModules(LPCSTR layout_file, int column_x, LPCSTR skip_module)
+// are plain files under <game>\modules\<id>\patch\*.xmlp (and under the JSGME
+// folder for anything installed before the split), so the answer is on disk:
+// without this every module that adds a mode would compute the same row and
+// the checkboxes would sit on top of each other.
+static int RowsTakenInRoot(LPCSTR game, LPCSTR root, LPCSTR layout_file, int column_x, LPCSTR skip_module)
 {
-	LPCSTR game = EditorProject::GameRoot();
-	if (!game || !game[0] || !layout_file) return 0;
-
 	int lowest = 0;
 	string_path mask;
-	sprintf_s(mask, "%s\\mods\\*", game);
+	sprintf_s(mask, "%s\\%s\\*", game, root);
 	WIN32_FIND_DATAA fd;
 	HANDLE h = ::FindFirstFileA(mask, &fd);
 	if (INVALID_HANDLE_VALUE == h) return 0;
@@ -447,14 +468,14 @@ static int RowsTakenByModules(LPCSTR layout_file, int column_x, LPCSTR skip_modu
 		if (skip_module && 0 == _stricmp(fd.cFileName, skip_module)) continue;
 
 		string_path pmask;
-		sprintf_s(pmask, "%s\\mods\\%s\\patch\\*.xmlp", game, fd.cFileName);
+		sprintf_s(pmask, "%s\\%s\\%s\\patch\\*.xmlp", game, root, fd.cFileName);
 		WIN32_FIND_DATAA pf;
 		HANDLE ph = ::FindFirstFileA(pmask, &pf);
 		if (INVALID_HANDLE_VALUE == ph) continue;
 		do
 		{
 			string_path file;
-			sprintf_s(file, "%s\\mods\\%s\\patch\\%s", game, fd.cFileName, pf.cFileName);
+			sprintf_s(file, "%s\\%s\\%s\\patch\\%s", game, root, fd.cFileName, pf.cFileName);
 			HANDLE f = ::CreateFileA(file, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
 									 FILE_ATTRIBUTE_NORMAL, NULL);
 			if (INVALID_HANDLE_VALUE == f) continue;
@@ -481,6 +502,19 @@ static int RowsTakenByModules(LPCSTR layout_file, int column_x, LPCSTR skip_modu
 		::FindClose(ph);
 	} while (::FindNextFileA(h, &fd));
 	::FindClose(h);
+	return lowest;
+}
+
+static int RowsTakenByModules(LPCSTR layout_file, int column_x, LPCSTR skip_module)
+{
+	LPCSTR game = EditorProject::GameRoot();
+	if (!game || !game[0] || !layout_file) return 0;
+	int lowest = 0;
+	for (int r = 0; r < 2; ++r)
+	{
+		const int y = RowsTakenInRoot(game, kModuleRoots[r], layout_file, column_x, skip_module);
+		if (y > lowest) lowest = y;
+	}
 	return lowest;
 }
 

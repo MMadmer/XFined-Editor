@@ -144,9 +144,11 @@ TOOLS = [
     },
     {
         "name": "xfined_mod_export",
-        "description": "Export the active project as an XMS module into <target>/mods/<id>/ (default), "
+        "description": "Export the active project as an XMS module into <target>/modules/<id>/ (default), "
                        "or with flat=true as a plain gamedata_<id> overlay plus a vanilla-compatibility report. "
-                       "Without 'target' the module deploys to the LINKED GAME (game_link): <game>/mods/<id>. "
+                       "Without 'target' the module deploys to the LINKED GAME (game_link): <game>/modules/<id>. "
+                       "NOT mods/ - that one is JSGME's folder, and a module in it is a module "
+                       "JSGME offers to copy over the game. "
                        "The module export mirrors the project (stale files in the target module are deleted); "
                        "a target inside the game's gamedata is refused - mods never merge into the game tree.",
         "inputSchema": {

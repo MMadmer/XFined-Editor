@@ -54,7 +54,7 @@ namespace EditorMod
 	ECORE_API bool	Load				(LPCSTR project_root, SManifest& m);
 	ECORE_API bool	Save				(LPCSTR project_root, const SManifest& m);
 
-	// flat=false: mod.ltx + module dirs -> <target>\mods\<id>\
+	// flat=false: mod.ltx + module dirs -> <target>\modules\<id>\
 	// flat=true : gamedata content -> <target>\gamedata_<id>\ + compat report
 	// The module export MIRRORS the project: files the target holds and the
 	// project does not are deleted. When those exist and `confirmed` is false

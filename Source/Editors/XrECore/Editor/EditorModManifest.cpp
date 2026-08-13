@@ -508,7 +508,7 @@ static bool InsideGameGamedata(LPCSTR path)
 
 // Module export mirrors: a file that disappeared from the project must
 // disappear from the exported module too, or every rename leaves a stale
-// twin behind. Only ever pointed at <target>\mods\<id> sub-parts - folders
+// twin behind. Only ever pointed at <target>\modules\<id> sub-parts - folders
 // this exporter owns outright.
 static void DeleteOrphansRec(LPCSTR dst, LPCSTR src)
 {
@@ -826,13 +826,17 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 	if (xr_strlen(target) + m.id.size() + 32 >= MAX_PATH)
 											{ err = "target path too long"; return false; }
 
+	// A module goes to <game>\modules\, NOT to mods\: that one is the folder
+	// JSGME manages, and a module sitting there is a module JSGME offers to
+	// copy over the game - the merge a module exists to avoid. A flat overlay
+	// is the opposite case: that IS a JSGME mod, so it keeps its own name.
 	string_path dst;
 	if (flat)	sprintf_s(dst, "%s\\gamedata_%s", target, m.id.c_str());
-	else		sprintf_s(dst, "%s\\mods\\%s", target, m.id.c_str());
+	else		sprintf_s(dst, "%s\\modules\\%s", target, m.id.c_str());
 	if (InsideGameGamedata(dst) || InsideGameGamedata(target))
 	{
 		err = "target is inside the game's gamedata - a mod must stay in its own folder "
-			  "(export to the game ROOT: the module goes to <game>\\mods\\<id>)";
+			  "(export to the game ROOT: the module goes to <game>\\modules\\<id>)";
 		return false;
 	}
 	CreateDirChain(dst);
@@ -1059,7 +1063,7 @@ static void PrepareExport(bool flat)
 	ProjectIni(ini, sizeof(ini));
 	::GetPrivateProfileStringA("xms", "export_target", "", s_Target, sizeof(s_Target), ini);
 	// first export of a linked project: the game root IS the deploy target -
-	// the module lands in <game>\mods\<id>, which is where the game reads it
+	// the module lands in <game>\modules\<id>, which is where the game reads it
 	if (!s_Target[0] && EditorProject::GameRoot()[0])
 		strncpy_s(s_Target, sizeof(s_Target), EditorProject::GameRoot(), _TRUNCATE);
 	if (flat)	s_WantFlat = true;
@@ -1270,7 +1274,7 @@ static void DrawExportModal(bool flat)
 
 	ImGui::TextUnformatted(flat
 		? "Target folder; a gamedata_<id> folder is created inside:"
-		: "Target mods root folder; the module goes to <target>\\mods\\<id>:");
+		: "Target game folder; the module goes to <target>\\modules\\<id>:");
 	ImGui::SetNextItemWidth(480);
 	ImGui::InputText("##target", s_Target, sizeof(s_Target));
 	if (EditorProject::GameRoot()[0])
@@ -1474,7 +1478,7 @@ void EditorMod::McpExport(LPCSTR raw, xr_string& out)
 	if (!EditorProject::Active())
 		{ out = "{\"ok\":false,\"error\":\"no active project\"}"; return; }
 	char target[MAX_PATH];
-	// no target = deploy to the linked game: <game>\mods\<id> is where the
+	// no target = deploy to the linked game: <game>\modules\<id> is where the
 	// game actually reads modules from, so it is the default, not an option
 	if (!XFinedMCP::GetArg(raw, "target", target, sizeof(target)) || !target[0])
 	{
