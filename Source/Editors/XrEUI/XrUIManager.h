@@ -44,6 +44,13 @@ public:
 	// (Windows > Reset Layout).
 	void RequestDockLayoutReset() { m_ResetDockLayout = true; }
 
+	// True between this frame's ImGui NewFrame and Render. An ImGui frame
+	// CANNOT nest: a second NewFrame throws away the outer frame's window
+	// stack and its EndFrame leaves g.CurrentWindow null, so the panel that
+	// was mid-draw dies on its next ImGui call. Panel code that asks for a
+	// forced redraw has to be told to wait instead.
+	bool InUIPass() const { return m_InUIPass; }
+
 	// Where a window goes in the default layout. The right column is cut first
 	// so it spans the full height; the bottom strip therefore stops at it,
 	// exactly like Unreal's content drawer.
@@ -72,6 +79,7 @@ private:
 	unsigned int m_DockNodes[5]{};
 	unsigned int m_DockRoot{0};
 	bool m_ResetDockLayout{false};
+	bool m_InUIPass{false};
 	float m_MenuBarHeight;
 	void ApplyShortCut(DWORD Key);
 	TShiftState m_ShiftState;

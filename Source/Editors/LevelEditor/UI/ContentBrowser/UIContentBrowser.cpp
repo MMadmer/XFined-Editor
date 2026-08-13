@@ -580,6 +580,35 @@ ImTextureID UIContentBrowser::GetThumb(LPCSTR name)
 //------------------------------------------------------------------------------
 // ui
 //------------------------------------------------------------------------------
+// Unreal's scroll-into-view rules, used by both panes here.
+//
+// The first one is the one that matters: something already on screen is left
+// EXACTLY where it is (SListView::ScrollIntoView - "Only scroll the item into
+// view if it's not already in the visible range"). Recentring a tile the user
+// can already see is what makes a browser feel like it ran away from the
+// cursor. Past that, STileView centres a target that is far off, and merely
+// pulls in one that is a row or so past an edge, leaving half a row of the
+// next one visible (its NavigationScrollOffset, 0.5).
+static void ScrollRectIntoView(float top_screen, float bottom_screen)
+{
+	const float view_top	= ImGui::GetScrollY();
+	const float view_h		= ImGui::GetWindowHeight();
+	const float win_y		= ImGui::GetWindowPos().y;
+	// screen -> content space, which is what GetScrollY/SetScrollY speak
+	const float top			= top_screen    - win_y + view_top;
+	const float bottom		= bottom_screen - win_y + view_top;
+	const float h			= bottom - top;
+
+	if (top >= view_top && bottom <= view_top + view_h)	return;		// on screen
+
+	if (top < view_top && top >= view_top - 2.f * h)
+		ImGui::SetScrollY(top - h * 0.5f);					// just above
+	else if (bottom > view_top + view_h && bottom <= view_top + view_h + 2.f * h)
+		ImGui::SetScrollY(bottom - view_h + h * 0.5f);		// just below
+	else
+		ImGui::SetScrollY(top + h * 0.5f - view_h * 0.5f);	// far away: centre
+}
+
 // "rawdata" holds "rawdata\levels"; the root's empty path holds everything
 static bool PathIsAncestor(const xr_string& parent, const xr_string& path)
 {
@@ -604,7 +633,8 @@ void UIContentBrowser::DrawFolder(SFolder& f)
 
 	const bool open = ImGui::TreeNodeEx(f.name.c_str(), flags);
 	if (ImGui::IsItemClicked()) m_CurFolder = f.path;
-	if (m_ScrollToSelection && f.path == m_CurFolder) ImGui::SetScrollHereY(0.5f);
+	if (m_ScrollToSelection && f.path == m_CurFolder)
+		ScrollRectIntoView(ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().y);
 
 	if (open && !leaf)
 	{
@@ -1003,15 +1033,15 @@ void UIContentBrowser::DrawTiles()
 	// Shift-click needed the whole grid order, so it is resolved here
 	ApplyPendingRange();
 
-	// A reveal scrolls the grid to what it selected: the LAST selected tile in
+	// A reveal brings the grid to what it selected: the LAST selected tile in
 	// grid order, so a multi-item reveal lands on the end of the run instead of
-	// jumping back to its start. The rects were captured as the tiles drew.
+	// jumping back to its start. The rects were captured as the tiles drew, and
+	// a tile that is already on screen is left alone.
 	if (m_ScrollToSelection)
 		for (int i = _min(int(m_DrawnOrder.size()), int(m_DrawnRects.size())) - 1; i >= 0; --i)
 			if (IsSelected(m_DrawnOrder[i].path.c_str(), m_DrawnOrder[i].folder))
 			{
-				const ImVec4& r = m_DrawnRects[i];
-				ImGui::SetScrollFromPosY((r.y + r.w) * 0.5f - ImGui::GetWindowPos().y, 0.5f);
+				ScrollRectIntoView(m_DrawnRects[i].y, m_DrawnRects[i].w);
 				break;
 			}
 

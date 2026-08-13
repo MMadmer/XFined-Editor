@@ -318,6 +318,10 @@ void XrUIManager::DockLayoutEnd()
 
 void XrUIManager::Draw()
 {
+    // guards the whole frame, so a panel that asks for a forced redraw while
+    // drawing gets the deferred one instead of a nested (fatal) ImGui frame
+    m_InUIPass = true;
+
     #if defined(USE_DX11)
     ImGui_ImplDX11_NewFrame();
 #else
@@ -373,6 +377,10 @@ void XrUIManager::Draw()
 #else
     ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
 #endif
+    // cleared here rather than at the end: the pruning below makes no ImGui
+    // calls and can return early
+    m_InUIPass = false;
+
 	for (size_t i = m_UIArray.size(); i > 0; i--)
 	{
 		if (m_UIArray[i - 1]->IsClosed())

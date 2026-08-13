@@ -148,8 +148,13 @@ public:
 
     // add, remove, changing objects/scene
     void 			UpdateScene			(bool bForced=false){	m_Flags.set(flUpdateScene,TRUE); 	if (bForced) RealUpdateScene();}
-    // only redraw scene
-    void 			RedrawScene			(bool bForced=false){   m_Flags.set(flRedraw,TRUE); 		if (bForced) RealRedrawScene();}
+    // Only redraw scene. A forced redraw runs a WHOLE frame, ImGui pass and
+    // all - so panel code asking for one while it is itself being drawn would
+    // nest an ImGui frame inside the live one. That kills the outer frame's
+    // window stack and the caller dies on its next ImGui call, which is how a
+    // plain click in the outliner took the editor down. The flag alone is
+    // enough there: the next Idle tick redraws anyway.
+    void 			RedrawScene			(bool bForced=false){   m_Flags.set(flRedraw,TRUE); 		if (bForced && !InUIPass()) RealRedrawScene();}
 
     void 			SetRenderQuality	(float q)      {   EDevice->m_ScreenQuality = q;}
 // mouse action

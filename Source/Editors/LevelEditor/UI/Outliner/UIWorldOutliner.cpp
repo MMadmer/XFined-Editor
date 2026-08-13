@@ -116,13 +116,74 @@ void UIWorldOutliner::Rebuild()
 	ApplyFilter		();
 }
 
+// Unreal's search box splits on spaces and ANDs the results, treats a leading
+// '-' as "must not contain", and keeps "quoted words" together. Cheap to do and
+// it is what anyone who has used the engine's outliner expects to work.
+void UIWorldOutliner::ParseFilter()
+{
+	m_Terms.clear();
+
+	char low[sizeof(m_Filter)];
+	strncpy_s(low, sizeof(low), m_Filter, _TRUNCATE);
+	strlwr(low);
+
+	for (const char* p = low; *p; )
+	{
+		while (*p == ' ' || *p == '\t') ++p;
+		if (!*p) break;
+
+		STerm t;
+		t.exclude = false;
+		// a bare '-' is someone mid-typing, not an empty exclusion
+		if (*p == '-' && p[1] && p[1] != ' ') { t.exclude = true; ++p; }
+
+		if (*p == '"')
+		{
+			++p;
+			const char* e = strchr(p, '"');
+			if (!e) e = p + xr_strlen(p);		// unclosed quote: take the rest
+			t.text.assign(p, e);
+			p = *e ? e + 1 : e;
+		}
+		else
+		{
+			const char* e = p;
+			while (*e && *e != ' ' && *e != '\t') ++e;
+			t.text.assign(p, e);
+			p = e;
+		}
+
+		if (!t.text.empty()) m_Terms.push_back(t);
+	}
+}
+
+bool UIWorldOutliner::NameMatches(LPCSTR name) const
+{
+	if (m_Terms.empty()) return true;
+
+	// SetName lowercases, but a hand-edited name may not be
+	char low[256];
+	strncpy_s(low, sizeof(low), name, _TRUNCATE);
+	strlwr(low);
+
+	for (u32 i = 0; i < m_Terms.size(); ++i)
+	{
+		// a plain term that misses, or an excluded term that hits, both reject
+		const bool hit = !!strstr(low, m_Terms[i].text.c_str());
+		if (hit == m_Terms[i].exclude) return false;
+	}
+	return true;
+}
+
+bool UIWorldOutliner::ClassHidden(ObjClassID cls) const
+{
+	for (u32 i = 0; i < m_HiddenClasses.size(); ++i)
+		if (m_HiddenClasses[i] == cls) return true;
+	return false;
+}
+
 void UIWorldOutliner::ApplyFilter()
 {
-	char pat[sizeof(m_Filter)];
-	strncpy_s(pat, sizeof(pat), m_Filter, _TRUNCATE);
-	strlwr(pat);
-	const bool has_pat = !!pat[0];
-
 	for (u32 i = 0; i < m_Groups.size(); ++i)
 	{
 		SGroup& g = m_Groups[i];
@@ -130,15 +191,8 @@ void UIWorldOutliner::ApplyFilter()
 		for (int k = 0; k < int(g.objects.size()); ++k)
 		{
 			CCustomObject* o = g.objects[k];
-			if (m_SelectedOnly && !o->Selected()) continue;
-			if (has_pat)
-			{
-				// SetName lowercases, but a hand-edited name may not be
-				char low[256];
-				strncpy_s(low, sizeof(low), o->GetName(), _TRUNCATE);
-				strlwr(low);
-				if (!strstr(low, pat)) continue;
-			}
+			if (m_SelectedOnly && !o->Selected())	continue;
+			if (!NameMatches(o->GetName()))			continue;
 			g.shown.push_back(k);
 		}
 	}
@@ -168,6 +222,102 @@ int UIWorldOutliner::ScanSelection(u32& sig, CCustomObject*& last) const
 		}
 	}
 	return n;
+}
+
+//------------------------------------------------------------------------------
+// MCP surface
+//------------------------------------------------------------------------------
+bool UIWorldOutliner::McpSetFilter(LPCSTR text, int selected_only, LPCSTR types, xr_string& err)
+{
+	Show();									// filtering a closed panel helps nobody
+	if (!Form)	{ err = "outliner unavailable"; return false; }
+
+	if (text)					strncpy_s(Form->m_Filter, sizeof(Form->m_Filter), text, _TRUNCATE);
+	if (selected_only >= 0)		Form->m_SelectedOnly = !!selected_only;
+
+	if (types)
+	{
+		// class names are matched against the cache, which may not exist yet
+		if (Form->m_Groups.empty()) Form->Rebuild();
+
+		xr_vector<ObjClassID> hide;
+		if (types[0])
+		{
+			xr_string unknown;
+			// every listed name has to name a group, or the caller silently
+			// gets an empty tree and no idea why
+			for (const char* p = types; *p; )
+			{
+				const char* e = strchr(p, ';');
+				if (!e) e = p + xr_strlen(p);
+				xr_string one; one.assign(p, e);
+				while (!one.empty() && one[0] == ' ')					one.erase(0, 1);
+				while (!one.empty() && one[one.size()-1] == ' ')			one.erase(one.size()-1);
+				if (!one.empty())
+				{
+					bool known = false;
+					for (u32 i = 0; i < Form->m_Groups.size() && !known; ++i)
+						known = (0 == _stricmp(Form->m_Groups[i].name.c_str(), one.c_str()));
+					if (!known) { if (!unknown.empty()) unknown += ", "; unknown += one; }
+				}
+				p = *e ? e + 1 : e;
+			}
+			if (!unknown.empty())
+			{
+				err  = "unknown object type(s): " + unknown + "; scene has: ";
+				for (u32 i = 0; i < Form->m_Groups.size(); ++i)
+				{
+					if (i) err += ", ";
+					err += Form->m_Groups[i].name;
+				}
+				return false;
+			}
+
+			for (u32 i = 0; i < Form->m_Groups.size(); ++i)
+			{
+				bool shown = false;
+				for (const char* p = types; *p && !shown; )
+				{
+					const char* e = strchr(p, ';');
+					if (!e) e = p + xr_strlen(p);
+					xr_string one; one.assign(p, e);
+					while (!one.empty() && one[0] == ' ')				one.erase(0, 1);
+					while (!one.empty() && one[one.size()-1] == ' ')		one.erase(one.size()-1);
+					shown = (0 == _stricmp(Form->m_Groups[i].name.c_str(), one.c_str()));
+					p = *e ? e + 1 : e;
+				}
+				if (!shown) hide.push_back(Form->m_Groups[i].cls);
+			}
+		}
+		Form->m_HiddenClasses = hide;
+	}
+
+	Form->ParseFilter();
+	Form->ApplyFilter();
+	return true;
+}
+
+void UIWorldOutliner::McpGetFilter(xr_string& text, bool& selected_only,
+								   xr_string& hidden, int& shown, int& total)
+{
+	text.clear(); hidden.clear();
+	selected_only	= false;
+	shown = total	= 0;
+	if (!Form) return;
+
+	text			= Form->m_Filter;
+	selected_only	= Form->m_SelectedOnly;
+	total			= Form->m_TotalObjects;
+	for (u32 i = 0; i < Form->m_Groups.size(); ++i)
+	{
+		if (Form->ClassHidden(Form->m_Groups[i].cls))
+		{
+			if (!hidden.empty()) hidden += ";";
+			hidden += Form->m_Groups[i].name;
+			continue;
+		}
+		shown += int(Form->m_Groups[i].shown.size());
+	}
 }
 
 //------------------------------------------------------------------------------
@@ -282,7 +432,6 @@ void UIWorldOutliner::DrawRow(SGroup& g, int row, CCustomObject* obj)
 
 	// selection is read from the scene every frame, so viewport picks show here
 	const bool sel = !!obj->Selected();
-	const bool scroll_here = (obj == m_ScrollTarget);
 	if (ImGui::Selectable(obj->GetName(), sel, ImGuiSelectableFlags_AllowDoubleClick,
 		ImVec2(0.f, ImGui::GetFrameHeight())))
 	{
@@ -315,12 +464,6 @@ void UIWorldOutliner::DrawRow(SGroup& g, int row, CCustomObject* obj)
 			PickObject(obj);
 			m_AnchorClass = g.cls; m_AnchorRow = row;
 		}
-	}
-	// after the Selectable, so the scroll centres on the full row rect
-	if (scroll_here)
-	{
-		ImGui::SetScrollHereY(0.5f);
-		m_ScrollTarget = nullptr;
 	}
 
 	if (ImGui::BeginPopupContextItem("ctx"))
@@ -361,13 +504,32 @@ void UIWorldOutliner::DrawRow(SGroup& g, int row, CCustomObject* obj)
 	ImGui::PopID();
 }
 
+void UIWorldOutliner::ScrollRowIntoView(float row_top, float row_h)
+{
+	const float view_top	= ImGui::GetScrollY();
+	const float view_h		= ImGui::GetWindowHeight();
+
+	// Already fully on screen: leave it EXACTLY where it is. Unreal checks the
+	// same thing before scrolling (SListView::ScrollIntoView, "Only scroll the
+	// item into view if it's not already in the visible range") and it is the
+	// difference between a list that helps and one that runs away from the
+	// cursor every time something is picked.
+	if (row_top >= view_top && row_top + row_h <= view_top + view_h) return;
+
+	// Off screen: centre it, which is what STreeView does - its default
+	// alignment is CenterAligned, offset = index - NumVisible/2. ImGui clamps
+	// the target to the scroll range for us.
+	ImGui::SetScrollY(row_top + row_h * 0.5f - view_h * 0.5f);
+}
+
 void UIWorldOutliner::DrawGroup(SGroup& g)
 {
+	if (ClassHidden(g.cls)) return;				// switched off in the funnel
+
 	const bool filtering = Filtering();
 	if (filtering && g.shown.empty()) return;	// empty groups vanish while filtering
 
-	// the scroll target forces its group open and its row through the clipper -
-	// otherwise a collapsed node or the clipped-out range would swallow the jump
+	// a scroll target in a collapsed group would never come into view
 	int target_row = -1;
 	if (m_ScrollTarget)
 		for (int i = 0; i < int(g.shown.size()); ++i)
@@ -383,17 +545,66 @@ void UIWorldOutliner::DrawGroup(SGroup& g)
 
 	if (open)
 	{
+		// Rows are a fixed height, so the target's position is arithmetic - it
+		// never has to be drawn to be scrolled to. GetCursorPosY is content
+		// space, the same space GetScrollY/SetScrollY speak.
+		const float rows_top	= ImGui::GetCursorPosY();
+		const float row_h		= ImGui::GetFrameHeightWithSpacing();
+
 		// thousands of rows per group - only the visible slice is submitted
 		ImGuiListClipper clipper;
-		clipper.Begin(int(g.shown.size()), ImGui::GetFrameHeightWithSpacing());
-		if (target_row >= 0)
-			clipper.ForceDisplayRangeByIndices(target_row, target_row + 1);
+		clipper.Begin(int(g.shown.size()), row_h);
 		while (clipper.Step())
 			for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
 				DrawRow(g, row, g.objects[g.shown[row]]);
 		ImGui::TreePop();
+
+		if (target_row >= 0) ScrollRowIntoView(rows_top + target_row * row_h, row_h);
 	}
 	ImGui::PopID();
+}
+
+// The funnel beside the search box, Unreal's "Filters" menu in miniature: the
+// object types the tree is allowed to show. Types are hidden rather than shown
+// so a scene growing a new one does not silently stay invisible.
+void UIWorldOutliner::DrawFilterMenu()
+{
+	if (!ImGui::BeginPopup("outliner_filters")) return;
+
+	ImGui::TextDisabled("Object types");
+	ImGui::Separator();
+
+	if (ImGui::SmallButton("All"))
+		m_HiddenClasses.clear();
+	ImGui::SameLine();
+	if (ImGui::SmallButton("None"))
+	{
+		m_HiddenClasses.clear();
+		for (u32 i = 0; i < m_Groups.size(); ++i)
+			m_HiddenClasses.push_back(m_Groups[i].cls);
+	}
+	ImGui::Separator();
+
+	for (u32 i = 0; i < m_Groups.size(); ++i)
+	{
+		SGroup& g	= m_Groups[i];
+		bool shown	= !ClassHidden(g.cls);
+		ImGui::PushID(int(g.cls));
+		if (ImGui::Checkbox(g.name.c_str(), &shown))
+		{
+			if (shown)
+			{
+				for (u32 k = 0; k < m_HiddenClasses.size(); ++k)
+					if (m_HiddenClasses[k] == g.cls) { m_HiddenClasses.erase(m_HiddenClasses.begin() + k); break; }
+			}
+			else m_HiddenClasses.push_back(g.cls);
+		}
+		ImGui::SameLine();
+		ImGui::TextDisabled("(%d)", int(g.objects.size()));
+		ImGui::PopID();
+	}
+
+	ImGui::EndPopup();
 }
 
 void UIWorldOutliner::DrawRenamePopup()
@@ -454,8 +665,9 @@ void UIWorldOutliner::Draw()
 
 	// the selected-only view depends on live selection, so it is redone each
 	// frame; a plain text filter only when the text itself changed
-	if (m_SelectedOnly || m_SelectedOnlyApplied != m_SelectedOnly ||
-		0 != xr_strcmp(m_FilterApplied.c_str(), m_Filter))
+	const bool text_changed = (0 != xr_strcmp(m_FilterApplied.c_str(), m_Filter));
+	if (text_changed) ParseFilter();
+	if (m_SelectedOnly || m_SelectedOnlyApplied != m_SelectedOnly || text_changed)
 		ApplyFilter();
 
 	// selection changes made OUTSIDE this panel (viewport picks, MCP) scroll
@@ -472,8 +684,18 @@ void UIWorldOutliner::Draw()
 		m_SkipNextScroll = false;
 	}
 
+	// funnel first, search box next: the Unreal arrangement
+	if (ImGui::Button("Filters")) ImGui::OpenPopup("outliner_filters");
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("which object types the tree shows%s",
+			m_HiddenClasses.empty() ? "" : "  (some are hidden)");
+	DrawFilterMenu();
+	ImGui::SameLine();
+
 	ImGui::SetNextItemWidth(-220.f);
 	ImGui::InputTextWithHint("##filter", "search", m_Filter, sizeof(m_Filter));
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("every word has to match\n-word excludes it\n\"two words\" match together");
 	ImGui::SameLine();
 	ImGui::Checkbox("Selected only", &m_SelectedOnly);
 	ImGui::SameLine();
@@ -493,7 +715,14 @@ void UIWorldOutliner::Draw()
 	m_ScrollTarget = nullptr;
 
 	ImGui::Separator();
-	ImGui::Text("%d objects, %d selected", m_TotalObjects, sel_count);
+	// with a filter or a hidden type on, say how much of the scene is showing
+	int shown = 0;
+	for (u32 i = 0; i < m_Groups.size(); ++i)
+		if (!ClassHidden(m_Groups[i].cls)) shown += int(m_Groups[i].shown.size());
+	if (shown != m_TotalObjects)
+		ImGui::Text("%d of %d objects, %d selected", shown, m_TotalObjects, sel_count);
+	else
+		ImGui::Text("%d objects, %d selected", m_TotalObjects, sel_count);
 
 	if (m_OpenRenamePopup)
 	{

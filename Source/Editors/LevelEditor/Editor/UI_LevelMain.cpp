@@ -1670,6 +1670,40 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
         return true;
     }
 
+    // the panel's search box and type funnel, so a filtered view is scriptable
+    if (0 == xr_strcmp(cmd, "outliner_filter"))
+    {
+        char text[128] = {}, types[512] = {};
+        const bool has_text  = XFinedMCP::GetArg(raw, "text",  text,  sizeof(text));
+        const bool has_types = XFinedMCP::GetArg(raw, "types", types, sizeof(types));
+        int sel_only = -1;
+        if (GetArgBool(raw, "selected_only", false))     sel_only = 1;
+        else if (!GetArgBool(raw, "selected_only", true)) sel_only = 0;
+
+        xr_string err;
+        if (!UIWorldOutliner::McpSetFilter(has_text ? text : 0, sel_only,
+                                           has_types ? types : 0, err))
+        {
+            out = "{\"ok\":false,\"error\":\"";
+            out += JsonEscapePath(err.c_str());
+            out += "\"}";
+            return true;
+        }
+
+        xr_string cur, hidden;
+        bool  only = false;
+        int   shown = 0, total = 0;
+        UIWorldOutliner::McpGetFilter(cur, only, hidden, shown, total);
+
+        char tmp[1024];
+        sprintf_s(tmp, "{\"ok\":true,\"text\":\"%s\",\"selected_only\":%s,\"hidden_types\":\"%s\","
+                       "\"shown\":%d,\"total\":%d}",
+            JsonEscapePath(cur.c_str()).c_str(), only ? "true" : "false",
+            JsonEscapePath(hidden.c_str()).c_str(), shown, total);
+        out = tmp;
+        return true;
+    }
+
     if (!Scene) return false;
 
     // AI-facing twin of the World Outliner panel: one node per object tool

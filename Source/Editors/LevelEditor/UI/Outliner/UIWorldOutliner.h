@@ -26,6 +26,16 @@ public:
 	// invalidates the cache; the next frame rebuilds it
 	static void		Refresh				();
 
+	// MCP: drive the search box and the type funnel from outside. `text` null
+	// keeps the current search, `selected_only` < 0 keeps the toggle, `types`
+	// null keeps the funnel - an empty string shows every type, otherwise it is
+	// a ';'-separated list of the tool class names to SHOW. Unknown names are
+	// reported rather than silently dropped.
+	static bool		McpSetFilter		(LPCSTR text, int selected_only, LPCSTR types, xr_string& err);
+	// MCP: what the panel is filtering by right now, and how much survives it
+	static void		McpGetFilter		(xr_string& text, bool& selected_only,
+										 xr_string& hidden, int& shown, int& total);
+
 private:
 	struct SGroup
 	{
@@ -50,6 +60,19 @@ private:
 	char							m_Filter[128];
 	bool							m_SelectedOnly;
 
+	// Unreal's search-box grammar (FTextFilterExpressionEvaluator in its basic
+	// mode): spaces separate terms, EVERY plain term has to match, a term
+	// written -like_this must not, and "quoted words" keep their spaces. Parsed
+	// when the text changes rather than per row.
+	struct STerm
+	{
+		xr_string					text;		// lowercased at parse time
+		bool						exclude;
+	};
+	xr_vector<STerm>				m_Terms;
+	// the funnel next to the search box: object types switched off by hand
+	xr_vector<ObjClassID>			m_HiddenClasses;
+
 	// shift-range anchor, the last plainly clicked row
 	ObjClassID						m_AnchorClass;
 	int								m_AnchorRow;
@@ -73,9 +96,20 @@ private:
 	void			Rebuild				();
 	u32				SceneSignature		();
 	void			ApplyFilter			();
-	bool			Filtering			() const { return (0 != m_Filter[0]) || m_SelectedOnly; }
+	// splits the search box into terms; only run when the text changes
+	void			ParseFilter			();
+	bool			NameMatches			(LPCSTR name) const;
+	bool			ClassHidden			(ObjClassID cls) const;
+	// the funnel popup: which object types the tree shows
+	void			DrawFilterMenu		();
+	bool			Filtering			() const { return !m_Terms.empty() || m_SelectedOnly; }
 	void			DrawGroup			(SGroup& g);
 	void			DrawRow				(SGroup& g, int row, CCustomObject* obj);
+	// Unreal's SListView::ScrollIntoView rule: a row already on screen is left
+	// alone, one off screen is pulled to the NEAREST edge. Never recentres -
+	// that is what makes clicking a visible row feel like the list ran away.
+	// Takes the row's content-space top, so a clipped row needs no drawing.
+	static void		ScrollRowIntoView	(float row_top, float row_h);
 	void			DrawRenamePopup		();
 	bool			ApplyRename			();
 	void			RunPending			();

@@ -99,6 +99,7 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_delete_selected` | delete every selected object; returns the removed count; undoable |
 | `xfined_save_scene` | save the opened scene (its current file, or an explicit `file`) |
 | `xfined_outliner_show` | open (`open=true`, default) or close the World Outliner panel |
+| `xfined_outliner_filter` | drive the outliner's search box and type funnel: `text` (Unreal grammar - every word must match, `-word` excludes, `"two words"` match together), `types` (`;`-separated classes to show, empty shows all), `selected_only`; returns `shown`/`total` |
 | `xfined_scene_tree` | the World Outliner's data: groups per object tool class sorted by class name, each with `count`/`total` and `objects` (name, selected, visible); filters `filter`, `class`, `limit` (default 200) |
 | `xfined_content_browser_open` | reveal an asset in the Content Browser: opens the panel, switches `source` (`project`/`editor`/`darf`), navigates to its folder and selects it; `open=true` also opens its viewer (the double-click action) |
 | `xfined_content_browser_selection` | what the browser shows right now: open flag, active source, current folder, selected assets |

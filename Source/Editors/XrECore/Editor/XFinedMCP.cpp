@@ -41,12 +41,49 @@ bool XFinedMCP::GetArg(LPCSTR raw, LPCSTR field, char* dst, u32 dst_size)
 	if (!c) return false;
 	const char* q1 = strchr(c, '"');
 	if (!q1) return false;
-	const char* q2 = strchr(q1 + 1, '"');
-	if (!q2) return false;
-	u32 len = u32(q2 - q1 - 1);
-	if (len >= dst_size) len = dst_size - 1;
-	CopyMemory(dst, q1 + 1, len);
-	dst[len] = 0;
+
+	// The value is a JSON string, so an escaped quote does NOT end it and the
+	// text has to be unescaped on the way out: callers want what the sender
+	// meant, not the wire form. Scanning for the closing quote with strchr got
+	// both wrong - a search term like "two words" came back as a lone
+	// backslash, and every path arrived with its separators still doubled.
+	u32 w = 0;
+	for (const char* r = q1 + 1; *r && w + 1 < dst_size; ++r)
+	{
+		if (*r == '"') break;
+		char ch = *r;
+		if (ch == '\\' && r[1])
+		{
+			switch (*++r)
+			{
+			case 'n':	ch = '\n';	break;
+			case 't':	ch = '\t';	break;
+			case 'r':	ch = '\r';	break;
+			case 'b':	ch = '\b';	break;
+			case 'f':	ch = '\f';	break;
+			case 'u':
+				{
+					// \uXXXX: only the ascii range survives a char buffer
+					int v = 0, got = 0;
+					for (; got < 4; ++got)
+					{
+						const char d = r[1];
+						const int  h = (d >= '0' && d <= '9') ? d - '0'
+									 : (d >= 'a' && d <= 'f') ? d - 'a' + 10
+									 : (d >= 'A' && d <= 'F') ? d - 'A' + 10 : -1;
+						if (h < 0) break;
+						v = v * 16 + h;
+						++r;
+					}
+					ch = (4 == got && v > 0 && v < 128) ? char(v) : '?';
+				}
+				break;
+			default:	ch = *r;	break;		// \" \\ \/ and anything unknown
+			}
+		}
+		dst[w++] = ch;
+	}
+	dst[w] = 0;
 	return true;
 }
 

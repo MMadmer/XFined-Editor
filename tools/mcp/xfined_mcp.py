@@ -621,6 +621,23 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_outliner_filter",
+        "description": "Drive the World Outliner's search box and type funnel, and read back what survives. "
+                       "'text' uses the Unreal search grammar: every space-separated word has to match, "
+                       "-word excludes, \"two words\" match together. 'types' is a ';'-separated list of the "
+                       "object classes to SHOW (empty string shows all; see scene_tree for the names). "
+                       "'selected_only' limits the tree to the current selection. Omitted arguments keep "
+                       "their current value. Returns text, selected_only, hidden_types, shown and total.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "search terms; empty string clears the search"},
+                "types": {"type": "string", "description": "';'-separated classes to show, e.g. 'way;spawn'"},
+                "selected_only": {"type": "boolean", "description": "show only selected objects"},
+            },
+        },
+    },
+    {
         "name": "xfined_scene_tree",
         "description": "The World Outliner's data: the scene grouped by object tool class, sorted by class name. "
                        "Each group returns 'class', 'count' (objects matching the filter), 'total' (objects in the "
@@ -700,6 +717,7 @@ CMD_MAP = {
     "xfined_delete_selected": "delete_selected",
     "xfined_save_scene": "save_scene",
     "xfined_outliner_show": "outliner_show",
+    "xfined_outliner_filter": "outliner_filter",
     "xfined_scene_tree": "scene_tree",
     "xfined_undo": "undo",
     "xfined_redo": "redo",
