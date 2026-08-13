@@ -21,6 +21,17 @@ namespace
 	static const float		s_FOVDegrees		= 45.f;
 	// Neutral dark background, identical for every thumbnail.
 	static const u32		s_BackgroundColor	= 0xff2b2b2b;
+}
+
+// A queued request keeps the source block in memory until it is drawn, and a
+// search over the linked game can put hundreds of tiles on screen at once. Both
+// caps are per-request/total guards against a folder of big meshes eating the
+// address space - a model too big for a 128px picture simply does not get one.
+static const u32			kMaxThumbSourceBytes	= 16u*1024u*1024u;
+static const u32			kMaxThumbQueueBytes		= 128u*1024u*1024u;
+
+namespace
+{
 
 	//--------------------------------------------------------------------------
 	// Temporaries: released whichever way we leave the function.
@@ -226,7 +237,12 @@ namespace
 		// Animated skeletons with no active blend collapse into a heap: the bone
 		// transforms never leave identity. Any cycle at all fixes the pose, so
 		// take the first motion the model ships (idle when it has one).
-		if (IKinematicsAnimated* KA = visual ? visual->dcast_PKinematicsAnimated() : 0)
+		// LL_MotionsSlotCount()==0 means the motions never loaded - the model is
+		// half-built and its blend pool is empty, so posing it would fault. The
+		// from-memory path avoids ever getting here (animated visuals are loaded
+		// rigid), this is the guard for anything that still slips through.
+		if (IKinematicsAnimated* KA = visual ? visual->dcast_PKinematicsAnimated() : 0;
+			KA && KA->LL_MotionsSlotCount())
 		{
 			MotionID motion = KA->LL_MotionID("idle");
 			for (u16 slot = 0; !motion.valid() && slot < KA->LL_MotionsSlotCount(); ++slot)
@@ -435,6 +451,46 @@ namespace
 		return true;
 	}
 
+	// Byte offset of ogf_header::type inside the block, -1 when there is no
+	// header chunk. type is the second byte of the chunk payload, right after
+	// format_version.
+	int OgfTypeOffset(IReader* data)
+	{
+		if (!data)								return -1;
+		const int at = (sizeof(ogf_header)==data->find_chunk(OGF_HEADER)) ? data->tell() : -1;
+		data->rewind();
+		return (at<0) ? -1 : (at+1);
+	}
+
+	//--------------------------------------------------------------------------
+	// A thumbnail is a STATIC picture, so it is taken of the bind pose and needs
+	// no animation at all - but MT_SKELETON_ANIM makes the model pool build a
+	// CKinematicsAnimated, which loads the model's external .omf motion files.
+	// For a visual out of the linked game those live in the game's archives,
+	// which the editor's own FS cannot see, and the SDK's editor build "handles"
+	// the miss by returning from the middle of CKinematicsAnimated::Load
+	// (SkeletonAnimated.cpp, the REDITOR branch): no partition, no motions, no
+	// blend pool. Rendering that half-built object then takes the editor down -
+	// which is what a search in DARF Content did, by asking for a few hundred
+	// actor meshes at once.
+	//
+	// Loading it as MT_SKELETON_RIGID gives a plain CKinematics: same skeleton,
+	// same geometry, motions never touched. The picture is identical.
+	bool NeuterAnimatedVisual(const void* data, u32 size, u8 type, xr_vector<u8>& copy, const void*& block)
+	{
+		block = data;
+		if (MT_SKELETON_ANIM!=type)	return true;
+
+		IReader probe((void*)data,int(size));
+		const int off = OgfTypeOffset(&probe);
+		if ((off<0)||(u32(off)>=size))	return false;
+
+		copy.assign((const u8*)data,(const u8*)data+size);
+		copy[off]	= MT_SKELETON_RIGID;
+		block		= copy.data();
+		return true;
+	}
+
 	// Same lookup CModelPool::Instance_Load does, so we can peek the header
 	// without letting the pool load a file it will choke on.
 	bool ResolveVisualFile(LPCSTR N, string_path& fn)
@@ -470,8 +526,29 @@ ECORE_API bool RenderVisualThumbnail(LPCSTR visual_name, U32Vec& out)
 	if (!test)							return false;
 	u8	 type		= u8(-1);
 	bool type_ok	= PeekVisualType(test,type)&&IsSupportedVisualType(type);
+	const bool animated = type_ok&&(MT_SKELETON_ANIM==type);
+	// An animated skeleton goes through the from-memory path, which loads it as
+	// a rigid one: the model pool has no way to say "skip the motions", and a
+	// motion file it cannot resolve leaves the visual half-built (see
+	// NeuterAnimatedVisual). Cheap enough - a mesh is a few MB at worst.
+	xr_vector<u8> bytes;
+	if (animated)
+	{
+		const u32 sz = test->length();
+		if (sz&&(sz<=kMaxThumbSourceBytes))
+		{
+			bytes.resize(sz);
+			test->seek(0);
+			test->r(bytes.data(),int(sz));
+		}
+	}
 	FS.r_close		(test);
 	if (!type_ok)						return false;
+	if (animated)
+	{
+		if (bytes.empty())				return false;
+		return RenderVisualThumbnailFromMemory(visual_name,bytes.data(),u32(bytes.size()),out);
+	}
 
 	// CModelPool::Delete refuses to discard while the engine believes a frame is
 	// being rendered; this pass is entirely our own, so clear the flag for it
@@ -507,6 +584,16 @@ ECORE_API bool RenderVisualThumbnailFromMemory(LPCSTR debug_name, const void* da
 		return false;
 	}
 
+	// animated skeletons are loaded as rigid ones - see NeuterAnimatedVisual
+	xr_vector<u8>	copy;
+	const void*		block = data;
+	if (!NeuterAnimatedVisual(data,size,type,copy,block))
+	{
+		Msg("!Visual thumbnail: '%s' has no readable OGF header.",(debug_name&&debug_name[0])?debug_name:"<memory>");
+		return false;
+	}
+	IReader	use((void*)block,int(size));
+
 	// The pool keys models by name and returns the cached copy on a hit, which
 	// would silently ignore our block. Generate a private key instead - and keep
 	// it dot-free, CModelPool::Create truncates the key at the last '.'.
@@ -518,7 +605,7 @@ ECORE_API bool RenderVisualThumbnailFromMemory(LPCSTR debug_name, const void* da
 	g_bRendering	= FALSE;
 
 	bool result		= false;
-	IRenderVisual* visual = ::Render->model_Create(pool_key,&reader);
+	IRenderVisual* visual = ::Render->model_Create(pool_key,&use);
 	if (visual)
 	{
 		result = RenderVisualToPixels(visual,0,out);
@@ -603,12 +690,28 @@ namespace
 	};
 
 	static xr_vector<SThumbRequest>	s_Requests;
+	static u32						s_QueuedBytes = 0;
 
 	static SThumbRequest* FindRequest(LPCSTR key)
 	{
 		for (u32 i = 0; i < s_Requests.size(); ++i)
 			if (s_Requests[i].key == key) return &s_Requests[i];
 		return 0;
+	}
+
+	// true when the block may be queued; the caller drops the request otherwise
+	// and the tile falls back to a plain name button, exactly like a failed
+	// render does.
+	static bool AcceptQueuedBytes(LPCSTR key, u32 size)
+	{
+		if (size > kMaxThumbSourceBytes)
+		{
+			Msg("~Visual thumbnail: '%s' is %u MB - too big to preview.",key,size/(1024u*1024u));
+			return false;
+		}
+		if (s_QueuedBytes + size > kMaxThumbQueueBytes)	return false;
+		s_QueuedBytes += size;
+		return true;
 	}
 }
 
@@ -638,9 +741,11 @@ ECORE_API void QueueVisualThumbnailFromMemory(LPCSTR key, const void* data, u32 
 {
 	if (!key||!key[0]||!data||(0==size))	return;
 	if (FindRequest(key))					return;
+	if (!AcceptQueuedBytes(key,size))		return;
 	s_Requests.push_back(SThumbRequest());
 	SThumbRequest& r = s_Requests.back();
 	r.key		= key;
+	r.name		= key;		// logging only
 	r.source	= tsVisualBytes;
 	r.bytes.assign((const u8*)data,(const u8*)data+size);
 }
@@ -649,6 +754,7 @@ ECORE_API void QueueObjectThumbnailFromMemory(LPCSTR key, const void* data, u32 
 {
 	if (!key||!key[0]||!data||(0==size))	return;
 	if (FindRequest(key))					return;
+	if (!AcceptQueuedBytes(key,size))		return;
 	s_Requests.push_back(SThumbRequest());
 	SThumbRequest& r = s_Requests.back();
 	r.key		= key;
@@ -667,6 +773,9 @@ ECORE_API bool TakeVisualThumbnail(LPCSTR key, U32Vec& out, bool& failed)
 		if (!s_Requests[i].done)		return false;	// still waiting its turn
 		out		= s_Requests[i].pixels;
 		failed	= s_Requests[i].failed;
+		// a request taken before it was drawn still holds its budget
+		if (const u32 held = u32(s_Requests[i].bytes.size()))
+			s_QueuedBytes = (s_QueuedBytes>held) ? (s_QueuedBytes-held) : 0;
 		s_Requests.erase(s_Requests.begin()+i);
 		return true;
 	}
@@ -712,7 +821,14 @@ ECORE_API void FlushVisualThumbnailQueue(u32 max_requests)
 
 		r.done		= true;
 		r.failed	= !ok;
-		r.bytes.clear();	// the source block is not needed once it is drawn
+		// the source block is not needed once it is drawn, and the budget it
+		// took has to go back or the queue silently stops accepting work
+		if (const u32 held = u32(r.bytes.size()))
+		{
+			s_QueuedBytes = (s_QueuedBytes>held) ? (s_QueuedBytes-held) : 0;
+			r.bytes.clear();
+			r.bytes.shrink_to_fit();
+		}
 		++done;
 	}
 }

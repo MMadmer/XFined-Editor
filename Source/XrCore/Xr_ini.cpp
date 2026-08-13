@@ -279,7 +279,17 @@ void	CInifile::Load(IReader* F, LPCSTR path
 				if (!allow_include_func || allow_include_func(fn))
 #endif                
 				{
-					IReader* I 	= FS.r_open(fn); R_ASSERT3(I,"Can't find include file:", inc_name);
+					// A missing include is not fatal HERE. This editor reads content out
+					// of a linked game install whose files it deliberately cannot see
+					// (model user data pulls in models\capture\*.ltx, and those live in
+					// the game archives) - killing the editor over a config it was never
+					// meant to resolve is worse than an ltx with one section missing.
+					IReader* I 	= FS.r_open(fn);
+					if (0==I)
+					{
+						Msg		("!Can't find include file: %s (in %s)",inc_name,path);
+						continue;
+					}
             		Load		(I,inc_path
                     #if 1
                     , allow_include_func

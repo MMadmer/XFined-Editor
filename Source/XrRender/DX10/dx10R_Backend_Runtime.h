@@ -303,7 +303,7 @@ IC void CBackend::Render(D3DPRIMITIVETYPE T, u32 baseV, u32 startV, u32 countV, 
 	//INT BaseVertexLocation
 	SRVSManager.Apply();
 	ApplyRTandZB();
-	ApplyVertexLayout();
+	if (!ApplyVertexLayout())	return;	// no layout for this shader/format pair
 	StateManager.Apply();
 	//	State manager may alter constants
 	constants.flush();
@@ -334,7 +334,7 @@ IC void CBackend::Render(D3DPRIMITIVETYPE T, u32 startV, u32 PC)
 	ApplyPrimitieTopology(Topology);
 	SRVSManager.Apply();
 	ApplyRTandZB();
-	ApplyVertexLayout();
+	if (!ApplyVertexLayout())	return;	// no layout for this shader/format pair
 	StateManager.Apply();
 	//	State manager may alter constants
 	constants.flush();
@@ -434,7 +434,7 @@ ICF void CBackend::set_CullMode(u32 _mode)
 	//if (cull_mode		!= _mode)		{ cull_mode = _mode;			CHK_DX(HW.pDevice->SetRenderState	( D3DRS_CULLMODE,			_mode				)); }
 }
 
-IC void CBackend::ApplyVertexLayout()
+IC bool CBackend::ApplyVertexLayout()
 {
 	VERIFY(vs);
 	VERIFY(decl);
@@ -446,7 +446,7 @@ IC void CBackend::ApplyVertexLayout()
 
 	if (it==decl->vs_to_layout.end())
 	{
-		ID3DInputLayout* pLayout;
+		ID3DInputLayout* pLayout = 0;
 
 		HRESULT	_hr	= HW.pDevice->CreateInputLayout(
 			&decl->dx10_dcl_code[0],
@@ -470,18 +470,26 @@ IC void CBackend::ApplyVertexLayout()
 					e, d.SemanticName?d.SemanticName:"?", d.SemanticIndex,
 					int(d.Format), d.InputSlot, d.AlignedByteOffset);
 			}
+			// Not fatal in the editor. It previews content from a linked game
+			// install whose shaders it does not have, and the substituted stub
+			// cannot consume a skinned declaration - the draw is skipped and the
+			// preview comes out empty instead of the editor dying. A null layout
+			// is cached so the pair is not re-created (and re-logged) per frame.
+			pLayout = 0;
 		}
-		CHK_DX(_hr);
 
 		it = decl->vs_to_layout.insert(
 			std::pair<ID3DBlob*, ID3DInputLayout*>(m_pInputSignature, pLayout)).first;
 	}
+
+	if (0 == it->second)	return false;		// nothing to draw this with
 
 	if ( m_pInputLayout != it->second)
 	{
 		m_pInputLayout = it->second;
 		HW.pContext->IASetInputLayout(m_pInputLayout);
 	}	
+	return true;
 }
 
 ICF void CBackend::set_VS(ref_vs& _vs)

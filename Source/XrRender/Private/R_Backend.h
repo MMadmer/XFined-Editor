@@ -428,7 +428,9 @@ private:
 	//	DirectX 10 internal functionality
 	//void CreateConstantBuffers();
 	//void DestroyConstantBuffers();
-	void	ApplyVertexLayout();
+	// false when the shader and the vertex declaration cannot form a layout;
+	// the caller then skips the draw instead of taking the process down
+	bool	ApplyVertexLayout();
 	void	ApplyRTandZB();
 	void	ApplyPrimitieTopology( D3D_PRIMITIVE_TOPOLOGY Topology );
 	bool	CBuffersNeedUpdate(ref_cbuffer	buf1[MaxCBuffers], ref_cbuffer	buf2[MaxCBuffers], u32	&uiMin, u32	&uiMax);

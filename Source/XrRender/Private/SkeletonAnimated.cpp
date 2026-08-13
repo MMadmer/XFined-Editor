@@ -699,8 +699,14 @@ void CKinematicsAnimated::Load(const char* N, IReader *data, u32 dwFlags)
                 if (!FS.exist(fn, "$game_meshes$", nm))
                 {
 #ifdef REDITOR
+                    // Skip this slot and keep loading. Returning from here left the
+                    // visual half-built - no partition, no blend pool, no channels -
+                    // and the next thing to pose or draw it faulted. The editor
+                    // legitimately meets models whose motions it cannot resolve
+                    // (anything out of a linked game install): those now render in
+                    // bind pose, which is all a preview needs.
                     Msg			("!Can't find motion file '%s'.",nm);
-                    return;
+                    continue;
 #else
                     Debug.fatal	(DEBUG_INFO,"Can't find motion file '%s'.",nm);
 #endif
@@ -738,8 +744,14 @@ void CKinematicsAnimated::Load(const char* N, IReader *data, u32 dwFlags)
                 if (!FS.exist(fn, "$game_meshes$", nm))
                 {
 #ifdef REDITOR
+                    // Skip this slot and keep loading. Returning from here left the
+                    // visual half-built - no partition, no blend pool, no channels -
+                    // and the next thing to pose or draw it faulted. The editor
+                    // legitimately meets models whose motions it cannot resolve
+                    // (anything out of a linked game install): those now render in
+                    // bind pose, which is all a preview needs.
                     Msg			("!Can't find motion file '%s'.",nm);
-                    return;
+                    continue;
 #else
                     Debug.fatal	(DEBUG_INFO,"Can't find motion file '%s'.",nm);
 #endif
@@ -768,6 +780,20 @@ void CKinematicsAnimated::Load(const char* N, IReader *data, u32 dwFlags)
 		m_Motions.push_back(SMotionsSlot());
 		m_Motions.back().motions.create(nm,data,bones);
     }
+
+#ifdef REDITOR
+    // Every motion file was missing (a model whose .omf files live in a
+    // linked game install, not in the SDK tree). Keep the visual, drop the
+    // animation: the blend pool still gets started here and again in
+    // Spawn(), LL_PartID() answers BI_NONE on a null partition and no cycle
+    // can be looked up without motions, so the only thing lost is movement.
+    if (m_Motions.empty())
+    {
+        Msg			("!Model [%s] has no usable motions - loaded in bind pose.",N);
+        IBlend_Startup	();
+        return;
+    }
+#endif
 
     R_ASSERT				(m_Motions.size());
 
