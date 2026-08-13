@@ -51,8 +51,13 @@ namespace EditorMod
 
 	// flat=false: mod.ltx + module dirs -> <target>\mods\<id>\
 	// flat=true : gamedata content -> <target>\gamedata_<id>\ + compat report
+	// The module export MIRRORS the project: files the target holds and the
+	// project does not are deleted. When those exist and `confirmed` is false
+	// it refuses instead, so the caller can ask first - the target may be
+	// someone else's module that shares the id.
 	ECORE_API bool	Export				(LPCSTR project_root, LPCSTR target_root, bool flat,
-										 int& files, xr_string& out_path, xr_string& err);
+										 int& files, xr_string& out_path, xr_string& err,
+										 bool confirmed = false);
 
 	// modal windows (drawn from CLevelMain::OnDrawUI) + File\Mod menu triggers
 	ECORE_API void	DrawUI				();

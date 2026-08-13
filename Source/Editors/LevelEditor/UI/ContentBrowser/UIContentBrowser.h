@@ -248,7 +248,14 @@ private:
 	// the paste itself, into an explicit absolute folder: shared with MCP so a
 	// scripted paste goes through exactly the code the menu does
 	int				PasteClipboardInto	(LPCSTR dst_root, bool overwrite, xr_string& err);
+	// Deleting content has no undo of its own, so it always asks first: this
+	// only arms the confirmation, DeleteConfirmed does the work. Everything
+	// destructive in this panel goes through that pair.
 	void			DeleteSelection		();
+	void			DeleteConfirmed		();
+	void			DrawConfirmDelete	();
+	bool							m_ConfirmDelete;	// modal is armed
+	xr_string						m_ConfirmText;		// what is about to go
 	// materialises one clipboard entry under `dst_dir`
 	void			PasteEntry			(const SClip& c, LPCSTR dst_dir, bool overwrite,
 										 EditorFileOps::SReport& rep);

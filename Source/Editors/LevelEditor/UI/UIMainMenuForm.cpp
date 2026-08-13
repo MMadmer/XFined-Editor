@@ -42,9 +42,16 @@ void UIMainMenuForm::Draw()
                 ImGui::Separator();
                 if (ImGui::MenuItem("Switch Project...", ""))
                 {
-                    // clear the scene, then drop back to the project browser
-                    ExecCommand(COMMAND_CLEAR);
-                    EditorProject::Close();
+                    // Ask BEFORE closing anything: COMMAND_CLEAR's result was
+                    // ignored here, so cancelling the "scene has been modified"
+                    // prompt still closed the project and took the scene with
+                    // it. IfModified() answers false only on Cancel, and by the
+                    // time CLEAR asks again the flag is already settled.
+                    if (Scene->IfModified())
+                    {
+                        ExecCommand(COMMAND_CLEAR);
+                        EditorProject::Close();
+                    }
                 }
                 ImGui::EndMenu();
             }
@@ -219,7 +226,14 @@ void UIMainMenuForm::Draw()
                     FS_FileSet::iterator I = files.begin();
                     FS_FileSet::iterator E = files.end();
 
-                    for (; I != E; ++I)
+                    // rewrites every .thm in the texture library in place - the
+                    // neighbouring Synchronize commands ask, and this one moves
+                    // far more files than either
+                    if (mrYes != ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
+                        "Rewrite all %d .thm file(s) in the texture library?", int(files.size())))
+                        files.clear();
+
+                    for (I = files.begin(), E = files.end(); I != E; ++I)
                     {
                         ETextureThumbnail* TH = xr_new<ETextureThumbnail>((*I).name.c_str(), false);
                         TH->Load((*I).name.c_str(), _textures_);

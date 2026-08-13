@@ -42,7 +42,11 @@ void UIPortalTool::Draw()
             }
             if (ImGui::Button("Remove Similar",ImVec2(-1,0)))
             {
-                tool->RemoveSimilar();
+                // destroys portals and writes no undo step, unlike the compute
+                // buttons above - which do ask
+                if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
+                    "Remove duplicate portals? This cannot be undone."))
+                    tool->RemoveSimilar();
             }
         }
         ImGui::Separator();

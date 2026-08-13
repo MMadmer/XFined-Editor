@@ -44,7 +44,10 @@ void UIShapeTool::Draw()
             if (ImGui::Button("Detach All", ImVec2(-1, 0)))
             {
                 ObjectList lst;
-                if (Scene->GetQueryObjects(lst, OBJCLASS_SHAPE, 1, 1, 0)) {
+                // touches every shape in the level and writes no undo step
+                if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
+                        "Detach ALL shapes in the level? This cannot be undone.") &&
+                    Scene->GetQueryObjects(lst, OBJCLASS_SHAPE, 1, 1, 0)) {
                     Scene->SelectObjects(false, OBJCLASS_SHAPE);
                     for (ObjectIt it = lst.begin(); it != lst.end(); it++)
                         ((CEditShape*)*it)->Detach();

@@ -171,6 +171,7 @@ UIContentBrowser::UIContentBrowser()
 	m_HasAnchor			= false;
 	m_HasPendingRange	= false;
 	m_ScrollToSelection	= false;
+	m_ConfirmDelete		= false;
 	m_RenameBuf[0]		= 0;
 	m_RenameFocus		= false;
 	m_Marquee		= false;
@@ -691,7 +692,18 @@ void UIContentBrowser::DrawFolder(SFolder& f)
 		ImGui::SetNextItemOpen(true, ImGuiCond_Always);
 
 	const bool open = ImGui::TreeNodeEx(f.name.c_str(), flags);
-	if (ImGui::IsItemClicked()) m_CurFolder = f.path;
+	if (ImGui::IsItemClicked())
+	{
+		m_CurFolder = f.path;
+		// A folder is an entry like any other: clicking it in the tree selects
+		// it, so Delete / Copy / Rename act on it exactly as they do on a tile.
+		// The root has no path of its own and cannot be one of them.
+		if (!f.path.empty())	SelectEntry(f.path.c_str(), true, false, false);
+		else					ClearSelection();
+	}
+	// the SAME menu the tiles get - a folder does not become a different thing
+	// because it is drawn on the left
+	if (!f.path.empty())	DrawEntryContextMenu(f.path.c_str(), true);
 	if (m_ScrollToSelection && f.path == m_CurFolder)
 		ScrollRectIntoView(ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().y);
 
@@ -1107,10 +1119,9 @@ void UIContentBrowser::DrawTiles()
 				break;
 			}
 
-	// empty-space right-click and the Ctrl shortcuts, both of which need the
-	// drawn order the loop above just produced
+	// empty-space right-click; the shortcuts run from Draw() instead, so Del
+	// and Ctrl+C reach the folder tree as well as the grid
 	DrawGridContextMenu();
-	HandleShortcuts();
 
 	// clicking empty space clears the selection, as every file browser does -
 	// but only a bare click, so it does not fight the rubber-band below
@@ -1631,6 +1642,9 @@ void UIContentBrowser::ClipboardCopy(bool cut)
 			 int(m_Selection.size()), 1 == m_Selection.size() ? "y" : "ies");
 }
 
+// Arms the confirmation. Nothing is touched until DeleteConfirmed runs - a
+// folder full of work used to go the moment Del was pressed, with no question
+// asked and nothing to undo.
 void UIContentBrowser::DeleteSelection()
 {
 	if (m_Selection.empty())	return;
@@ -1639,6 +1653,45 @@ void UIContentBrowser::DeleteSelection()
 		ELog.DlgMsg(mtInformation, "This source is read-only - nothing here can be deleted.");
 		return;
 	}
+
+	// name what is going, not just how much: "3 items" tells the user nothing
+	// about whether the one they meant is among them
+	int folders = 0, files = 0;
+	for (u32 i = 0; i < m_Selection.size(); ++i)
+		if (m_Selection[i].folder) ++folders; else ++files;
+
+	char head[256];
+	if (1 == m_Selection.size())
+		sprintf_s(head, "Delete this %s?", m_Selection[0].folder ? "folder and everything in it" : "file");
+	else if (folders && files)
+		sprintf_s(head, "Delete %d folder(s) (with everything in them) and %d file(s)?", folders, files);
+	else if (folders)
+		sprintf_s(head, "Delete %d folder(s) and everything in them?", folders);
+	else
+		sprintf_s(head, "Delete %d file(s)?", files);
+
+	m_ConfirmText = head;
+	m_ConfirmText += "\n\n";
+	const u32 shown = _min(u32(8), u32(m_Selection.size()));
+	for (u32 i = 0; i < shown; ++i)
+	{
+		m_ConfirmText += "    ";
+		m_ConfirmText += m_Selection[i].path;
+		if (m_Selection[i].folder) m_ConfirmText += "\\";
+		m_ConfirmText += "\n";
+	}
+	if (m_Selection.size() > shown)
+	{
+		char more[64];
+		sprintf_s(more, "    ... and %d more\n", int(m_Selection.size() - shown));
+		m_ConfirmText += more;
+	}
+	m_ConfirmDelete = true;
+}
+
+void UIContentBrowser::DeleteConfirmed()
+{
+	if (m_Selection.empty() || m_Source != 0)	return;
 
 	EditorFileOps::SReport rep;
 	for (u32 i = 0; i < m_Selection.size(); ++i)
@@ -1651,9 +1704,36 @@ void UIContentBrowser::DeleteSelection()
 
 	ClearSelection();
 	m_NeedRefresh = true;
-	if (rep.ok())	ELog.Msg(mtInformation, "Deleted %d file(s), %d folder(s).", rep.files, rep.dirs);
+	if (rep.ok())	ELog.Msg(mtInformation, "Deleted %d file(s), %d folder(s) - they are in the Recycle Bin.",
+							 rep.files, rep.dirs);
 	else			ELog.DlgMsg(mtError, "Deleted %d file(s); %d failed - %s", rep.files, rep.failed,
 								rep.failures.empty() ? "" : rep.failures[0].reason.c_str());
+}
+
+void UIContentBrowser::DrawConfirmDelete()
+{
+	if (!ImGui::BeginPopupModal("Delete", 0, ImGuiWindowFlags_AlwaysAutoResize)) return;
+
+	ImGui::TextUnformatted(m_ConfirmText.c_str());
+	ImGui::Separator();
+	ImGui::TextDisabled("Goes to the Recycle Bin - restorable from there.");
+	ImGui::Spacing();
+
+	// Cancel is the default: Enter and Escape both back out, so a stray keypress
+	// on a just-opened dialog can never delete anything
+	const bool del = ImGui::Button("Delete", ImVec2(110, 0));
+	ImGui::SameLine();
+	const bool cancel = ImGui::Button("Cancel", ImVec2(110, 0)) ||
+						ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+						ImGui::IsKeyPressed(ImGuiKey_Enter, false);
+
+	if (del)		DeleteConfirmed();
+	if (del || cancel)
+	{
+		m_ConfirmDelete = false;
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndPopup();
 }
 
 bool UIContentBrowser::CanPaste() const
@@ -1771,6 +1851,28 @@ void UIContentBrowser::ClipboardPaste()
 	// Straight into the folder you are looking at - that is what a paste means.
 	string_path dst_root;
 	xr_sprintf	(dst_root, sizeof(dst_root), "%s\\%s", EditorProject::Root(), m_CurFolder.c_str());
+
+	// A paste has always overwritten whatever was in the way, without a word.
+	// The clipboard entries carry the path they will take below dst_root, so
+	// the collisions are known BEFORE anything is written - ask about those.
+	int clashes = 0;
+	xr_string first_clash;
+	for (u32 i = 0; i < m_Clipboard.size(); ++i)
+	{
+		string_path t;
+		xr_sprintf(t, sizeof(t), "%s\\%s", dst_root, m_Clipboard[i].rel.c_str());
+		if (INVALID_FILE_ATTRIBUTES == ::GetFileAttributesA(t)) continue;
+		if (!clashes) first_clash = m_Clipboard[i].rel;
+		++clashes;
+	}
+	if (clashes)
+	{
+		// -nodlg answers No, so an unattended run never silently replaces files
+		if (mrYes != ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
+			"%d item(s) already exist in '%s' and will be REPLACED (first: %s).\n\nOverwrite?",
+			clashes, m_CurFolder.empty() ? "this folder" : m_CurFolder.c_str(), first_clash.c_str()))
+			return;
+	}
 
 	xr_string err;
 	const int files = PasteClipboardInto(dst_root, true, err);
@@ -2200,6 +2302,15 @@ void UIContentBrowser::Draw()
 
 	// both panes have had their frame at it
 	m_ScrollToSelection = false;
+
+	// Panel-wide, so the tree answers Del and Ctrl+C exactly like the grid.
+	// Runs after both panes: Ctrl+A needs the drawn order the grid just built.
+	HandleShortcuts();
+
+	// destructive work is always one confirmation away
+	if (m_ConfirmDelete && !ImGui::IsPopupOpen("Delete"))
+		ImGui::OpenPopup("Delete");
+	DrawConfirmDelete();
 
 	ImGui::PopStyleVar(1);
 	ImGui::End();

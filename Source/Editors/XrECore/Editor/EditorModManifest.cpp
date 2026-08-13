@@ -501,8 +501,38 @@ static void DeleteOrphansRec(LPCSTR dst, LPCSTR src)
 	::FindClose(h);
 }
 
+// what DeleteOrphansRec would remove, without removing it
+static int CountOrphansRec(LPCSTR dst, LPCSTR src)
+{
+	int n = 0;
+	WIN32_FIND_DATAA fd;
+	string_path mask;
+	sprintf_s(mask, "%s\\*", dst);
+	HANDLE h = ::FindFirstFileA(mask, &fd);
+	if (INVALID_HANDLE_VALUE == h) return 0;
+	do
+	{
+		if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+		string_path d, s;
+		sprintf_s(d, "%s\\%s", dst, fd.cFileName);
+		sprintf_s(s, "%s\\%s", src, fd.cFileName);
+		const DWORD sa = ::GetFileAttributesA(s);
+		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			if (INVALID_FILE_ATTRIBUTES == sa || !(sa & FILE_ATTRIBUTE_DIRECTORY))
+				n += CountFilesRec(d, 0);
+			else
+				n += CountOrphansRec(d, s);
+		}
+		else if (INVALID_FILE_ATTRIBUTES == sa || (sa & FILE_ATTRIBUTE_DIRECTORY))
+			++n;
+	} while (::FindNextFileA(h, &fd));
+	::FindClose(h);
+	return n;
+}
+
 bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
-					   int& files, xr_string& out_path, xr_string& err)
+					   int& files, xr_string& out_path, xr_string& err, bool confirmed)
 {
 	files = 0; out_path.clear(); err.clear();
 	if (!project_root || !project_root[0])	{ err = "no active project"; return false; }
@@ -578,6 +608,30 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 
 		// levels\ carries the scene-baked overlays (collision/visuals)
 		static const char* parts[] = { "gamedata", "patch", "spawn", "scripts", "levels" };
+
+		// The mirror sweep below deletes anything in the target that the
+		// project no longer has - harmless when the target is this project's
+		// own output, destructive when it is somebody else's module that
+		// happens to share the id. Say so before touching it.
+		if (!confirmed && DirExists(dst))
+		{
+			int stale = 0;
+			for (int i = 0; i < (int)(sizeof(parts) / sizeof(parts[0])); ++i)
+			{
+				sprintf_s(src, "%s\\%s", project_root, parts[i]);
+				sprintf_s(b, "%s\\%s", dst, parts[i]);
+				if (DirExists(b)) stale += CountOrphansRec(b, src);
+			}
+			if (stale)
+			{
+				err = "target already holds a module: ";
+				char n[64]; sprintf_s(n, "%d file(s) there are not in this project", stale);
+				err += n;
+				out_path = dst;
+				return false;	// caller re-runs with `confirmed` once the user agrees
+			}
+		}
+
 		for (int i = 0; i < (int)(sizeof(parts) / sizeof(parts[0])); ++i)
 		{
 			sprintf_s(src, "%s\\%s", project_root, parts[i]);
@@ -778,7 +832,26 @@ static void DrawExportModal(bool flat)
 	{
 		int files = 0;
 		xr_string path, err;
-		if (EditorMod::Export(EditorProject::Root(), s_Target, flat, files, path, err))
+		bool ok = EditorMod::Export(EditorProject::Root(), s_Target, flat, files, path, err);
+		// the refusal above is a question, not a failure: name what would be
+		// deleted and let the user decide
+		if (!ok && 0 == strncmp(err.c_str(), "target already holds a module", 29))
+		{
+			if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
+				"%s\n\n%s\n\nThose files will be DELETED. Continue?", err.c_str(), path.c_str()))
+				ok = EditorMod::Export(EditorProject::Root(), s_Target, flat, files, path, err, true);
+			else
+			{
+				sprintf_s(s_Message, "Export cancelled.");
+				s_WantMessage = true;
+				want = false;
+				ImGui::CloseCurrentPopup();
+				ImGui::EndDisabled();	// balances the BeginDisabled above
+				ImGui::EndPopup();
+				return;
+			}
+		}
+		if (ok)
 		{
 			char ini[MAX_PATH];
 			ProjectIni(ini, sizeof(ini));
@@ -946,7 +1019,9 @@ void EditorMod::McpExport(LPCSTR raw, xr_string& out)
 
 	int files = 0;
 	xr_string path, err;
-	if (!Export(EditorProject::Root(), target, flat, files, path, err))
+	// MCP is the programmatic path: the caller already decided, and it must
+	// never stall on a question
+	if (!Export(EditorProject::Root(), target, flat, files, path, err, true))
 	{
 		out = "{\"ok\":false,\"error\":\"";
 		JsonAppend(out, err.c_str());

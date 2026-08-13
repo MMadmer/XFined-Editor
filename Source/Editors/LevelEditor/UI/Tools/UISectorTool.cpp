@@ -49,7 +49,11 @@ void UISectorTool::Draw()
             }
             if (ImGui::Button("Remove Default", ImVec2(-1,0)))
             {
-                if (!PortalUtils.RemoveDefaultSector()) ELog.DlgMsg(mtInformation, "Default sector not found.");
+                // removes a sector and everything hanging off it, no undo step
+                if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
+                        "Remove the default sector? This cannot be undone.") &&
+                    !PortalUtils.RemoveDefaultSector())
+                    ELog.DlgMsg(mtInformation, "Default sector not found.");
             }
 
         }

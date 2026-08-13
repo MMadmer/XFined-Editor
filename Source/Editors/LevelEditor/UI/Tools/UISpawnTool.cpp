@@ -44,7 +44,10 @@ void UISpawnTool::Draw()
                 if (ImGui::Button("Detach Object", ImVec2(-1, 0)))
                 {
                     ObjectList lst;
-                    if (Scene->GetQueryObjects(lst, OBJCLASS_SPAWNPOINT, 1, 1, 0)) {
+                    // every spawn point in the level, with no undo step written
+                    if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
+                            "Detach the object from ALL spawn points? This cannot be undone.") &&
+                        Scene->GetQueryObjects(lst, OBJCLASS_SPAWNPOINT, 1, 1, 0)) {
                         for (ObjectIt it = lst.begin(); it != lst.end(); it++) {
                             CSpawnPoint* O = dynamic_cast<CSpawnPoint*>(*it); R_ASSERT(O);
                             O->DetachObject();

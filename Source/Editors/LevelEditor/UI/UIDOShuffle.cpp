@@ -75,13 +75,18 @@ void UIDOShuffle::Draw()
 			ImGui::SameLine();
 			if (ImGui::Button("X", ImVec2(0, ImGui::GetFrameHeight())))
 			{
-				m_list.clear();
-				DM->InvalidateSlots();
-				DM->ClearColorIndices();
-				ClearIndexForms();
-				UI->RedrawScene();
-				OnItemFocused(nullptr);
-				bModif = true;
+				// wipes the whole list and every slot behind it, with no undo
+				if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
+					"Clear all %d detail object(s) and their slots? This cannot be undone.", int(m_list.size())))
+				{
+					m_list.clear();
+					DM->InvalidateSlots();
+					DM->ClearColorIndices();
+					ClearIndexForms();
+					UI->RedrawScene();
+					OnItemFocused(nullptr);
+					bModif = true;
+				}
 			}
 			ImGui::SameLine();
 			if (ImGui::Button("Load..", ImVec2(0, ImGui::GetFrameHeight())))
