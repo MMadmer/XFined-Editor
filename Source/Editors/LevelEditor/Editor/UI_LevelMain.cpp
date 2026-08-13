@@ -2,6 +2,7 @@
 #include "..\..\XrAPI\xrGameManager.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\..\XrECore\Editor\EditorGameContent.h"
+#include "..\..\XrECore\Editor\EditorGameModes.h"
 #include "..\..\XrECore\Editor\EditorFileOps.h"
 #include "..\..\XrECore\Editor\EThumbnailVisual.h"
 #include "EditorModScene.h"
@@ -1420,6 +1421,8 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "mod_manifest"))		{ EditorMod::McpManifest(out);			return true; }
     if (0 == xr_strcmp(cmd, "mod_set_manifest"))	{ EditorMod::McpSetManifest(raw, out);	return true; }
     if (0 == xr_strcmp(cmd, "mod_export"))			{ EditorMod::McpExport(raw, out);		return true; }
+    // the modes a module can target, scanned from the linked game install
+    if (0 == xr_strcmp(cmd, "game_modes"))			{ EditorGameModes::McpList(out);		return true; }
     // level overlays check the scene/project themselves and report json errors
     // opens the model preview window - the same thing a double click in the
     // content browser does, reachable without driving the mouse

@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "EditorGameModes.h"
 #include "EditorModManifest.h"
 #include "EditorProject.h"
 #include "XFinedMCP.h"
@@ -251,6 +252,7 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 				else if (key == "version")	m.version = val;
 				else if (key == "api")		m.api = val;
 				else if (key == "mode")		m.mode = val;
+			else if (key == "target")	m.target = val;
 				else						m.module_extra.push_back(line);
 			}
 			else if (sec == secOrder)
@@ -312,6 +314,9 @@ bool EditorMod::Save(LPCSTR project_root, const SManifest& m)
 	// empty mode = active in all game modes; the key is omitted then
 	if (!m.mode.empty())
 		AppendKey(t, "mode", m.mode.c_str());
+	// editor-side bookkeeping: the engine ignores it, the export insists on it
+	if (!m.target.empty())
+		AppendKey(t, "target", m.target.c_str());
 	for (u32 i = 0; i < m.module_extra.size(); ++i)
 		{ t += m.module_extra[i]; t += "\r\n"; }
 	if (!m.requires_list.empty())
@@ -541,6 +546,16 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 	if (!Load(project_root, m))				{ err = "mod.ltx not found in the project"; return false; }
 	if (!ValidateId(m.id.c_str()))			{ err = "module id missing or invalid in mod.ltx (allowed: a-z 0-9 _ . -)"; return false; }
 
+	// A finished module always states which game it is for. "Nothing chosen"
+	// is not a third option - it is how content ends up applied in a campaign
+	// it was never built for.
+	if (m.mode.empty() && m.provides_modes.empty() && 0 != _stricmp(m.target.c_str(), "default"))
+	{
+		err = "no target game mode: open Mod > Edit Manifest and pick one "
+			  "(the ordinary game, a mode of the linked game, or a new mode this module adds)";
+		return false;
+	}
+
 	char target[MAX_PATH] = {};
 	NormalizePath(target_root ? target_root : "", target, sizeof(target));
 	if (!target[0])							{ err = "target folder not set"; return false; }
@@ -711,6 +726,7 @@ static char					s_EdId[128]		= {};
 static char					s_EdName[256]	= {};
 static char					s_EdVersion[64]	= {};
 static char					s_EdMode[128]	= {};
+static char					s_EdTarget[32]	= {};
 static char					s_EdPModeId[128]	= {};
 static char					s_EdPModeTitle[256]	= {};
 static char					s_EdRequires[2048]	= {};
@@ -736,6 +752,7 @@ void EditorMod::RequestEditManifest()
 	strncpy_s(s_EdName, sizeof(s_EdName), s_Keep.name.c_str(), _TRUNCATE);
 	strncpy_s(s_EdVersion, sizeof(s_EdVersion), s_Keep.version.c_str(), _TRUNCATE);
 	strncpy_s(s_EdMode, sizeof(s_EdMode), s_Keep.mode.c_str(), _TRUNCATE);
+	strncpy_s(s_EdTarget, sizeof(s_EdTarget), s_Keep.target.c_str(), _TRUNCATE);
 	// the modal edits the first declared mode; extra pairs survive untouched
 	s_EdPModeId[0] = 0; s_EdPModeTitle[0] = 0;
 	if (!s_Keep.provides_modes.empty())
@@ -791,15 +808,82 @@ static void DrawManifestModal()
 	ImGui::InputText("version", s_EdVersion, sizeof(s_EdVersion));
 	ImGui::Separator();
 
-	// game mode targeting (XMS: [module] mode) + declared mode ([provides_mode])
-	ImGui::InputText("target mode", s_EdMode, sizeof(s_EdMode));
-	ImGui::TextDisabled("game mode id this module is limited to; empty = all modes");
+	// ---- what game mode is this module for ---------------------------------
+	// A module is built for exactly one of three things: the ordinary game, a
+	// campaign that already exists in THIS install, or a campaign it brings
+	// itself. The list is scanned from the linked game (a global mod like
+	// Revolution II replaces the stock one), and is shown by the names the
+	// player sees - nobody should have to know that "Dead Air Metro" is
+	// new_game_metro_mode.
+	ImGui::TextUnformatted("This module is for:");
+	{
+		xr_string scan_err;
+		EditorGameModes::Scan(scan_err);
+		const xr_vector<EditorGameModes::SMode>& modes = EditorGameModes::All();
+
+		// which of the three the manifest currently describes
+		// s_EdTarget records the choice itself: "default" is a decision, an
+		// empty manifest is not, and the export can tell them apart
+		int kind = s_EdPModeId[0] ? 2 : (s_EdMode[0] ? 1 : (0 == _stricmp(s_EdTarget, "default") ? 0 : -1));
+		if (ImGui::RadioButton("the ordinary game (no mode)", 0 == kind))
+		{
+			kind = 0; s_EdMode[0] = 0; s_EdPModeId[0] = 0; s_EdPModeTitle[0] = 0;
+			strcpy_s(s_EdTarget, "default");
+		}
+		if (ImGui::RadioButton("a mode already in the linked game", 1 == kind))
+		{
+			kind = 1; s_EdPModeId[0] = 0; s_EdPModeTitle[0] = 0;
+			strcpy_s(s_EdTarget, "existing");
+			if (!s_EdMode[0] && !modes.empty())
+				strncpy_s(s_EdMode, sizeof(s_EdMode), modes[0].id.c_str(), _TRUNCATE);
+		}
+		if (ImGui::RadioButton("a NEW mode this module adds", 2 == kind))
+		{
+			kind = 2; s_EdMode[0] = 0;
+			strcpy_s(s_EdTarget, "new");
+		}
+		if (kind < 0)
+			ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "not chosen yet - the module cannot be exported");
+
+		if (1 == kind)
+		{
+			// caption of whatever is selected, so the combo reads like the game
+			LPCSTR current = s_EdMode;
+			for (u32 i = 0; i < modes.size(); ++i)
+				if (0 == _stricmp(modes[i].id.c_str(), s_EdMode)) { current = modes[i].caption.c_str(); break; }
+
+			ImGui::SetNextItemWidth(360);
+			if (ImGui::BeginCombo("##target_mode", current))
+			{
+				for (u32 i = 0; i < modes.size(); ++i)
+				{
+					const bool sel = (0 == _stricmp(modes[i].id.c_str(), s_EdMode));
+					if (ImGui::Selectable(modes[i].caption.c_str(), sel))
+						strncpy_s(s_EdMode, sizeof(s_EdMode), modes[i].id.c_str(), _TRUNCATE);
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip("%s  (%s)", modes[i].id.c_str(),
+							modes[i].source == "game" ? "in the game" : modes[i].source.c_str());
+				}
+				ImGui::EndCombo();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Rescan")) { EditorGameModes::Invalidate(); }
+
+			if (modes.empty())
+				ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "%s",
+					scan_err.empty() ? "the linked game declares no modes - only options"
+									 : scan_err.c_str());
+		}
+		else if (2 == kind)
+		{
+			ImGui::InputText("mode id", s_EdPModeId, sizeof(s_EdPModeId));
+			ImGui::InputText("mode title (string id)", s_EdPModeTitle, sizeof(s_EdPModeTitle));
+			ImGui::TextDisabled("the id the module gates on, and the string the player will see");
+		}
+	}
 	const bool mode_ok = EditorMod::ValidateModeId(s_EdMode);
 	if (!mode_ok)
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid mode id: a-z 0-9 _ . - only (or empty)");
-	ImGui::TextUnformatted("Provides new mode:");
-	ImGui::InputText("mode id", s_EdPModeId, sizeof(s_EdPModeId));
-	ImGui::InputText("mode title (string id)", s_EdPModeTitle, sizeof(s_EdPModeTitle));
 	const bool pmode_ok = EditorMod::ValidateModeId(s_EdPModeId);
 	if (!pmode_ok)
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid mode id: a-z 0-9 _ . - only (or empty)");
@@ -819,6 +903,7 @@ static void DrawManifestModal()
 		m.name = s_EdName;
 		m.version = s_EdVersion;
 		m.mode = s_EdMode;
+		m.target = s_EdTarget;
 		// only the first declared mode is edited here; empty id drops it
 		if (s_EdPModeId[0])
 		{

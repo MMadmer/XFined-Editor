@@ -622,6 +622,17 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_game_modes",
+        "description": "Game modes a module can be built for, scanned from the LINKED game install. "
+                       "Dead Air has no config listing them: they are checkboxes in "
+                       "scripts/ui_mm_faction_select.script laid out in configs/ui/ui_mm_faction_select_16.xml, "
+                       "where the left column holds campaigns and the right one holds rule options "
+                       "(one life, richer stashes, ...). Only campaigns are returned, plus modes declared "
+                       "by XMS modules installed in that game. Each entry has id, caption (what the player "
+                       "sees), key ([character_creation] key) and source.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "xfined_outliner_filter",
         "description": "Drive the World Outliner's search box and type funnel, and read back what survives. "
                        "'text' uses the Unreal search grammar: every space-separated word has to match, "
@@ -719,6 +730,7 @@ CMD_MAP = {
     "xfined_save_scene": "save_scene",
     "xfined_outliner_show": "outliner_show",
     "xfined_outliner_filter": "outliner_filter",
+    "xfined_game_modes": "game_modes",
     "xfined_scene_tree": "scene_tree",
     "xfined_undo": "undo",
     "xfined_redo": "redo",

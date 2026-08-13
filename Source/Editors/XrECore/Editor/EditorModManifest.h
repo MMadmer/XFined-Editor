@@ -26,6 +26,11 @@ namespace EditorMod
 		xr_string				version;
 		xr_string				api;
 		xr_string				mode;			// [module] mode: gate content by game mode, empty = all modes
+		// [module] target: which of the three targeting choices the author made.
+		// "default" = the ordinary game, deliberately. Empty means nothing was
+		// chosen yet, and the module export refuses that - shipping a module
+		// whose mode nobody decided on is how content lands in the wrong game.
+		xr_string				target;
 		xr_vector<xr_string>	requires_list;	// raw entries, e.g. "other.mod = >=1.0"
 		xr_vector<xr_string>	after;			// module ids from [order]
 		xr_vector<xr_string>	before;
