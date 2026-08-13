@@ -887,6 +887,11 @@ UIContentBrowser::SFolder* UIContentBrowser::FindFolder(LPCSTR path)
 	return 0;
 }
 
+float UIContentBrowser::TileWidth() const
+{
+	return m_TileSize + ImGui::GetStyle().FramePadding.x * 2.f;
+}
+
 void UIContentBrowser::DrawTiles()
 {
 	// resolve the selected folder, falling back to root
@@ -903,10 +908,27 @@ void UIContentBrowser::DrawTiles()
 	// with an active search the whole subtree is scanned, otherwise just this folder
 	CollectItems(*cur, ids, m_Filter.IsActive());
 
-	const float cell	= m_TileSize + ImGui::GetStyle().ItemSpacing.x;
-	const float avail	= ImGui::GetContentRegionAvail().x;
-	int per_row			= (int)(avail / cell);
+	// How many tiles fit on a row. A tile is WIDER than m_TileSize: a button
+	// adds its frame padding on both sides, and the image tiles do the same, so
+	// wrapping on the bare tile size put one column past the right edge every
+	// time - clipped, unreachable, and it hid whatever was under it. N tiles
+	// span N*(tile+spacing) - spacing, which is the row that has to fit.
+	const ImGuiStyle&	st		= ImGui::GetStyle();
+	const float			tile_w	= TileWidth();
+	const float			space	= st.ItemSpacing.x;
+	const float			avail	= ImGui::GetContentRegionAvail().x;
+	int per_row					= (int)((avail + space) / (tile_w + space));
 	if (per_row < 1) per_row = 1;
+
+	// A new folder starts at its beginning. ImGui keeps the scroll offset per
+	// child window, so without this, entering a folder from a scrolled grid
+	// lands in the middle of the new one - it looks like the first rows simply
+	// do not exist. Unreal resets the same way.
+	if (m_ShownFolder != m_CurFolder)
+	{
+		m_ShownFolder = m_CurFolder;
+		if (!m_ScrollToSelection) ImGui::SetScrollY(0.f);
+	}
 
 	int drawn = 0, matched = 0;
 
@@ -920,7 +942,7 @@ void UIContentBrowser::DrawTiles()
 		{
 			// step out: the parent path is everything before the last separator
 			ImGui::PushID("##cb_up");
-			ImGui::Button("..", ImVec2(m_TileSize + 8.f, m_TileSize + 8.f));
+			ImGui::Button("..", ImVec2(tile_w, tile_w));
 			// double click, same as every other folder tile - a single click
 			// here navigated while clicking a folder did not, which is worse
 			// than either rule on its own
@@ -959,7 +981,7 @@ void UIContentBrowser::DrawTiles()
 			// Selected (or being renamed) is lit up.
 			ImGui::PushStyleColor(ImGuiCol_Button, (sel || renaming) ? ImVec4(0.46f, 0.41f, 0.20f, 1.f)
 																	: ImVec4(0.30f, 0.27f, 0.14f, 1.f));
-			ImGui::Button("[ ]", ImVec2(m_TileSize, m_TileSize));
+			ImGui::Button("[ ]", ImVec2(tile_w, tile_w));
 			ImGui::PopStyleColor();
 
 			m_DrawnRects[folder_slot] = ImVec4(ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
@@ -983,7 +1005,7 @@ void UIContentBrowser::DrawTiles()
 
 			if (renaming)
 			{
-				ImGui::SetNextItemWidth(m_TileSize);
+				ImGui::SetNextItemWidth(tile_w);
 				if (m_RenameFocus)
 				{
 					// one frame late on purpose: the widget has to exist before
@@ -1001,7 +1023,7 @@ void UIContentBrowser::DrawTiles()
 			}
 			else
 			{
-				ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + m_TileSize);
+				ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + tile_w);
 				ImGui::TextUnformatted(sub.name.c_str());
 				ImGui::PopTextWrapPos();
 			}
@@ -1041,7 +1063,7 @@ void UIContentBrowser::DrawTiles()
 
 		bool clicked;
 		if (tex)	clicked = ImGui::ImageButton(tex, ImVec2(m_TileSize, m_TileSize));
-		else		clicked = ImGui::Button(leaf, ImVec2(m_TileSize + 8.f, m_TileSize + 8.f));
+		else		clicked = ImGui::Button(leaf, ImVec2(tile_w, tile_w));
 
 		{
 			const ImVec2 ra = ImGui::GetItemRectMin();
@@ -1107,7 +1129,7 @@ void UIContentBrowser::DrawTiles()
 		// an asset gets exactly like a folder does
 		if (renaming)
 		{
-			ImGui::SetNextItemWidth(m_TileSize);
+			ImGui::SetNextItemWidth(tile_w);
 			if (m_RenameFocus)	{ ImGui::SetKeyboardFocusHere(); m_RenameFocus = false; }
 			const bool done = ImGui::InputText("##cb_rename", m_RenameBuf, sizeof(m_RenameBuf),
 				ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
@@ -1115,7 +1137,7 @@ void UIContentBrowser::DrawTiles()
 		}
 		else
 		{
-			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + m_TileSize);
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + tile_w);
 			ImGui::TextUnformatted(leaf);
 			ImGui::PopTextWrapPos();
 		}
@@ -1300,6 +1322,28 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 	int found = -1;
 	for (u32 i = 0; i < Form->m_Items.size(); ++i)
 		if (0 == _stricmp(Form->m_Items[i].name.c_str(), name)) { found = int(i); break; }
+
+	// A folder is a legitimate thing to reveal - "show me levels\" is what a
+	// caller browsing the tree actually wants, and there is no other way to
+	// get the grid there without a mouse. Selected like a folder tile, so the
+	// next frame scrolls the tree to it as well.
+	if (found < 0)
+	{
+		string_path folder;
+		strncpy_s(folder, sizeof(folder), name, _TRUNCATE);
+		for (char* p = folder; *p; ++p) if (*p == '/') *p = '\\';
+		if (const size_t n = xr_strlen(folder); n && folder[n - 1] == '\\') folder[n - 1] = 0;
+		if (Form->FindFolder(folder))
+		{
+			Form->m_CurFolder	= folder;
+			Form->m_Filter.Clear();
+			Form->m_Selection.clear();
+			Form->m_Anchor		= SEntry(folder, true);
+			Form->m_HasAnchor	= true;
+			Form->m_ScrollToSelection = true;
+			return true;
+		}
+	}
 
 	// The SDK library is split into categories, and a caller naming an asset has
 	// no reason to know which one holds it - a level lives under Levels, a mesh

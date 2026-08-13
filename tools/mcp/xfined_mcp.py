@@ -389,15 +389,16 @@ TOOLS = [
     },
     {
         "name": "xfined_content_browser_open",
-        "description": "Reveal an asset in the editor's Content Browser: opens the panel, switches source when "
-                       "asked, navigates to the folder holding it and selects it. 'name' as returned by "
-                       "list_assets (or darf_list for the game source). 'source' is project / editor / darf "
-                       "(omit to stay on the current tab). open=true also opens the asset's viewer, the same "
-                       "thing a double click does.",
+        "description": "Reveal an asset OR a folder in the editor's Content Browser: opens the panel, switches "
+                       "source when asked, navigates there and selects it. 'name' is an asset as returned by "
+                       "list_assets (or darf_list for the game source), or a folder path like 'levels' or "
+                       "'levels\\\\l07_military' - the only way to walk the grid into a folder without a mouse. "
+                       "'source' is project / editor / darf (omit to stay on the current tab). open=true also "
+                       "opens the asset's viewer, the same thing a double click does (ignored for folders).",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "asset name from list_assets / darf_list"},
+                "name": {"type": "string", "description": "asset name from list_assets / darf_list, or a folder path"},
                 "source": {"type": "string", "enum": ["project", "editor", "darf"]},
                 "open": {"type": "boolean", "description": "also open the viewer (default false)"},
             },

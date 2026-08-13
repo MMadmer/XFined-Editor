@@ -104,6 +104,8 @@ private:
 	xr_vector<xr_string>			m_Dirs;
 	SFolder							m_Root;
 	xr_string						m_CurFolder;
+	// what the grid drew last frame, so entering a folder can start at its top
+	xr_string						m_ShownFolder;
 	u32								m_Category;
 	// UE-style split: 0 = project "Content" folder (disk scan), 1 = shared
 	// "Editor Content" (UIChooseForm event table), 2 = "DARF Content" (the
@@ -111,6 +113,11 @@ private:
 	int								m_Source;
 	bool							m_NeedRefresh;
 	float							m_TileSize;
+	// What one tile really occupies: m_TileSize is the PICTURE, a button adds
+	// its frame padding around it. Every tile is drawn at this width and the
+	// row wrap is computed from it, so folders and assets line up in the same
+	// columns and the last column stops falling off the right edge.
+	float							TileWidth() const;
 	// folder-tree width, dragged by the splitter between the two panes and
 	// persisted in the editor preferences
 	float							m_TreeWidth;
