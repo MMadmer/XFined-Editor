@@ -73,7 +73,7 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_focus_object` | frame the camera on object `name` like the F key; `select=true` also selects it |
 | `xfined_mod_manifest` | XMS mod manifest of the active project: id, name, version, target game `mode`, declared `provides_mode` list, requires/after/before/conflicts, existing module dirs |
 | `xfined_mod_set_manifest` | update mod.ltx fields: `id`/`name`/`version`/`mode` strings, `provides_mode_id`+`provides_mode_title` (declare a game mode, empty id removes), `requires`/`after`/`before`/`conflicts` comma-joined lists |
-| `xfined_mod_export` | export the project to `<target>/mods/<id>/` as an XMS module, or `flat=true` for a plain `gamedata_<id>` overlay + compatibility report |
+| `xfined_mod_export` | export the project to `<target>/mods/<id>/` as an XMS module (no `target` = deploy to the linked game's `mods/`); mirrors the project (stale files deleted), refuses targets inside the game's `gamedata`; `flat=true` for a plain `gamedata_<id>` overlay + compatibility report |
 | `xfined_mod_export_spawn` | export placed objects as an additive spawn layer `spawn/<level>.xspawn` (`op=add` + section + world transform + visual override) — the composable way to add things to a base level; args `level`, `selected_only`, `section`, `mode` |
 | `xfined_asset_preview_model` | render a `.ogf` model preview as a base64 PNG (game meshes have no baked thumbnail); `name` + `source` = `visual` (editor FS) or `darf` (linked game install) |
 | `xfined_mod_export_cut` | subtractive delta: selected objects act as volumes — their bounds become cut boxes (base collision removed) + `hide` entries (base visuals detached); args `level`, `selected_only`, `overlap`, `grow` |

@@ -362,7 +362,8 @@ void EditorMod::EnsureScaffold(LPCSTR project_root, LPCSTR project_name)
 {
 	if (!project_root || !project_root[0]) return;
 
-	static const char* dirs[] = { "gamedata", "patch", "spawn", "scripts" };
+	// levels\ is a module part like the rest (scene-baked overlays land there)
+	static const char* dirs[] = { "gamedata", "patch", "spawn", "scripts", "levels" };
 	for (int i = 0; i < (int)(sizeof(dirs) / sizeof(dirs[0])); ++i)
 	{
 		char p[MAX_PATH];
@@ -449,6 +450,57 @@ static int CountFilesRec(const char* dir, const char* skip_file)
 	return files;
 }
 
+// The one place a mod must NEVER land: inside the game's own gamedata. The
+// whole point of the module system is that a mod lives in its own folder and
+// nothing ever merges into the game tree - so a target that would put files
+// there is refused, not warned about.
+static bool InsideGameGamedata(LPCSTR path)
+{
+	LPCSTR game = EditorProject::GameRoot();
+	if (!game || !game[0]) return false;
+	char guard[MAX_PATH];
+	sprintf_s(guard, "%s\\gamedata", game);
+	const size_t n = xr_strlen(guard);
+	return 0 == _strnicmp(path, guard, n) && (path[n] == 0 || path[n] == '\\');
+}
+
+// Module export mirrors: a file that disappeared from the project must
+// disappear from the exported module too, or every rename leaves a stale
+// twin behind. Only ever pointed at <target>\mods\<id> sub-parts - folders
+// this exporter owns outright.
+static void DeleteOrphansRec(LPCSTR dst, LPCSTR src)
+{
+	WIN32_FIND_DATAA fd;
+	string_path mask;
+	sprintf_s(mask, "%s\\*", dst);
+	HANDLE h = ::FindFirstFileA(mask, &fd);
+	if (INVALID_HANDLE_VALUE == h) return;
+	do
+	{
+		if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+		string_path d, s;
+		sprintf_s(d, "%s\\%s", dst, fd.cFileName);
+		sprintf_s(s, "%s\\%s", src, fd.cFileName);
+		const DWORD sa = ::GetFileAttributesA(s);
+		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			if (INVALID_FILE_ATTRIBUTES == sa || !(sa & FILE_ATTRIBUTE_DIRECTORY))
+			{
+				// gone from the project (or turned into a file): drop the tree
+				string_path sub;
+				sprintf_s(sub, "%s", d);
+				DeleteOrphansRec(sub, s);	// empties it even when src vanished
+				::RemoveDirectoryA(d);
+			}
+			else
+				DeleteOrphansRec(d, s);
+		}
+		else if (INVALID_FILE_ATTRIBUTES == sa || (sa & FILE_ATTRIBUTE_DIRECTORY))
+			::DeleteFileA(d);
+	} while (::FindNextFileA(h, &fd));
+	::FindClose(h);
+}
+
 bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 					   int& files, xr_string& out_path, xr_string& err)
 {
@@ -468,6 +520,12 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 	string_path dst;
 	if (flat)	sprintf_s(dst, "%s\\gamedata_%s", target, m.id.c_str());
 	else		sprintf_s(dst, "%s\\mods\\%s", target, m.id.c_str());
+	if (InsideGameGamedata(dst) || InsideGameGamedata(target))
+	{
+		err = "target is inside the game's gamedata - a mod must stay in its own folder "
+			  "(export to the game ROOT: the module goes to <game>\\mods\\<id>)";
+		return false;
+	}
 	CreateDirChain(dst);
 	if (!DirExists(dst))					{ err = "can't create target folder"; return false; }
 
@@ -523,8 +581,11 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 		for (int i = 0; i < (int)(sizeof(parts) / sizeof(parts[0])); ++i)
 		{
 			sprintf_s(src, "%s\\%s", project_root, parts[i]);
-			if (!DirExists(src)) continue;
 			sprintf_s(b, "%s\\%s", dst, parts[i]);
+			// mirror semantics: what left the project leaves the module, or
+			// every rename ships a stale twin alongside the new file
+			if (DirExists(b)) DeleteOrphansRec(b, src);
+			if (!DirExists(src)) { ::RemoveDirectoryA(b); continue; }
 			// the patch readme is authoring help, not module content
 			files += CopyTreeCount(src, b, (0 == strcmp(parts[i], "patch")) ? "_readme.txt" : 0);
 		}
@@ -608,6 +669,10 @@ static void PrepareExport(bool flat)
 	char ini[MAX_PATH];
 	ProjectIni(ini, sizeof(ini));
 	::GetPrivateProfileStringA("xms", "export_target", "", s_Target, sizeof(s_Target), ini);
+	// first export of a linked project: the game root IS the deploy target -
+	// the module lands in <game>\mods\<id>, which is where the game reads it
+	if (!s_Target[0] && EditorProject::GameRoot()[0])
+		strncpy_s(s_Target, sizeof(s_Target), EditorProject::GameRoot(), _TRUNCATE);
 	if (flat)	s_WantFlat = true;
 	else		s_WantExport = true;
 }
@@ -699,6 +764,13 @@ static void DrawExportModal(bool flat)
 		: "Target mods root folder; the module goes to <target>\\mods\\<id>:");
 	ImGui::SetNextItemWidth(480);
 	ImGui::InputText("##target", s_Target, sizeof(s_Target));
+	if (EditorProject::GameRoot()[0])
+	{
+		if (ImGui::Button(flat ? "Use linked game root" : "Deploy to linked game"))
+			strncpy_s(s_Target, sizeof(s_Target), EditorProject::GameRoot(), _TRUNCATE);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", EditorProject::GameRoot());
+	}
 	ImGui::Separator();
 
 	ImGui::BeginDisabled(!s_Target[0]);
@@ -862,8 +934,14 @@ void EditorMod::McpExport(LPCSTR raw, xr_string& out)
 	if (!EditorProject::Active())
 		{ out = "{\"ok\":false,\"error\":\"no active project\"}"; return; }
 	char target[MAX_PATH];
-	if (!XFinedMCP::GetArg(raw, "target", target, sizeof(target)))
-		{ out = "{\"ok\":false,\"error\":\"missing 'target' argument\"}"; return; }
+	// no target = deploy to the linked game: <game>\mods\<id> is where the
+	// game actually reads modules from, so it is the default, not an option
+	if (!XFinedMCP::GetArg(raw, "target", target, sizeof(target)) || !target[0])
+	{
+		if (!EditorProject::GameRoot()[0])
+			{ out = "{\"ok\":false,\"error\":\"no 'target' and no linked game (see game_link)\"}"; return; }
+		strncpy_s(target, sizeof(target), EditorProject::GameRoot(), _TRUNCATE);
+	}
 	const bool flat = ArgBool(raw, "flat", false);
 
 	int files = 0;

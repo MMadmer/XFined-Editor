@@ -705,55 +705,83 @@ static bool DoExportCut(LPCSTR level_arg, bool selected_only, bool overlap, floa
 	sprintf_s(xcform, "%s\\overlay.xcform", dir);
 	sprintf_s(ltx, "%s\\overlay_visuals.ltx", dir);
 
-	// collision side: replace the cut list, keep the overlay geometry
+	// Cuts ACCUMULATE across exports: digging a second pit must not undo the
+	// first one. A box already present (within tolerance) is skipped, so
+	// re-exporting the same selection stays idempotent.
+	const auto same_box = [](const Fbox& a, const Fbox& b)
+	{
+		return a.min.similar(b.min, 0.005f) && a.max.similar(b.max, 0.005f);
+	};
+
+	// collision side: append the new volumes to whatever is there already
 	SXCForm file;
 	ReadXCForm(xcform, file);
-	file.cuts = boxes;
+	int added = 0;
+	for (u32 i = 0; i < boxes.size(); ++i)
+	{
+		bool known = false;
+		for (u32 k = 0; k < file.cuts.size() && !known; ++k)
+			known = same_box(boxes[i], file.cuts[k]);
+		if (!known) { file.cuts.push_back(boxes[i]); ++added; }
+	}
 	if (!WriteXCForm(xcform, file))	{ err = "can't write overlay.xcform"; return false; }
 
-	// render side: the same boxes as hide entries, rewritten as a block so a
-	// re-export does not pile duplicates up
-	xr_string old_text, kept;
-	ReadTextFile(ltx, old_text);
+	// Render side: existing [cut_*] sections are KEPT verbatim (they may carry
+	// hand-edited overlap flags); only genuinely new boxes are appended, with
+	// indices continuing after the highest one present.
+	xr_string kept;
+	ReadTextFile(ltx, kept);
+	xr_vector<Fbox> known_hides;
+	int next_cut = 0;
 	{
-		bool dropping = false;
 		size_t pos = 0;
-		while (pos <= old_text.size())
+		while (pos <= kept.size())
 		{
-			size_t eol = old_text.find('\n', pos);
-			if (eol == xr_string::npos) eol = old_text.size();
-			xr_string line = old_text.substr(pos, eol - pos);
-			if (!line.empty() && (line[0] == '[' || (line[0] == ' ' && line.find('[') == 1)))
-				dropping = line.find("[cut_") != xr_string::npos;
-			if (!dropping)
+			size_t eol = kept.find('\n', pos);
+			if (eol == xr_string::npos) eol = kept.size();
+			xr_string line = kept.substr(pos, eol - pos);
+			int idx;
+			if (1 == sscanf_s(line.c_str(), " [cut_%d]", &idx) && idx >= next_cut)
+				next_cut = idx + 1;
+			float x, y, z, ex, ey, ez;
+			if (6 == sscanf_s(line.c_str(), " hide = %f , %f , %f , %f , %f , %f", &x, &y, &z, &ex, &ey, &ez))
 			{
-				kept += line;
-				if (eol < old_text.size()) kept += '\n';
+				Fbox b;
+				b.min.set(x - ex, y - ey, z - ez);
+				b.max.set(x + ex, y + ey, z + ez);
+				known_hides.push_back(b);
 			}
-			if (eol == old_text.size()) break;
+			if (eol == kept.size()) break;
 			pos = eol + 1;
 		}
 		while (!kept.empty() && (kept[kept.size() - 1] == '\n' || kept[kept.size() - 1] == '\r'))
 			kept.erase(kept.size() - 1, 1);
 		if (!kept.empty()) kept += "\r\n\r\n";
 	}
+	int added_ltx = 0;
 	for (u32 i = 0; i < boxes.size(); ++i)
 	{
+		bool known = false;
+		for (u32 k = 0; k < known_hides.size() && !known; ++k)
+			known = same_box(boxes[i], known_hides[k]);
+		if (known) continue;
 		Fvector c, e;
 		boxes[i].getcenter(c);
 		e.sub(boxes[i].max, c);
 		char entry[512];
 		sprintf_s(entry, "[cut_%d]\r\nhide    = %f,%f,%f,%f,%f,%f\r\n%s\r\n",
-			i, c.x, c.y, c.z, e.x, e.y, e.z,
+			next_cut + added_ltx, c.x, c.y, c.z, e.x, e.y, e.z,
 			overlap ? "overlap = true" : "; overlap = true  ; uncomment to also take visuals that only touch the box");
 		kept += entry;
+		++added_ltx;
 	}
 	if (!WriteBinFile(ltx, kept.c_str(), (u32)kept.size()))
 									{ err = "cuts written, but overlay_visuals.ltx is not writable"; return false; }
 
-	o_cuts = (int)boxes.size();
+	o_cuts = added;
 	out_path = xcform;
-	Msg("* [XMS] level cut: %d volume(s) -> %s (+ hide entries in overlay_visuals.ltx)", o_cuts, xcform);
+	Msg("* [XMS] level cut: %d new volume(s), %d total -> %s (+ hide entries in overlay_visuals.ltx)",
+		added, (int)file.cuts.size(), xcform);
 	return true;
 }
 

@@ -139,14 +139,15 @@ TOOLS = [
         "name": "xfined_mod_export",
         "description": "Export the active project as an XMS module into <target>/mods/<id>/ (default), "
                        "or with flat=true as a plain gamedata_<id> overlay plus a vanilla-compatibility report. "
-                       "Existing files in the target are overwritten.",
+                       "Without 'target' the module deploys to the LINKED GAME (game_link): <game>/mods/<id>. "
+                       "The module export mirrors the project (stale files in the target module are deleted); "
+                       "a target inside the game's gamedata is refused - mods never merge into the game tree.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {"type": "string", "description": "target root folder (created if missing)"},
+                "target": {"type": "string", "description": "target root folder (created if missing); omit = linked game root"},
                 "flat": {"type": "boolean", "description": "flat gamedata export (default false)"},
             },
-            "required": ["target"],
         },
     },
     {
