@@ -51,6 +51,13 @@ namespace EditorMod
 	// creates missing mod.ltx / module dirs / patch readme; never overwrites
 	ECORE_API void	EnsureScaffold		(LPCSTR project_root, LPCSTR project_name);
 
+	// Project-relative paths of the files the EDITOR owns inside the project:
+	// the manifest and everything export (re)generates. The content browser
+	// hides them - they are required machinery, not content, and deleting one
+	// by accident must not be possible - and the export's mode step deletes
+	// the generated ones when the declaration they came from is gone.
+	ECORE_API void	GetOwnedFiles		(LPCSTR project_root, xr_vector<xr_string>& rel);
+
 	ECORE_API bool	Load				(LPCSTR project_root, SManifest& m);
 	ECORE_API bool	Save				(LPCSTR project_root, const SManifest& m);
 

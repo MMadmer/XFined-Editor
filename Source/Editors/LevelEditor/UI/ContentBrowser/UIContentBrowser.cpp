@@ -3,6 +3,7 @@
 #include "..\..\..\XrECore\Editor\EThumbnailVisual.h"
 #include "..\..\..\XrECore\Editor\EDX11Utils.h"
 #include "..\..\..\XrECore\Editor\EditorFileOps.h"
+#include "..\..\..\XrECore\Editor\EditorModManifest.h"
 
 // image formats the thumbnail path can decode directly
 static bool IsImageExt(LPCSTR name)
@@ -341,6 +342,21 @@ void UIContentBrowser::Refresh()
 						m_Items.push_back(SChooseItem(fd.cFileName, ""));
 				} while (::FindNextFileA(h, &fd));
 				::FindClose(h);
+			}
+
+			// The module's own machinery - the manifest and what export
+			// generates - is not content and must not be deletable by a stray
+			// Ctrl+A + Del. It is edited through Mod > Edit Manifest, and the
+			// generated files follow the manifest on their own.
+			xr_vector<xr_string> owned;
+			EditorMod::GetOwnedFiles(EditorProject::Root(), owned);
+			for (u32 k = 0; k < m_Items.size();)
+			{
+				bool hide = false;
+				for (u32 o = 0; o < owned.size() && !hide; ++o)
+					hide = (0 == _stricmp(m_Items[k].name.c_str(), owned[o].c_str()));
+				if (hide)	m_Items.erase(m_Items.begin() + k);
+				else		++k;
 			}
 		}
 		m_Root.name = "Content";

@@ -551,9 +551,37 @@ static void DeleteOrphansRec(LPCSTR dst, LPCSTR src)
 //
 // Written only when the manifest declares a mode; a module targeting an
 // existing mode needs none of it.
+void EditorMod::GetOwnedFiles(LPCSTR project_root, xr_vector<xr_string>& rel)
+{
+	rel.push_back("mod.ltx");
+	rel.push_back("patch\\xms_modes.xmlp");
+	rel.push_back("scripts\\mode_register.script");
+	// the string table carries the module id (it lands in the game's shared
+	// namespace) - resolve it from the manifest on disk
+	SManifest m;
+	if (project_root && Load(project_root, m) && !m.id.empty())
+		rel.push_back(xr_string("gamedata\\configs\\text\\rus\\") + m.id + "_modes.xml");
+}
+
 static bool WriteModeRegistration(LPCSTR project_root, const EditorMod::SManifest& m, xr_string& err)
 {
-	if (m.provides_modes.empty()) return true;
+	// A declaration that is GONE has to take its generated files with it:
+	// they are hidden from the browser, so nothing else would ever remove
+	// them, and a stale invisible xmlp still puts a checkbox in the game.
+	if (m.provides_modes.empty())
+	{
+		string_path stale;
+		sprintf_s(stale, "%s\\patch\\xms_modes.xmlp", project_root);
+		if (::DeleteFileA(stale)) Msg("* [XMS] mode declaration gone - removed %s", stale);
+		sprintf_s(stale, "%s\\scripts\\mode_register.script", project_root);
+		if (::DeleteFileA(stale)) Msg("* [XMS] mode declaration gone - removed %s", stale);
+		if (!m.id.empty())
+		{
+			sprintf_s(stale, "%s\\gamedata\\configs\\text\\rus\\%s_modes.xml", project_root, m.id.c_str());
+			if (::DeleteFileA(stale)) Msg("* [XMS] mode declaration gone - removed %s", stale);
+		}
+		return true;
+	}
 
 	// Never trust the manifest here: it may have been hand-written or made by
 	// an older build, and these ids become file names, XML node names and Lua
