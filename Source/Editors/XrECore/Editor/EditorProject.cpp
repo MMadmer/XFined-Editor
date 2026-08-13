@@ -341,19 +341,11 @@ void EditorProject::McpGameLink(LPCSTR raw, xr_string& out)
 //------------------------------------------------------------------------------
 void EditorProject::CreateLayout()
 {
-	static const char* dirs[] =
-	{
-		"Content",
-		"rawdata", "rawdata\\levels", "rawdata\\backup",
-		"gamedata", "gamedata\\levels", "gamedata\\spawns",
-		"import", "temp", "logs", "savedgames", "screenshots",
-	};
-	for (int i = 0; i < (int)(sizeof(dirs)/sizeof(dirs[0])); ++i)
-	{
-		char p[MAX_PATH];
-		sprintf_s(p, "%s\\%s", s_Project, dirs[i]);
-		::CreateDirectoryA(p, NULL);
-	}
+	// Nothing. A project is born EMPTY - the author decides its layout, and no
+	// folder exists until something is actually put in it. The write path
+	// (ELocatorAPI::w_open -> VerifyPath) creates parent chains on demand, so
+	// the editor's own scratch (temp, logs, import, ...) appears when first
+	// written to, and a module's folders when the author makes them.
 }
 
 // The editor's scratch, path bookkeeping and captured preview. Everything NOT
@@ -420,7 +412,7 @@ bool EditorProject::Open(LPCSTR folder)
 	const char* leaf = strrchr(s_Project, '\\');
 	xr_strcpy(s_Name, leaf ? leaf + 1 : s_Project);
 
-	CreateLayout();		// heals missing subdirs in old/hand-made projects
+	CreateLayout();		// deliberately a no-op: a project's layout is the author's
 	// XMS: silently add mod.ltx + module dirs to projects that predate them
 	EditorMod::EnsureScaffold(s_Project, s_Name);
 	LoadManifest();
@@ -602,7 +594,7 @@ bool EditorProject::ImportBaseScene(LPCSTR name, string_path& out_level, xr_stri
 		return false;
 	}
 
-	::CreateDirectoryA(dst_root, NULL);
+	VerifyPath(dst_file);	// the whole chain: an empty project has no rawdata yet
 	if (!::CopyFileA(src_file, dst_file, FALSE))
 	{
 		err = xr_string("cannot copy the scene into the project: ") + name;

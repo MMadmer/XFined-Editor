@@ -404,15 +404,11 @@ void EditorMod::EnsureScaffold(LPCSTR project_root, LPCSTR project_name)
 {
 	if (!project_root || !project_root[0]) return;
 
-	// levels\ is a module part like the rest (scene-baked overlays land there)
-	static const char* dirs[] = { "gamedata", "patch", "spawn", "scripts", "levels" };
-	for (int i = 0; i < (int)(sizeof(dirs) / sizeof(dirs[0])); ++i)
-	{
-		char p[MAX_PATH];
-		sprintf_s(p, "%s\\%s", project_root, dirs[i]);
-		::CreateDirectoryA(p, NULL);
-	}
-
+	// Only the manifest: it is what makes the folder a module at all. NO
+	// folders - a module has whatever layout its author gives it ([vfs]
+	// publishes any of it), and an empty project stays empty. The folders the
+	// engine's fixed channels read (patch\, spawn\, scripts\, levels\,
+	// gamedata\) appear when something is put in them, not before.
 	char mod[MAX_PATH];
 	sprintf_s(mod, "%s\\mod.ltx", project_root);
 	if (!FileExists(mod))
@@ -427,16 +423,6 @@ void EditorMod::EnsureScaffold(LPCSTR project_root, LPCSTR project_name)
 		if (Save(project_root, m))
 			Msg("* [XMS] mod.ltx scaffolded: %s", mod);
 	}
-
-	char readme[MAX_PATH];
-	sprintf_s(readme, "%s\\patch\\_readme.txt", project_root);
-	if (!FileExists(readme))
-		WriteTextFile(readme,
-			"XMS patch directory.\r\n"
-			"Put config directive patches here as *.ltxp files (edit keys of named LTX sections).\r\n"
-			"Put XML patches here as *.xmlp files (edit nodes of XML documents).\r\n"
-			"Patches change named entities instead of replacing whole files, so modules stack.\r\n"
-			"The module manifest lives in mod.ltx at the project root.\r\n");
 }
 
 //------------------------------------------------------------------------------

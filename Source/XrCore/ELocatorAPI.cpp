@@ -378,10 +378,13 @@ IWriter* ELocatorAPI::w_open	(LPCSTR path, LPCSTR _fname)
 	string_path	fname;
 	xr_strlwr(strcpy(fname,_fname));//,".$");
 	if (path&&path[0]) update_path(fname,path,fname);
-    CFileWriter* W 	= xr_new<CFileWriter>(fname,false); 
+	// projects are born EMPTY - the folder a write lands in exists because of
+	// the write, not because something pre-created a layout
+	VerifyPath(fname);
+    CFileWriter* W 	= xr_new<CFileWriter>(fname,false);
 #ifdef _EDITOR
 	if (!W->valid()) xr_delete(W);
-#endif    
+#endif
 	return W;
 }
 
@@ -390,7 +393,8 @@ IWriter* ELocatorAPI::w_open_ex	(LPCSTR path, LPCSTR _fname)
 	string_path	fname;
 	xr_strlwr(strcpy(fname,_fname));//,".$");
 	if (path&&path[0]) update_path(fname,path,fname);
-    CFileWriter* W 	= xr_new<CFileWriter>(fname,true); 
+	VerifyPath(fname);
+    CFileWriter* W 	= xr_new<CFileWriter>(fname,true);
 #ifdef _EDITOR
 	if (!W->valid()) xr_delete(W);
 #endif    

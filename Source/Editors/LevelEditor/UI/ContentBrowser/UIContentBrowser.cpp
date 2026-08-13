@@ -2201,15 +2201,10 @@ int UIContentBrowser::CopyRefsToProject(u32 category, const xr_vector<xr_string>
 void UIContentBrowser::CreateFolder()
 {
 	if (m_Source != 0 || !EditorProject::Active())	return;
-	// The project root is not a content folder: gamedata and rawdata are the two
-	// roots the engine and the editor read from, and a folder next to them would
-	// simply never be looked at.
-	if (m_CurFolder.empty())
-	{
-		ELog.DlgMsg(mtInformation,
-			"Open gamedata or rawdata first - the project root itself is not a content folder.");
-		return;
-	}
+
+	// The project root is a content folder like any other: a module keeps
+	// whatever layout its author wants ([vfs] publishes it), so a folder can be
+	// born anywhere - including next to gamedata.
 
 	// first free "New Folder", "New Folder 2", ... exactly like a file manager
 	xr_string rel;
@@ -2220,11 +2215,12 @@ void UIContentBrowser::CreateFolder()
 		if (1 == n)	xr_strcpy(leaf, sizeof(leaf), "New Folder");
 		else		sprintf_s(leaf, "New Folder %d", n);
 
-		sprintf_s(probe, "%s\\%s\\%s", EditorProject::Root(), m_CurFolder.c_str(), leaf);
+		if (m_CurFolder.empty())	sprintf_s(probe, "%s\\%s", EditorProject::Root(), leaf);
+		else						sprintf_s(probe, "%s\\%s\\%s", EditorProject::Root(), m_CurFolder.c_str(), leaf);
 		if (INVALID_FILE_ATTRIBUTES == ::GetFileAttributesA(probe))
 		{
-			rel  = m_CurFolder;
-			rel += "\\";
+			rel = m_CurFolder;
+			if (!rel.empty()) rel += "\\";
 			rel += leaf;
 			break;
 		}
