@@ -314,14 +314,34 @@ void UIContentBrowser::Refresh()
 
 	if (m_Source == 0)
 	{
-		// The project's own content, scanned off disk. Both roots are listed:
-		// gamedata is what the engine loads, rawdata what the editor compiles
-		// from - and the copiers write into either depending on the asset, so
-		// showing only one of them hid half of what had just been copied in.
+		// The project ROOT is the content root. A module may keep any layout it
+		// likes - mod.ltx [vfs] publishes it wherever the game needs it - so
+		// every folder the author makes here is content by definition. Listing
+		// only gamedata and rawdata hid the module's own parts (patch, spawn,
+		// scripts, levels) and made the root look like a place you cannot work.
 		if (EditorProject::Active())
 		{
-			ScanContentDir(EditorProject::Root(), "gamedata", m_Items, m_Dirs);
-			ScanContentDir(EditorProject::Root(), "rawdata",  m_Items, m_Dirs);
+			WIN32_FIND_DATAA fd;
+			string_path mask;
+			sprintf_s(mask, "%s\\*", EditorProject::Root());
+			HANDLE h = ::FindFirstFileA(mask, &fd);
+			if (INVALID_HANDLE_VALUE != h)
+			{
+				do
+				{
+					if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+					// the editor's own scratch is not the author's content
+					if (EditorProject::IsEditorOnlyEntry(fd.cFileName)) continue;
+					if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+					{
+						m_Dirs.push_back(xr_string(fd.cFileName));
+						ScanContentDir(EditorProject::Root(), fd.cFileName, m_Items, m_Dirs);
+					}
+					else
+						m_Items.push_back(SChooseItem(fd.cFileName, ""));
+				} while (::FindNextFileA(h, &fd));
+				::FindClose(h);
+			}
 		}
 		m_Root.name = "Content";
 	}
@@ -1740,8 +1760,6 @@ bool UIContentBrowser::CanPaste() const
 {
 	if (m_Clipboard.empty())		return false;
 	if (m_Source != 0)				return false;	// destination must be writable
-	// the project root holds gamedata/rawdata, not content of its own
-	if (m_CurFolder.empty())		return false;
 	if (m_ClipSource == 1)
 	{
 		int n = 0;
@@ -1754,7 +1772,6 @@ LPCSTR UIContentBrowser::PasteBlockedReason() const
 {
 	if (m_Clipboard.empty())	return "clipboard is empty";
 	if (m_Source != 0)			return "paste into the project's Content - this source is read-only";
-	if (m_CurFolder.empty())	return "open gamedata or rawdata first - the project root is not a content folder";
 	if (m_ClipSource == 1)
 	{
 		int n = 0;
@@ -1918,11 +1935,8 @@ void UIContentBrowser::DrawGridContextMenu()
 	// place a file manager puts it.
 	if (m_Source == 0)
 	{
-		const bool can_make = !m_CurFolder.empty();
-		if (ImGui::MenuItem("New folder", "", false, can_make) && can_make)
-			CreateFolder();
-		if (!can_make && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("open gamedata or rawdata first - the project root is not a content folder");
+		// the root included: a module's layout is its author's business
+		if (ImGui::MenuItem("New folder"))	CreateFolder();
 		ImGui::Separator();
 	}
 

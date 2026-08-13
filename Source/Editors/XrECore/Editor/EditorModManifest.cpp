@@ -606,8 +606,29 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 		sprintf_s(b, "%s\\mod.ltx", dst);
 		if (::CopyFileA(a, b, FALSE)) ++files;
 
-		// levels\ carries the scene-baked overlays (collision/visuals)
-		static const char* parts[] = { "gamedata", "patch", "spawn", "scripts", "levels" };
+		// What ships is "everything the author made", not a fixed list of five
+		// folder names: a module may keep any layout it likes and publish it
+		// through mod.ltx [vfs]. Only the editor's own scratch and the sources
+		// the game cannot read (rawdata scenes, .object files) stay behind.
+		xr_vector<xr_string> parts;
+		{
+			WIN32_FIND_DATAA fd;
+			string_path mask;
+			sprintf_s(mask, "%s\\*", project_root);
+			HANDLE h = ::FindFirstFileA(mask, &fd);
+			if (INVALID_HANDLE_VALUE != h)
+			{
+				do
+				{
+					if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+					if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))	continue;
+					if (EditorProject::IsEditorOnlyEntry(fd.cFileName))		continue;
+					if (EditorProject::IsSourceOnlyEntry(fd.cFileName))		continue;
+					parts.push_back(xr_string(fd.cFileName));
+				} while (::FindNextFileA(h, &fd));
+				::FindClose(h);
+			}
+		}
 
 		// The mirror sweep below deletes anything in the target that the
 		// project no longer has - harmless when the target is this project's
@@ -616,10 +637,10 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 		if (!confirmed && DirExists(dst))
 		{
 			int stale = 0;
-			for (int i = 0; i < (int)(sizeof(parts) / sizeof(parts[0])); ++i)
+			for (u32 i = 0; i < parts.size(); ++i)
 			{
-				sprintf_s(src, "%s\\%s", project_root, parts[i]);
-				sprintf_s(b, "%s\\%s", dst, parts[i]);
+				sprintf_s(src, "%s\\%s", project_root, parts[i].c_str());
+				sprintf_s(b, "%s\\%s", dst, parts[i].c_str());
 				if (DirExists(b)) stale += CountOrphansRec(b, src);
 			}
 			if (stale)
@@ -632,16 +653,37 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 			}
 		}
 
-		for (int i = 0; i < (int)(sizeof(parts) / sizeof(parts[0])); ++i)
+		for (u32 i = 0; i < parts.size(); ++i)
 		{
-			sprintf_s(src, "%s\\%s", project_root, parts[i]);
-			sprintf_s(b, "%s\\%s", dst, parts[i]);
+			sprintf_s(src, "%s\\%s", project_root, parts[i].c_str());
+			sprintf_s(b, "%s\\%s", dst, parts[i].c_str());
 			// mirror semantics: what left the project leaves the module, or
 			// every rename ships a stale twin alongside the new file
 			if (DirExists(b)) DeleteOrphansRec(b, src);
 			if (!DirExists(src)) { ::RemoveDirectoryA(b); continue; }
 			// the patch readme is authoring help, not module content
-			files += CopyTreeCount(src, b, (0 == strcmp(parts[i], "patch")) ? "_readme.txt" : 0);
+			files += CopyTreeCount(src, b, (0 == _stricmp(parts[i].c_str(), "patch")) ? "_readme.txt" : 0);
+		}
+
+		// loose files the author dropped in the root travel too
+		{
+			WIN32_FIND_DATAA fd;
+			string_path mask;
+			sprintf_s(mask, "%s\\*", project_root);
+			HANDLE h = ::FindFirstFileA(mask, &fd);
+			if (INVALID_HANDLE_VALUE != h)
+			{
+				do
+				{
+					if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)		continue;
+					if (EditorProject::IsEditorOnlyEntry(fd.cFileName))		continue;
+					if (0 == _stricmp(fd.cFileName, "mod.ltx"))				continue;	// already copied
+					sprintf_s(src, "%s\\%s", project_root, fd.cFileName);
+					sprintf_s(b, "%s\\%s", dst, fd.cFileName);
+					if (::CopyFileA(src, b, FALSE)) ++files;
+				} while (::FindNextFileA(h, &fd));
+				::FindClose(h);
+			}
 		}
 	}
 

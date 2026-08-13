@@ -356,6 +356,30 @@ void EditorProject::CreateLayout()
 	}
 }
 
+// The editor's scratch, path bookkeeping and captured preview. Everything NOT
+// on this list is the author's mod: any folder they create in the project root
+// is module content by definition ([vfs] can publish it anywhere), so the
+// content browser shows it and the export ships it.
+bool EditorProject::IsEditorOnlyEntry(LPCSTR n)
+{
+	static const char* editor_only[] =
+	{
+		"import", "temp", "logs", "savedgames", "screenshots", "backup",
+		"project.ltx", "preview.png",
+	};
+	for (int i = 0; i < (int)(sizeof(editor_only)/sizeof(editor_only[0])); ++i)
+		if (0 == _stricmp(n, editor_only[i])) return true;
+	return false;
+}
+
+// Author-facing sources the game itself never reads: scenes and .object
+// sources under rawdata, the legacy Content folder. Shown and editable, but
+// the module export leaves them out.
+bool EditorProject::IsSourceOnlyEntry(LPCSTR n)
+{
+	return 0 == _stricmp(n, "rawdata") || 0 == _stricmp(n, "Content");
+}
+
 void EditorProject::Mount()
 {
 	for (int i = 0; i < kMountCount; ++i)

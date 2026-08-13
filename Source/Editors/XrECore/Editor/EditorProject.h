@@ -50,6 +50,18 @@ public:
 
 	static bool		ValidateName		(LPCSTR name);
 
+	// ---- what belongs to the module, and what only to the editor ------------
+	// A project folder holds two kinds of things side by side: the module the
+	// author is building (any layout they like - see the [vfs] section of
+	// mod.ltx) and the editor's own scratch. These two answers keep the content
+	// browser and the module export from disagreeing about which is which.
+	//
+	// Editor-only: never shown as content, never exported.
+	static bool		IsEditorOnlyEntry	(LPCSTR name_in_root);
+	// Sources: shown and editable (this is where scenes and .object files
+	// live), but not shipped - the game has no use for them.
+	static bool		IsSourceOnlyEntry	(LPCSTR name_in_root);
+
 	// in-editor helpers
 	static void		DrawUI				();		// import-scene modal
 	static void		RequestImportScene	();
