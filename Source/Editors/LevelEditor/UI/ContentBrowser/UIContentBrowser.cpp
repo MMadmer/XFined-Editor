@@ -370,6 +370,12 @@ void UIContentBrowser::Refresh()
 	{
 		// Levels are editor scenes, not library assets - they have no entry in
 		// the choose-event table, so they are listed straight off the maps root.
+		//
+		// TWO sources, and the second one is the point: opening a project
+		// remounts $maps$ onto that project, so the scenes the editor ships -
+		// the sources every stock level was built from - vanish from the FS the
+		// moment there is a project. This category is Editor Content: it lists
+		// the library, whatever the project has mounted over it.
 		m_Root.name = "Editor Content";
 		FS_FileSet lst;
 		if (FS.file_list(lst, _maps_, FS_ListFiles | FS_ClampExt, "*.level"))
@@ -377,6 +383,15 @@ void UIContentBrowser::Refresh()
 			FS_FileSetIt it = lst.begin(), e = lst.end();
 			for (; it != e; ++it)
 				m_Items.push_back(SChooseItem(it->name.c_str(), ""));
+		}
+		xr_vector<xr_string> base;
+		EditorProject::ListBaseScenes(base);
+		for (u32 i = 0; i < base.size(); ++i)
+		{
+			bool have = false;
+			for (u32 k = 0; k < m_Items.size() && !have; ++k)
+				have = (0 == _stricmp(m_Items[k].name.c_str(), base[i].c_str()));
+			if (!have) m_Items.push_back(SChooseItem(base[i].c_str(), ""));
 		}
 	}
 	else
@@ -770,10 +785,40 @@ bool UIContentBrowser::ResolveLevelFile(LPCSTR name, int source, string_path& ou
 	// a level folder: <stem>\<leaf>.level
 	xr_sprintf	(rel, sizeof(rel), "%s\\%s.level", stem, leaf);
 	if (FS.exist(out, _maps_, rel))						return true;
+
+	// The game's own layout: levels\<name>\level.* is a COMPILED level - there
+	// is no scene in there to open, the editor works on the source it was built
+	// from. Map it to that source by name, which is what the author means by
+	// "open l05_bar" while looking at the game's content.
+	if (0 == _strnicmp(name, "levels\\", 7) || 0 == _strnicmp(name, "levels/", 7))
+	{
+		string_path lvl;
+		xr_strcpy(lvl, sizeof(lvl), name + 7);
+		for (char* p = lvl; *p; ++p)
+			if (*p == '/') *p = '\\';
+		if (char* cut = strchr(lvl, '\\')) *cut = 0;
+		if (lvl[0])
+		{
+			xr_sprintf(rel, sizeof(rel), "%s.level", lvl);
+			if (FS.exist(out, _maps_, rel))				return true;
+			xr_sprintf(rel, sizeof(rel), "%s\\%s.level", lvl, lvl);
+			if (FS.exist(out, _maps_, rel))				return true;
+		}
+	}
+
 	// already a full path
 	if (FS.exist(name))	{ xr_strcpy(out, sizeof(out), name); return true; }
 
 	return false;
+}
+
+// Is this listing entry one of the game's levels? Everything under levels\ in
+// the game source belongs to one, folder and compiled file alike.
+bool UIContentBrowser::IsGameLevelEntry(LPCSTR name) const
+{
+	if (2 != m_Source || !name)	return false;
+	if (0 != _strnicmp(name, "levels\\", 7) && 0 != _strnicmp(name, "levels/", 7)) return false;
+	return name[7] != 0;
 }
 
 // Double-click action, Unreal-style: open the asset, never modify the scene.
@@ -800,7 +845,8 @@ bool UIContentBrowser::OpenAsset(LPCSTR name, xr_string* err)
 	// the extension clamped off, while the project's own Content shows the
 	// .level FILE - and a double click there has to do the same thing.
 	const bool is_level = IsLevelExt(name) ||
-						  (m_Source == 1 && kCategories[m_Category].id == kLevelsCategoryId);
+						  (m_Source == 1 && kCategories[m_Category].id == kLevelsCategoryId) ||
+						  IsGameLevelEntry(name);
 	if (is_level)
 	{
 		// COMMAND_LOAD feeds its argument straight to FS.r_open and returns FALSE
@@ -809,7 +855,43 @@ bool UIContentBrowser::OpenAsset(LPCSTR name, xr_string* err)
 		// first, and say so when there is none.
 		string_path fn;
 		if (!ResolveLevelFile(name, m_Source, fn))
-			OPEN_FAILED("no .level file behind '%s'", name);
+		{
+			// Not in the project, so it is the editor's own library copy: bring
+			// it into the project and open THAT. The author edits their own
+			// scene from the first click, and the shared library stays clean -
+			// the same thing File > Import Base Scene does, without the detour.
+			string_path scene;
+			xr_strcpy(scene, sizeof(scene), name);
+			for (char* p = scene; *p; ++p) if (*p == '/') *p = '\\';
+			if (char* dot = strrchr(scene, '.'))
+				if (!strchr(dot, '\\')) *dot = 0;
+			// the game names a level by its folder: levels\l05_bar\...
+			if (IsGameLevelEntry(scene))
+			{
+				xr_string tail = scene + 7;
+				const size_t cut = tail.find('\\');
+				xr_strcpy(scene, sizeof(scene), (cut == xr_string::npos ? tail : tail.substr(0, cut)).c_str());
+			}
+
+			xr_string import_err;
+			if (EditorProject::HasBaseScene(scene) &&
+				EditorProject::ImportBaseScene(scene, fn, import_err))
+			{
+				ELog.Msg(mtInformation, "Scene '%s' copied into the project - you are editing your own copy.", scene);
+			}
+			else if (IsGameLevelEntry(name))
+			{
+				// The game's levels are compiled: what the editor opens is the
+				// source scene they were built from, and an install can ship a
+				// level nobody has the source for.
+				OPEN_FAILED("'%s' is a COMPILED level. The editor opens the SOURCE scene it was built\n"
+							"from, and neither this project nor the editor library has one under that\n"
+							"name.%s%s", name,
+							import_err.empty() ? "" : "\n", import_err.c_str());
+			}
+			else
+				OPEN_FAILED("no .level file behind '%s'", name);
+		}
 
 		ExecCommand(COMMAND_LOAD, xr_string(fn));
 		return true;
@@ -987,6 +1069,15 @@ void UIContentBrowser::DrawTiles()
 			m_DrawnRects[folder_slot] = ImVec4(ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
 											   ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
 
+			// One of the game's levels is a folder on disk, but it is a LEVEL to
+			// the author: double-clicking it opens the scene it was built from
+			// rather than showing them level.geom. The folder is still walkable
+			// from the tree, so nothing becomes unreachable.
+			string_path level_scene;
+			const bool as_level = IsGameLevelEntry(sub.path.c_str()) &&
+								  0 == strchr(sub.path.c_str() + 7, '\\') &&
+								  ResolveLevelFile(sub.path.c_str(), m_Source, level_scene);
+
 			// A single click SELECTS, a double click enters - exactly what an
 			// asset tile does, so a folder can be part of a selection at all.
 			if (ImGui::IsItemHovered())
@@ -996,10 +1087,16 @@ void UIContentBrowser::DrawTiles()
 					SelectEntry(sub.path.c_str(), true, io.KeyCtrl, io.KeyShift);
 				if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 				{
-					m_CurFolder = sub.path;
-					ClearSelection();
+					if (as_level)	OpenAsset(sub.path.c_str());
+					else
+					{
+						m_CurFolder = sub.path;
+						ClearSelection();
+					}
 				}
-				if (!renaming) ImGui::SetTooltip("%s", sub.path.c_str());
+				if (!renaming)
+					ImGui::SetTooltip(as_level ? "%s\nlevel - double click to open the scene it was built from"
+											   : "%s", sub.path.c_str());
 			}
 			DrawEntryContextMenu(sub.path.c_str(), true);
 
@@ -1341,6 +1438,9 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 			Form->m_Anchor		= SEntry(folder, true);
 			Form->m_HasAnchor	= true;
 			Form->m_ScrollToSelection = true;
+			// a game level is a folder on disk but a level to open
+			if (open_viewer && Form->IsGameLevelEntry(folder))
+				return Form->OpenAsset(folder, &err);
 			return true;
 		}
 	}

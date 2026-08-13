@@ -2279,11 +2279,22 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
         {
             // Levels are editor scenes, not library assets: they have no entry in
             // the choose-event table, which is why asking for them used to answer
-            // "no enumerator". They come straight off the maps root instead.
+            // "no enumerator". They come straight off the maps root instead -
+            // plus the editor's own scene library, which the project remounts
+            // $maps$ over and would otherwise hide completely.
             FS_FileSet lst;
             if (FS.file_list(lst, _maps_, FS_ListFiles | FS_ClampExt, "*.level"))
                 for (FS_FileSetIt it = lst.begin(); it != lst.end(); ++it)
                     items.push_back(SChooseItem(it->name.c_str(), ""));
+            xr_vector<xr_string> base;
+            EditorProject::ListBaseScenes(base);
+            for (u32 i = 0; i < base.size(); ++i)
+            {
+                bool have = false;
+                for (u32 k = 0; k < items.size() && !have; ++k)
+                    have = (0 == _stricmp(items[k].name.c_str(), base[i].c_str()));
+                if (!have) items.push_back(SChooseItem(base[i].c_str(), ""));
+            }
         }
         else
         {

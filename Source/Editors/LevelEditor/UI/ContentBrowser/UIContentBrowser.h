@@ -206,6 +206,9 @@ private:
 	// `err` non-null returns the reason instead of popping a dialog, which is
 	// what MCP needs - a modal on an unattended machine is a hang.
 	bool			OpenAsset			(LPCSTR name, xr_string* err = 0);
+	// game source only: an entry under levels\ belongs to one of the game's
+	// levels, folder and compiled file alike
+	bool			IsGameLevelEntry	(LPCSTR name) const;
 	// a listing entry -> the .level file COMMAND_LOAD can open. `source` is the
 	// browser's: the project names files relative to its root, the library by
 	// a name under $maps$ with the extension clamped off.

@@ -20,6 +20,17 @@ public:
 	static LPCSTR	Name				();
 	static LPCSTR	BaseMapsDir			();		// SDK rawdata\levels (scene import source)
 
+	// The editor ships the source scenes the game's levels were built from, and
+	// opening a project remounts $maps$ onto the project - which is exactly why
+	// those scenes have to be reachable by name rather than through the FS.
+	// Names only, no extension, sorted.
+	static void		ListBaseScenes		(xr_vector<xr_string>& out);
+	static bool		HasBaseScene		(LPCSTR name);
+	// Copies <base>\<name>.level (+ its folder) into the project and answers
+	// with the project-side path. Already imported = no copy, same answer, so
+	// the author always edits their own copy and the shared library stays put.
+	static bool		ImportBaseScene		(LPCSTR name, string_path& out_level, xr_string& err);
+
 	// fullscreen browser page; drawn INSTEAD of the editor UI until a project
 	// is opened. Returns true while the browser is on screen.
 	static bool		DrawBrowser			();

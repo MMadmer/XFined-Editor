@@ -543,6 +543,78 @@ LPCSTR	EditorProject::Root()			{ return s_Project; }
 LPCSTR	EditorProject::Name()			{ return s_Name; }
 LPCSTR	EditorProject::BaseMapsDir()	{ ResolveAppRoot(); return s_BaseMaps; }
 
+static bool CopyTree(const char* src, const char* dst);
+
+void EditorProject::ListBaseScenes(xr_vector<xr_string>& out)
+{
+	ResolveAppRoot();
+	string_path mask;
+	sprintf_s(mask, "%s*.level", s_BaseMaps);
+	WIN32_FIND_DATAA fd;
+	HANDLE h = ::FindFirstFileA(mask, &fd);
+	if (INVALID_HANDLE_VALUE == h) return;
+	do
+	{
+		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+		string_path name;
+		strcpy_s(name, fd.cFileName);
+		if (char* dot = strrchr(name, '.')) *dot = 0;
+		if (name[0]) out.push_back(name);
+	} while (::FindNextFileA(h, &fd));
+	::FindClose(h);
+	std::sort(out.begin(), out.end());
+}
+
+bool EditorProject::HasBaseScene(LPCSTR name)
+{
+	if (!name || !name[0]) return false;
+	ResolveAppRoot();
+	string_path f;
+	sprintf_s(f, "%s%s.level", s_BaseMaps, name);
+	const DWORD a = ::GetFileAttributesA(f);
+	return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+bool EditorProject::ImportBaseScene(LPCSTR name, string_path& out_level, xr_string& err)
+{
+	err.clear();
+	out_level[0] = 0;
+	if (!s_Active)					{ err = "no active project"; return false; }
+	if (!name || !name[0])			{ err = "no scene name"; return false; }
+	ResolveAppRoot();
+
+	string_path src_file, dst_file, src_dir, dst_dir, dst_root;
+	sprintf_s(src_file, "%s%s.level", s_BaseMaps, name);
+	sprintf_s(src_dir,  "%s%s", s_BaseMaps, name);
+	sprintf_s(dst_root, "%s\\rawdata\\levels", s_Project);
+	sprintf_s(dst_file, "%s\\%s.level", dst_root, name);
+	sprintf_s(dst_dir,  "%s\\%s", dst_root, name);
+
+	// already in the project: that copy is the author's, leave it alone
+	if (INVALID_FILE_ATTRIBUTES != ::GetFileAttributesA(dst_file))
+	{
+		xr_strcpy(out_level, sizeof(string_path), dst_file);
+		return true;
+	}
+	if (INVALID_FILE_ATTRIBUTES == ::GetFileAttributesA(src_file))
+	{
+		err = xr_string("no such scene in the editor library: ") + name;
+		return false;
+	}
+
+	::CreateDirectoryA(dst_root, NULL);
+	if (!::CopyFileA(src_file, dst_file, FALSE))
+	{
+		err = xr_string("cannot copy the scene into the project: ") + name;
+		return false;
+	}
+	if (DirExists(src_dir)) CopyTree(src_dir, dst_dir);
+
+	xr_strcpy(out_level, sizeof(string_path), dst_file);
+	Msg("* project: scene '%s' imported from the editor library", name);
+	return true;
+}
+
 void EditorProject::RequestImportScene()	{ s_WantImport = true; }
 
 void EditorProject::OpenProjectFolder()
@@ -911,16 +983,12 @@ void EditorProject::DrawUI()
 						strcpy_s(name, fd.cFileName);
 						if (char* dot = strrchr(name, '.')) *dot = 0;
 
-						string_path src_file, dst_file, src_dir, dst_dir;
-						sprintf_s(src_file, "%s%s", s_BaseMaps, fd.cFileName);
-						sprintf_s(dst_file, "%s\\rawdata\\levels\\%s", s_Project, fd.cFileName);
-						sprintf_s(src_dir, "%s%s", s_BaseMaps, name);
-						sprintf_s(dst_dir, "%s\\rawdata\\levels\\%s", s_Project, name);
-
-						::CopyFileA(src_file, dst_file, FALSE);
-						if (DirExists(src_dir)) CopyTree(src_dir, dst_dir);
-
-						ELog.Msg(mtInformation, "Scene '%s' imported into the project.", name);
+						string_path dst;
+						xr_string err;
+						if (ImportBaseScene(name, dst, err))
+							ELog.Msg(mtInformation, "Scene '%s' imported into the project.", name);
+						else
+							ELog.DlgMsg(mtError, "%s", err.c_str());
 						s_WantImport = false;
 					}
 				} while (::FindNextFileA(h, &fd));
