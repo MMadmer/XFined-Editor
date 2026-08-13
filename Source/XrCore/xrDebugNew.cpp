@@ -241,8 +241,26 @@ void xrDebug::do_exit	(const std::string &message)
 	TerminateProcess	(GetCurrentProcess(),1);
 }
 
+static thread_local int s_soft_asserts = 0;
+void xrDebug::soft_asserts_push()	{ ++s_soft_asserts; }
+void xrDebug::soft_asserts_pop()	{ if (s_soft_asserts) --s_soft_asserts; }
+bool xrDebug::soft_asserts_active()	{ return 0 != s_soft_asserts; }
+
 void xrDebug::backend	(const char *expression, const char *description, const char *argument0, const char *argument1, const char *file, int line, const char *function, bool &ignore_always)
 {
+	// Soft mode: the caller declared that a failure here means "this piece of
+	// content is bad", not "the process is broken" - log the assert and hand
+	// control back through an exception instead of the fatal dialog. Checked
+	// before the critical section: nothing here may block or terminate.
+	if (soft_asserts_active())
+	{
+		Msg("! soft assert: {%s} %s %s %s (%s:%d, %s)",
+			expression ? expression : "", description ? description : "",
+			argument0 ? argument0 : "", argument1 ? argument1 : "",
+			file ? file : "?", line, function ? function : "?");
+		throw soft_assert_error();
+	}
+
 	/*if (IsDebuggerPresent())
 	{
 		DebugBreak();

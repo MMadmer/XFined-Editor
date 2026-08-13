@@ -512,12 +512,11 @@ namespace
 }
 //------------------------------------------------------------------------------
 
-ECORE_API bool RenderVisualThumbnail(LPCSTR visual_name, U32Vec& out)
-{
-	out.clear	();
-	if (!visual_name||!visual_name[0])	return false;
-	if (!IsDeviceUsable())				return false;
+// Forward: the by-name path hands animated visuals to the from-memory one.
+static bool RenderVisualThumbnailFromMemory_Impl(LPCSTR debug_name, const void* data, u32 size, U32Vec& out);
 
+static bool RenderVisualThumbnail_Impl(LPCSTR visual_name, U32Vec& out)
+{
 	string_path fn;
 	if (!ResolveVisualFile(visual_name,fn))	return false;
 
@@ -547,7 +546,7 @@ ECORE_API bool RenderVisualThumbnail(LPCSTR visual_name, U32Vec& out)
 	if (animated)
 	{
 		if (bytes.empty())				return false;
-		return RenderVisualThumbnailFromMemory(visual_name,bytes.data(),u32(bytes.size()),out);
+		return RenderVisualThumbnailFromMemory_Impl(visual_name,bytes.data(),u32(bytes.size()),out);
 	}
 
 	// CModelPool::Delete refuses to discard while the engine believes a frame is
@@ -555,12 +554,27 @@ ECORE_API bool RenderVisualThumbnail(LPCSTR visual_name, U32Vec& out)
 	const BOOL		saved_rendering	= g_bRendering;
 	g_bRendering	= FALSE;
 
+	// The loaders R_ASSERT on every malformation, and a file out of a foreign
+	// game install may legitimately be one this SDK cannot parse. Inside the
+	// soft scope those asserts throw - caught right here, a failed thumbnail.
 	bool result		= false;
-	IRenderVisual* visual = ::Render->model_Create(visual_name);
-	if (visual)
+	IRenderVisual*	visual = 0;
 	{
-		result = RenderVisualToPixels(visual,0,out);
-		::Render->model_Delete(visual,TRUE);
+		xrDebug::soft_assert_scope soft;
+		try
+		{
+			visual = ::Render->model_Create(visual_name);
+			if (visual)	result = RenderVisualToPixels(visual,0,out);
+		}
+		catch (...)
+		{
+			Msg("!Visual thumbnail: '%s' failed to load - skipped.",visual_name);
+			result = false;
+		}
+		if (visual)
+		{
+			try { ::Render->model_Delete(visual,TRUE); } catch (...) {}
+		}
 	}
 
 	g_bRendering	= saved_rendering;
@@ -569,12 +583,8 @@ ECORE_API bool RenderVisualThumbnail(LPCSTR visual_name, U32Vec& out)
 }
 //------------------------------------------------------------------------------
 
-ECORE_API bool RenderVisualThumbnailFromMemory(LPCSTR debug_name, const void* data, u32 size, U32Vec& out)
+static bool RenderVisualThumbnailFromMemory_Impl(LPCSTR debug_name, const void* data, u32 size, U32Vec& out)
 {
-	out.clear	();
-	if (!data||(0==size))				return false;
-	if (!IsDeviceUsable())				return false;
-
 	IReader reader	((void*)data,int(size));
 	u8	 type		= u8(-1);
 	if (!PeekVisualType(&reader,type))		return false;
@@ -605,23 +615,32 @@ ECORE_API bool RenderVisualThumbnailFromMemory(LPCSTR debug_name, const void* da
 	g_bRendering	= FALSE;
 
 	bool result		= false;
-	IRenderVisual* visual = ::Render->model_Create(pool_key,&use);
-	if (visual)
+	IRenderVisual*	visual = 0;
 	{
-		result = RenderVisualToPixels(visual,0,out);
-		::Render->model_Delete(visual,TRUE);
+		xrDebug::soft_assert_scope soft;
+		try
+		{
+			visual = ::Render->model_Create(pool_key,&use);
+			if (visual)	result = RenderVisualToPixels(visual,0,out);
+		}
+		catch (...)
+		{
+			Msg("!Visual thumbnail: '%s' failed to load - skipped.",
+				(debug_name&&debug_name[0])?debug_name:"<memory>");
+			result = false;
+		}
+		if (visual)
+		{
+			try { ::Render->model_Delete(visual,TRUE); } catch (...) {}
+		}
 	}
 
 	g_bRendering	= saved_rendering;
 	if (!result)	out.clear();
 	return result;
 }
-ECORE_API bool RenderObjectThumbnail(LPCSTR object_name, U32Vec& out)
+static bool RenderObjectThumbnail_Impl(LPCSTR object_name, U32Vec& out)
 {
-	out.clear();
-	if (!object_name||!object_name[0])	return false;
-	if (!IsDeviceUsable())				return false;
-
 	string_path fn;
 	FS.update_path(fn,_objects_,EFS.ChangeFileExt(object_name,".object").c_str());
 	if (!FS.exist(fn))					return false;
@@ -630,21 +649,27 @@ ECORE_API bool RenderObjectThumbnail(LPCSTR object_name, U32Vec& out)
 	// object is only alive for this one draw
 	CEditableObject* obj = xr_new<CEditableObject>(object_name);
 	bool result = false;
-	if (obj->Load(fn))
-		result = RenderVisualToPixels(0,obj,out);
+	{
+		xrDebug::soft_assert_scope soft;
+		try
+		{
+			if (obj->Load(fn))
+				result = RenderVisualToPixels(0,obj,out);
+		}
+		catch (...)
+		{
+			Msg("!Object thumbnail: '%s' failed to load - skipped.",object_name);
+			result = false;
+		}
+	}
 	xr_delete(obj);
 
-	if (!result)	out.clear();
 	return result;
 }
 //------------------------------------------------------------------------------
 
-ECORE_API bool RenderObjectThumbnailFromMemory(LPCSTR debug_name, const void* data, u32 size, U32Vec& out)
+static bool RenderObjectThumbnailFromMemory_Impl(LPCSTR debug_name, const void* data, u32 size, U32Vec& out)
 {
-	out.clear();
-	if (!data||(0==size))				return false;
-	if (!IsDeviceUsable())				return false;
-
 	// A project's own .object is not in $objects$ and, living outside the SDK
 	// root, is not registered in the editor FS at all - so the by-name path
 	// above can never reach it. The bytes come straight off the disk instead.
@@ -662,14 +687,105 @@ ECORE_API bool RenderObjectThumbnailFromMemory(LPCSTR debug_name, const void* da
 
 	CEditableObject* obj = xr_new<CEditableObject>((debug_name&&debug_name[0])?debug_name:"$memory$");
 	bool result = false;
-	if (obj->Load(*body))
-		result = RenderVisualToPixels(0,obj,out);
+	{
+		xrDebug::soft_assert_scope soft;
+		try
+		{
+			if (obj->Load(*body))
+				result = RenderVisualToPixels(0,obj,out);
+		}
+		catch (...)
+		{
+			Msg("!Object thumbnail: '%s' failed to load - skipped.",
+				(debug_name&&debug_name[0])?debug_name:"<memory>");
+			result = false;
+		}
+	}
 	xr_delete(obj);
 	body->close();
 
-	if (!result)	out.clear();
 	return result;
 }
+
+//------------------------------------------------------------------------------
+// Public entries. The impls above turn ASSERTS into failed thumbnails through
+// the soft-assert scope; this layer stops the faults asserts cannot see - a
+// real access violation inside a parser fed garbage. __except keeps it from
+// the process-wide filter; the skipped C++ destructors are the accepted price,
+// the render state is re-applied wholesale next frame anyway.
+//------------------------------------------------------------------------------
+namespace
+{
+	struct SThumbCall
+	{
+		int			kind;	// 0 visual name, 1 visual bytes, 2 object name, 3 object bytes
+		LPCSTR		name;
+		const void*	data;
+		u32			size;
+		U32Vec*		out;
+		bool		ok;
+	};
+
+	void ThumbCallBody(SThumbCall* c)
+	{
+		switch (c->kind)
+		{
+		case 0:	c->ok = RenderVisualThumbnail_Impl			(c->name,*c->out);					break;
+		case 1:	c->ok = RenderVisualThumbnailFromMemory_Impl(c->name,c->data,c->size,*c->out);	break;
+		case 2:	c->ok = RenderObjectThumbnail_Impl			(c->name,*c->out);					break;
+		case 3:	c->ok = RenderObjectThumbnailFromMemory_Impl(c->name,c->data,c->size,*c->out);	break;
+		}
+	}
+
+	// nothing with a destructor may live in a __try frame (C2712), so this
+	// function holds nothing at all
+	bool ThumbCallSEH(SThumbCall* c)
+	{
+		__try			{ ThumbCallBody(c); return true; }
+		__except		(EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+
+	bool ThumbCall(int kind, LPCSTR name, const void* data, u32 size, U32Vec& out)
+	{
+		out.clear();
+		if (!IsDeviceUsable())	return false;
+
+		SThumbCall c;
+		c.kind = kind; c.name = name; c.data = data; c.size = size; c.out = &out; c.ok = false;
+		if (!ThumbCallSEH(&c))
+		{
+			Msg("!Thumbnail: '%s' FAULTED while loading - skipped.",(name&&name[0])?name:"<memory>");
+			c.ok = false;
+		}
+		if (!c.ok)	out.clear();
+		return c.ok;
+	}
+}
+
+ECORE_API bool RenderVisualThumbnail(LPCSTR visual_name, U32Vec& out)
+{
+	if (!visual_name||!visual_name[0])	{ out.clear(); return false; }
+	return ThumbCall(0,visual_name,0,0,out);
+}
+
+ECORE_API bool RenderVisualThumbnailFromMemory(LPCSTR debug_name, const void* data, u32 size, U32Vec& out)
+{
+	if (!data||(0==size))				{ out.clear(); return false; }
+	return ThumbCall(1,debug_name,data,size,out);
+}
+
+ECORE_API bool RenderObjectThumbnail(LPCSTR object_name, U32Vec& out)
+{
+	if (!object_name||!object_name[0])	{ out.clear(); return false; }
+	return ThumbCall(2,object_name,0,0,out);
+}
+
+ECORE_API bool RenderObjectThumbnailFromMemory(LPCSTR debug_name, const void* data, u32 size, U32Vec& out)
+{
+	if (!data||(0==size))				{ out.clear(); return false; }
+	return ThumbCall(3,debug_name,data,size,out);
+}
+
 //------------------------------------------------------------------------------
 // deferred queue
 //------------------------------------------------------------------------------

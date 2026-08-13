@@ -248,8 +248,23 @@ dxRender_Visual* CModelPool::Create(const char* name, IReader* data)
 		if (0==Base){
 			// 2. If not found
 			bAllowChildrenDuplicate	= FALSE;
+#ifdef REDITOR
+			// a soft assert thrown out of a loader must not leave the pool
+			// refusing child duplication for everything after it
+			try
+			{
+				if (data)	Base = Instance_Load(low_name,data,TRUE);
+				else		Base = Instance_Load(low_name,TRUE);
+			}
+			catch (...)
+			{
+				bAllowChildrenDuplicate	= TRUE;
+				throw;
+			}
+#else
 			if (data)		Base = Instance_Load(low_name,data,TRUE);
             else			Base = Instance_Load(low_name,TRUE);
+#endif
 			bAllowChildrenDuplicate	= TRUE;
 #ifdef REDITOR
 			if (!Base)		return 0;

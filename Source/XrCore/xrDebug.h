@@ -41,6 +41,23 @@ public:
 	void _cdecl		fatal				(const char *file, int line, const char *function, const char* F,...);
 	void			backend				(const char* reason, const char* expression, const char *argument0, const char *argument1, const char* file, int line, const char *function, bool &ignore_always);
 	void			do_exit				(const std::string &message);
+
+	// ---- soft asserts -------------------------------------------------------
+	// While a thread holds a scope, an engine assert / CHK_DX on THAT thread
+	// throws soft_assert_error instead of raising the fatal dialog. For code
+	// that feeds ARBITRARY bytes into engine loaders - the content browser
+	// previewing a linked game's files is the case - where "this file is bad"
+	// must mean a failed preview, never a dead editor. Per-thread and counted,
+	// so scopes nest and other threads keep the normal fatal behaviour.
+	struct soft_assert_error {};
+	static void		soft_asserts_push	();
+	static void		soft_asserts_pop	();
+	static bool		soft_asserts_active	();
+	struct soft_assert_scope
+	{
+					soft_assert_scope	()	{ soft_asserts_push(); }
+					~soft_assert_scope	()	{ soft_asserts_pop(); }
+	};
 };
 
 // warning
