@@ -147,13 +147,13 @@ void UIWorldOutliner::ApplyFilter()
 	m_SelectedOnlyApplied	= m_SelectedOnly;
 }
 
-int UIWorldOutliner::ScanSelection(u32& sig, CCustomObject*& first) const
+int UIWorldOutliner::ScanSelection(u32& sig, CCustomObject*& last) const
 {
 	// selected pointers folded in scene order: any change of the selected set
 	// - grow, shrink or swap - lands on a different value
 	int n	= 0;
 	sig		= 2166136261u;
-	first	= nullptr;
+	last	= nullptr;
 	for (u32 i = 0; i < m_Groups.size(); ++i)
 	{
 		const SGroup& g = m_Groups[i];
@@ -162,7 +162,7 @@ int UIWorldOutliner::ScanSelection(u32& sig, CCustomObject*& first) const
 			CCustomObject* o = g.objects[k];
 			if (!o->Selected()) continue;
 			++n;
-			if (!first) first = o;
+			last = o;
 			sig = sig * 16777619u + u32(size_t(o));
 			sig = sig * 16777619u + u32(size_t(o) >> 32);
 		}
@@ -459,16 +459,16 @@ void UIWorldOutliner::Draw()
 		ApplyFilter();
 
 	// selection changes made OUTSIDE this panel (viewport picks, MCP) scroll
-	// the first selected row into view; the panel's own clicks flag
+	// the last selected row into view; the panel's own clicks flag
 	// m_SkipNextScroll, since their row is already visible
 	u32 sel_sig;
-	CCustomObject* sel_first;
-	const int sel_count = ScanSelection(sel_sig, sel_first);
+	CCustomObject* sel_last;
+	const int sel_count = ScanSelection(sel_sig, sel_last);
 	if (sel_sig != m_SelSignature)
 	{
 		m_SelSignature = sel_sig;
-		if (!m_SkipNextScroll && sel_first)
-			m_ScrollTarget = sel_first;
+		if (!m_SkipNextScroll && sel_last)
+			m_ScrollTarget = sel_last;
 		m_SkipNextScroll = false;
 	}
 

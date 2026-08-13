@@ -142,6 +142,15 @@ private:
 	bool							m_HasPendingRange;
 	xr_string						m_Dragged;
 
+	// A selection made from OUTSIDE the panel (a reveal over MCP) has to end up
+	// on screen, the way the outliner scrolls to a viewport pick: the tree opens
+	// the chain down to the current folder, the grid scrolls to the LAST
+	// selected tile in grid order. Nobody scrolls a thousand tiles by hand. The
+	// panel's own clicks never raise it - their tile is already visible.
+	// Cleared once both panes have had their frame, so a reveal into a collapsed
+	// window still lands when the window comes back.
+	bool							m_ScrollToSelection;
+
 	// Clipboard. Copy/Cut put things HERE; nothing is written until a paste says
 	// where. Folders coming out of a read-only source are expanded at copy time,
 	// because the listing that turns a folder into its items is the SOURCE's -

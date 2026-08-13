@@ -131,6 +131,7 @@ UIContentBrowser::UIContentBrowser()
 	m_ClipCut			= false;
 	m_HasAnchor			= false;
 	m_HasPendingRange	= false;
+	m_ScrollToSelection	= false;
 	m_RenameBuf[0]		= 0;
 	m_RenameFocus		= false;
 	m_Marquee		= false;
@@ -579,6 +580,15 @@ ImTextureID UIContentBrowser::GetThumb(LPCSTR name)
 //------------------------------------------------------------------------------
 // ui
 //------------------------------------------------------------------------------
+// "rawdata" holds "rawdata\levels"; the root's empty path holds everything
+static bool PathIsAncestor(const xr_string& parent, const xr_string& path)
+{
+	if (parent.empty())					return true;
+	if (parent.size() > path.size())	return false;
+	if (0 != _strnicmp(parent.c_str(), path.c_str(), parent.size()))	return false;
+	return parent.size() == path.size() || path[parent.size()] == '\\';
+}
+
 void UIContentBrowser::DrawFolder(SFolder& f)
 {
 	const bool leaf	= f.children.empty();
@@ -587,8 +597,14 @@ void UIContentBrowser::DrawFolder(SFolder& f)
 	if (m_CurFolder == f.path)	flags |= ImGuiTreeNodeFlags_Selected;
 	if (&f == &m_Root)			flags |= ImGuiTreeNodeFlags_DefaultOpen;
 
+	// a reveal drops the browser into a folder this tree may have collapsed -
+	// open the chain down to it, so the pane agrees with the grid beside it
+	if (m_ScrollToSelection && !leaf && PathIsAncestor(f.path, m_CurFolder))
+		ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+
 	const bool open = ImGui::TreeNodeEx(f.name.c_str(), flags);
 	if (ImGui::IsItemClicked()) m_CurFolder = f.path;
+	if (m_ScrollToSelection && f.path == m_CurFolder) ImGui::SetScrollHereY(0.5f);
 
 	if (open && !leaf)
 	{
@@ -987,6 +1003,18 @@ void UIContentBrowser::DrawTiles()
 	// Shift-click needed the whole grid order, so it is resolved here
 	ApplyPendingRange();
 
+	// A reveal scrolls the grid to what it selected: the LAST selected tile in
+	// grid order, so a multi-item reveal lands on the end of the run instead of
+	// jumping back to its start. The rects were captured as the tiles drew.
+	if (m_ScrollToSelection)
+		for (int i = _min(int(m_DrawnOrder.size()), int(m_DrawnRects.size())) - 1; i >= 0; --i)
+			if (IsSelected(m_DrawnOrder[i].path.c_str(), m_DrawnOrder[i].folder))
+			{
+				const ImVec4& r = m_DrawnRects[i];
+				ImGui::SetScrollFromPosY((r.y + r.w) * 0.5f - ImGui::GetWindowPos().y, 0.5f);
+				break;
+			}
+
 	// empty-space right-click and the Ctrl shortcuts, both of which need the
 	// drawn order the loop above just produced
 	DrawGridContextMenu();
@@ -1188,6 +1216,8 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 	Form->m_Selection.push_back(SEntry(name, false));
 	Form->m_Anchor		= Form->m_Selection.back();
 	Form->m_HasAnchor	= true;
+	// selecting it is only half a reveal - the next frame brings it into view
+	Form->m_ScrollToSelection = true;
 
 	// the reveal itself succeeded; a viewer that will not open is worth saying
 	// out loud rather than reporting a bare ok
@@ -2075,6 +2105,9 @@ void UIContentBrowser::Draw()
 	if (ImGui::BeginChild("tiles", ImVec2(0, 0), true))
 		DrawTiles();
 	ImGui::EndChild();
+
+	// both panes have had their frame at it
+	m_ScrollToSelection = false;
 
 	ImGui::PopStyleVar(1);
 	ImGui::End();
