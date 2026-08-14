@@ -1217,7 +1217,9 @@ static void DrawManifestModal()
 		if      (0 == _stricmp(s_EdTarget, "default"))	kind = 0;
 		else if (0 == _stricmp(s_EdTarget, "existing"))	kind = 1;
 		else if (0 == _stricmp(s_EdTarget, "new"))		kind = 2;
+		else if (0 == _stricmp(s_EdTarget, "any"))		kind = 3;
 		// legacy manifests carry no target key - infer it from the fields once
+		else if (0 == strcmp(s_EdMode, "*"))			kind = 3;
 		else if (s_EdPModeId[0])						kind = 2;
 		else if (s_EdMode[0])							kind = 1;
 		if (ImGui::RadioButton("the ordinary game (no mode)", 0 == kind))
@@ -1225,6 +1227,8 @@ static void DrawManifestModal()
 			kind = 0; s_EdMode[0] = 0; s_EdPModeId[0] = 0; s_EdPModeTitle[0] = 0;
 			strcpy_s(s_EdTarget, "default");
 		}
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Applies ONLY when no campaign mode is active.\nRevolution II and the like will not see this module's level work.");
 		if (ImGui::RadioButton("a mode already in the linked game", 1 == kind))
 		{
 			kind = 1; s_EdPModeId[0] = 0; s_EdPModeTitle[0] = 0;
@@ -1237,6 +1241,14 @@ static void DrawManifestModal()
 			kind = 2; s_EdMode[0] = 0;
 			strcpy_s(s_EdTarget, "new");
 		}
+		if (ImGui::RadioButton("every game and every mode", 3 == kind))
+		{
+			kind = 3; s_EdPModeId[0] = 0; s_EdPModeTitle[0] = 0;
+			strcpy_s(s_EdMode, "*");
+			strcpy_s(s_EdTarget, "any");
+		}
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("No gate at all - the module's level work lands in the ordinary game\nAND in every campaign. Use only for things that belong everywhere.");
 		if (kind < 0)
 			ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "not chosen yet - the module cannot be built");
 		// the choice sticks even while its details are still blank, so say
@@ -1334,7 +1346,9 @@ static void DrawManifestModal()
 			}
 		}
 	}
-	const bool mode_ok = EditorMod::ValidateModeId(s_EdMode);
+	// "*" is the engine's no-gate wildcard - legal for mode=, never for a
+	// provided mode id (files are generated from the latter)
+	const bool mode_ok = (0 == strcmp(s_EdMode, "*")) || EditorMod::ValidateModeId(s_EdMode);
 	if (!mode_ok)
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid mode id: a-z 0-9 _ . - only (or empty)");
 	const bool pmode_ok = EditorMod::ValidateModeId(s_EdPModeId);

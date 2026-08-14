@@ -13,7 +13,7 @@ and what to do when it refuses.
 |---|---|
 | `id` | Folder name in the game (`a-z 0-9 _ . -`). The module lands in `<game>\modules\<id>`. |
 | `name`, `version` | Shown to the player. |
-| **Target mode** | **Required.** Which game mode the module applies to: the ordinary game, an existing mode of the linked game, or a new mode this module adds. Without it the build refuses — a module that applies to everything is how mods break each other. |
+| **Target mode** | **Required.** Who gets the module's level work: **the ordinary game** = only when no campaign mode is active (Revolution II won't see it); **a mode already in the game** = only that campaign; **a NEW mode** = the campaign this module itself adds; **every game and every mode** = no gate at all — use only for things that belong everywhere. Without a choice the build refuses. |
 
 If you declare a **new mode**, the export also generates the new-game-screen
 checkbox for it (the xml patch, the text entry and `mode_register.script`).
