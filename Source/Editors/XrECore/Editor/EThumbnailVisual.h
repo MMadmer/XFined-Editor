@@ -38,6 +38,27 @@ ECORE_API bool RenderObjectThumbnail(LPCSTR object_name, U32Vec& out);
 ECORE_API bool RenderObjectThumbnailFromMemory(LPCSTR debug_name, const void* data, u32 size, U32Vec& out);
 
 //------------------------------------------------------------------------------
+// Engine visual from a memory block, for the SCENE (not a thumbnail).
+//
+// The editor's placeable unit is a library .object, but a modder works with the
+// game's compiled .ogf meshes - which live in archives or in the project, both
+// invisible to the editor FS, and cannot be turned into an editable object.
+// This hands back a plain engine visual to hang on a scene object instead.
+//
+// Animated skeletons come back as rigid ones (bind pose): the editor has no
+// access to the .omf motion files a foreign install references, and a half
+// loaded CKinematicsAnimated is what used to take the editor down. Loading is
+// wrapped in the same soft-assert + SEH armour the thumbnails use, so a file
+// the loaders dislike returns null instead of killing the process.
+//
+// Free it with ::Render->model_Delete(v, TRUE).
+ECORE_API IRenderVisual* CreateSceneVisualFromMemory(LPCSTR debug_name, const void* data, u32 size);
+
+// Same, for a path inside the linked game install (see EditorGameContent) or an
+// absolute/project path on disk. Returns null when the bytes cannot be read.
+ECORE_API IRenderVisual* CreateSceneVisual(LPCSTR path_in_project_or_game);
+
+//------------------------------------------------------------------------------
 // Deferred queue - the safe way to ask for a thumbnail from UI code
 //
 // The two calls above have to close and reopen the caller's D3D9 scene, because

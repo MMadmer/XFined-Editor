@@ -880,8 +880,11 @@ CCommandVar CommandCBPlaceAsset(CCommandVar p1, CCommandVar p2)
     LPCSTR name = asset_name.c_str();
     if (!name[0]) return FALSE;
 
+    // p2 bit0 = under the cursor, bit1 = raw engine visual (.ogf) instead of
+    // a library reference
+    const bool as_visual = 0 != (u32(p2) & 2);
     Fvector start, dir;
-    if (u32(p2))
+    if (u32(p2) & 1)
     {
         start.set(UI->m_CurrentRStart);
         dir.set  (UI->m_CurrentRDir);
@@ -901,12 +904,28 @@ CCommandVar CommandCBPlaceAsset(CCommandVar p1, CCommandVar p2)
         n.set(0.f, 1.f, 0.f);
     }
 
-    string256 namebuffer;
-    Scene->GenObjectName(OBJCLASS_SCENEOBJECT, namebuffer, name);
-    CSceneObject* obj = xr_new<CSceneObject>((LPVOID)0, namebuffer);
-    if (!obj->SetReference(name))
+    // A visual-mode object is named by its LEAF: "meshes\dynamics\barrel.ogf"
+    // places as "barrel_0000", not as a path with an extension in it. A
+    // library reference keeps the SDK convention of path-shaped names.
+    string_path base_name;
+    xr_strcpy(base_name, sizeof(base_name), name);
+    if (as_visual)
     {
-        ELog.DlgMsg(mtError, "Content Browser: can't load reference object '%s'.", name);
+        LPCSTR leaf = strrchr(name, '\\');
+        LPCSTR alt  = strrchr(name, '/');
+        if (alt > leaf) leaf = alt;
+        xr_strcpy(base_name, sizeof(base_name), leaf ? leaf + 1 : name);
+        if (char* dot = strrchr(base_name, '.')) *dot = 0;
+    }
+
+    string256 namebuffer;
+    Scene->GenObjectName(OBJCLASS_SCENEOBJECT, namebuffer, base_name);
+    CSceneObject* obj = xr_new<CSceneObject>((LPVOID)0, namebuffer);
+    const bool attached = as_visual ? obj->SetVisual(name) : (0 != obj->SetReference(name));
+    if (!attached)
+    {
+        ELog.DlgMsg(mtError, "Content Browser: can't load %s '%s'.",
+                    as_visual ? "model" : "reference object", name);
         xr_delete(obj);
         return FALSE;
     }
@@ -1194,8 +1213,11 @@ static int GetArgInt(LPCSTR raw, LPCSTR field, int def)
     if (!k) return def;
     const char* c = strchr(k + xr_strlen(pat), ':');
     if (!c) return def;
-    const int v = atoi(c + 1);
-    return v > 0 ? v : def;
+    // skip whitespace; a field that is present but non-numeric answers def,
+    // and 0 is a legitimate value - "v>0 ? v : def" used to eat it
+    while (*++c == ' ' || *c == '	') {}
+    if (*c != '-' && (*c < '0' || *c > '9'))	return def;
+    return atoi(c);
 }
 
 // bare float: {"x":-12.5}; leaves `out` untouched when the field is absent
@@ -1399,12 +1421,15 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
 
         // p1s/p2s pass a string, p1i/p2i an integer; explicit forms, because a
         // path made of digits must never silently turn into a number
-        char p1s[1024] = {}, p2s[1024] = {}, pi[64] = {};
+        // p1i/p2i arrive as bare JSON numbers - GetArg reads quoted strings
+        // and used to walk past the number to whatever quote came next, so an
+        // integer parameter silently became garbage. GetArgInt reads numbers.
+        char p1s[1024] = {}, p2s[1024] = {};
         CCommandVar P1, P2;
         if (XFinedMCP::GetArg(raw, "p1s", p1s, sizeof(p1s)))		P1 = CCommandVar(xr_string(p1s));
-        else if (XFinedMCP::GetArg(raw, "p1i", pi, sizeof(pi)))		P1 = CCommandVar(u32(atoi(pi)));
+        else if (int v = GetArgInt(raw, "p1i", -1); v >= 0)			P1 = CCommandVar(u32(v));
         if (XFinedMCP::GetArg(raw, "p2s", p2s, sizeof(p2s)))		P2 = CCommandVar(xr_string(p2s));
-        else if (XFinedMCP::GetArg(raw, "p2i", pi, sizeof(pi)))		P2 = CCommandVar(u32(atoi(pi)));
+        else if (int v = GetArgInt(raw, "p2i", -1); v >= 0)			P2 = CCommandVar(u32(v));
 
         CCommandVar res = ExecCommand(u32(id), P1, P2);
 

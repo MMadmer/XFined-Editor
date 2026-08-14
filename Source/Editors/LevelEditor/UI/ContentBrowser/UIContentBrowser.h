@@ -32,6 +32,9 @@ public:
 	// ResolvePlaceable, a project .object strips its rawdata prefix. False =
 	// not placeable (textures, sounds, meshes without an .object, ...).
 	static bool		ResolveDropRef		(LPCSTR name, string_path& ref);
+	// a droppable engine model (.ogf / a library Visuals entry): the path the
+	// raw-visual placement takes; false when the entry is not a model
+	static bool		ResolveDropVisual	(LPCSTR name, string_path& path);
 
 	// asset currently held by an in-flight drag, empty when nothing is dragged
 	static LPCSTR	DraggedAsset		();

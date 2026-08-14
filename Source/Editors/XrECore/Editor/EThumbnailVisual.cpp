@@ -10,6 +10,8 @@
 #include "..\..\..\XrRender\Public\KinematicsAnimated.h"
 // library objects (.object) are rendered through CEditableObject::RenderSingle
 #include "EditObject.h"
+#include "EditorProject.h"
+#include "EditorGameContent.h"
 
 extern BOOL ENGINE_API g_bRendering;
 
@@ -784,6 +786,143 @@ ECORE_API bool RenderObjectThumbnailFromMemory(LPCSTR debug_name, const void* da
 {
 	if (!data||(0==size))				{ out.clear(); return false; }
 	return ThumbCall(3,debug_name,data,size,out);
+}
+
+//------------------------------------------------------------------------------
+// scene visuals (see the header): same loading rules as a thumbnail, but the
+// visual is handed to the caller alive instead of being drawn once and dropped
+//------------------------------------------------------------------------------
+namespace
+{
+	IRenderVisual* CreateSceneVisual_Impl(LPCSTR debug_name, const void* data, u32 size)
+	{
+		IReader	reader((void*)data,int(size));
+		u8		type = u8(-1);
+		if (!PeekVisualType(&reader,type))		return 0;
+		if (!IsSupportedVisualType(type))
+		{
+			Msg("!Scene visual: unsupported visual type %d in '%s'.",int(type),
+				(debug_name&&debug_name[0])?debug_name:"<memory>");
+			return 0;
+		}
+
+		xr_vector<u8>	copy;
+		const void*		block = data;
+		if (!NeuterAnimatedVisual(data,size,type,copy,block))
+		{
+			Msg("!Scene visual: '%s' has no readable OGF header.",(debug_name&&debug_name[0])?debug_name:"<memory>");
+			return 0;
+		}
+		IReader	use((void*)block,int(size));
+
+		// unique key: the pool would otherwise hand back a cached model under a
+		// name that has nothing to do with these bytes
+		static u32	s_uid = 0;
+		string_path	pool_key;
+		xr_sprintf	(pool_key,sizeof(pool_key),"$scenevisual$%u",++s_uid);
+
+		IRenderVisual* visual = 0;
+		{
+			xrDebug::soft_assert_scope soft;
+			try		{ visual = ::Render->model_Create(pool_key,&use); }
+			catch (...)
+			{
+				Msg("!Scene visual: '%s' failed to load - skipped.",(debug_name&&debug_name[0])?debug_name:"<memory>");
+				visual = 0;
+			}
+		}
+		return visual;
+	}
+
+	struct SVisualCall { LPCSTR name; const void* data; u32 size; IRenderVisual* result; };
+	void VisualCallBody(SVisualCall* c)	{ c->result = CreateSceneVisual_Impl(c->name,c->data,c->size); }
+	bool VisualCallSEH(SVisualCall* c)
+	{
+		__try		{ VisualCallBody(c); return true; }
+		__except	(EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+}
+
+ECORE_API IRenderVisual* CreateSceneVisualFromMemory(LPCSTR debug_name, const void* data, u32 size)
+{
+	if (!data||(0==size)||!IsDeviceUsable())	return 0;
+
+	SVisualCall c; c.name = debug_name; c.data = data; c.size = size; c.result = 0;
+	if (!VisualCallSEH(&c))
+	{
+		Msg("!Scene visual: '%s' FAULTED while loading - skipped.",(debug_name&&debug_name[0])?debug_name:"<memory>");
+		return 0;
+	}
+	return c.result;
+}
+
+ECORE_API IRenderVisual* CreateSceneVisual(LPCSTR path)
+{
+	if (!path||!path[0])	return 0;
+
+	xr_vector<u8> bytes;
+
+	// 1. the project (the browser hands out project-relative paths, and the
+	//    project root is not registered in the editor FS at all)
+	if (EditorProject::Active())
+	{
+		string_path full;
+		sprintf_s(full,"%s\\%s",EditorProject::Root(),path);
+		if (HANDLE h = ::CreateFileA(full,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+			INVALID_HANDLE_VALUE != h)
+		{
+			LARGE_INTEGER sz;
+			if (::GetFileSizeEx(h,&sz) && sz.QuadPart > 0 && sz.QuadPart < LONGLONG(kMaxThumbSourceBytes))
+			{
+				bytes.resize(size_t(sz.QuadPart));
+				DWORD read = 0;
+				if (!::ReadFile(h,bytes.data(),DWORD(bytes.size()),&read,NULL) || read != bytes.size())
+					bytes.clear();
+			}
+			::CloseHandle(h);
+		}
+	}
+
+	// 2. the linked game install (archives + its loose gamedata); mounts on
+	//    demand - a scene with game meshes may load before the browser ever
+	//    opened the DARF tab
+	if (bytes.empty())
+	{
+		xr_string mount_err;
+		const int idx = EditorGameContent::EnsureMounted(mount_err) ? EditorGameContent::Find(path) : -1;
+		if (idx >= 0)
+		{
+			u32 sz = 0;
+			u8* raw = EditorGameContent::ReadBytes(idx,sz);
+			if (raw && sz)	bytes.assign(raw,raw+sz);
+			EditorGameContent::FreeBytes(raw);
+		}
+	}
+
+	// 3. the editor's own FS ($level$ / $game_meshes$), by name
+	if (bytes.empty())
+	{
+		string_path fn;
+		if (ResolveVisualFile(path,fn))
+			if (IReader* r = FS.r_open(fn))
+			{
+				const u32 sz = r->length();
+				if (sz && sz <= kMaxThumbSourceBytes)
+				{
+					bytes.resize(sz);
+					r->seek(0);
+					r->r(bytes.data(),int(sz));
+				}
+				FS.r_close(r);
+			}
+	}
+
+	if (bytes.empty())
+	{
+		Msg("!Scene visual: '%s' - no readable .ogf in the project, the linked game or the editor tree.",path);
+		return 0;
+	}
+	return CreateSceneVisualFromMemory(path,bytes.data(),u32(bytes.size()));
 }
 
 //------------------------------------------------------------------------------

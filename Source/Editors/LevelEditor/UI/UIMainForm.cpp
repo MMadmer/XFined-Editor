@@ -117,13 +117,20 @@ void UIMainForm::DropAsset(LPCSTR name)
     // The payload is the browser's own name; placement needs a library ref.
     // The translation depends on which source the browser is showing.
     string_path ref;
-    if (!UIContentBrowser::ResolveDropRef(name, ref))
+    if (UIContentBrowser::ResolveDropRef(name, ref))
     {
-        ELog.Msg(mtError, "'%s' cannot be placed in the scene - only .object references can.", name);
+        // p2 bit0 -> place under the cursor, the ray was refreshed by the drop target
+        ExecCommand(COMMAND_CB_PLACE_ASSET, xr_string(ref), u32(1));
         return;
     }
-    // p2=1 -> place under the cursor, the ray was refreshed by the drop target
-    ExecCommand(COMMAND_CB_PLACE_ASSET, xr_string(ref), u32(1));
+    // not an editable reference - but a compiled model still places, as a
+    // raw-visual scene object (bit1 picks that loader in the command)
+    if (UIContentBrowser::ResolveDropVisual(name, ref))
+    {
+        ExecCommand(COMMAND_CB_PLACE_ASSET, xr_string(ref), u32(1|2));
+        return;
+    }
+    ELog.Msg(mtError, "'%s' cannot be placed in the scene - only .object references and .ogf models can.", name);
 }
 
 void UIMainForm::Draw()

@@ -1,4 +1,6 @@
 #include "stdafx.h"
+// raw-visual mode loads engine models through the thumbnail unit's armour
+#include "..\..\..\..\XrECore\Editor\EThumbnailVisual.h"
 
 #define BLINK_TIME 300.f
 
@@ -14,6 +16,8 @@ void CSceneObject::Construct(LPVOID data)
 
     m_ReferenceName = "";
 	m_pReference 	= 0;
+	m_VisualName	= "";
+	m_pVisual		= 0;
 
     m_TBBox.invalidate();
     m_iBlinkTime	= 0;
@@ -26,6 +30,40 @@ CSceneObject::~CSceneObject()
 {
     for (CSurface* i : m_Surfaces) { i->OnDeviceDestroy(); xr_delete(i); }
 	Lib.RemoveEditObject(m_pReference);
+	DropVisual();
+}
+
+void CSceneObject::DropVisual()
+{
+	if (m_pVisual)	::Render->model_Delete(m_pVisual,TRUE);
+	m_pVisual = 0;
+}
+
+// A compiled .ogf cannot become an editable object, so the object holds the
+// engine visual itself. Everything that needs geometry falls back to the
+// visual box - see the note in the header.
+bool CSceneObject::SetVisual(LPCSTR ogf_path)
+{
+	DropVisual		();
+	m_ReferenceName	= "";
+	UpdateReference	();			// drops the editable side and its surfaces
+	m_VisualName	= (ogf_path&&ogf_path[0]) ? ogf_path : "";
+	m_Flags.set		(flVisualMode,FALSE);
+	if (!m_VisualName.size())	return false;
+
+	m_pVisual		= CreateSceneVisual(m_VisualName.c_str());
+	if (!m_pVisual)
+	{
+		m_VisualName = "";
+		return false;
+	}
+	// a skeleton straight out of the pool has identity bone matrices and an
+	// animation-union box; posing it once gives the bind pose and a box that
+	// fits what is actually drawn
+	if (IKinematics* K = PKinematics(m_pVisual))	K->CalculateBones(TRUE);
+	m_Flags.set		(flVisualMode,TRUE);
+	UpdateTransform	();
+	return true;
 }
 
 
@@ -64,26 +102,29 @@ void CSceneObject::OnUpdateTransform()
     if (m_pReference){
     	m_TBBox.set		(m_pReference->GetBox());
     	m_TBBox.xform	(_Transform());
+    }else if (m_pVisual){
+    	m_TBBox.set		(m_pVisual->getVisData().box);
+    	m_TBBox.xform	(_Transform());
     }
 }
 
 bool CSceneObject::GetBox( Fbox& box ) 
 {
-	if (!m_pReference) return false;
+	if (!m_pReference && !m_pVisual) return false;
 	box.set(m_TBBox);
 	return true;
 }
 
 bool CSceneObject::GetUTBox( Fbox& box )
 {
-	if (!m_pReference) return false;
-    box.set(m_pReference->GetBox());
-	return true;
+	if (m_pReference)	{ box.set(m_pReference->GetBox()); return true; }
+	if (m_pVisual)		{ box.set(m_pVisual->getVisData().box); return true; }
+	return false;
 }
 
 bool CSceneObject::IsRender()
 {
-	if (!m_pReference) return false;
+	if (!m_pReference && !m_pVisual) return false;
     return inherited::IsRender();
 }
 
@@ -91,7 +132,22 @@ bool CSceneObject::IsRender()
 void CSceneObject::Render(int priority, bool strictB2F)
 {
 	inherited::Render(priority,strictB2F);
-    if (!m_pReference) return;
+    if (!m_pReference)
+    {
+        // raw engine visual: the same call a spawn point uses for its model
+        if (m_pVisual)
+        {
+            ::RImplementation.model_Render(m_pVisual,_Transform(),priority,strictB2F,1.f);
+            if (Selected() && (1==priority) && (false==strictB2F))
+            {
+                EDevice->SetShader(EDevice->m_WireShader);
+                RCache.set_xform_world(_Transform());
+                u32 clr = 0xFFFFFFFF;
+                DU_impl.DrawSelectionBoxB(m_pVisual->getVisData().box,&clr);
+            }
+        }
+        return;
+    }
 #ifdef _LEVEL_EDITOR    
     Scene->SelectLightsForObject(this);
 #endif
@@ -152,7 +208,13 @@ void CSceneObject::RenderSelection(u32 color)
 
 bool CSceneObject::FrustumPick(const CFrustum& frustum)
 {
-	if (!m_pReference) return false;
+	// .ogf mode has no editable triangles - every pick is the bounding box
+	if (!m_pReference)
+	{
+		if (!m_pVisual)	return false;
+		u32 mask = frustum.getMask();
+		return fcvNone != frustum.testAABB(&m_TBBox.min.x,mask);
+	}
     if (::Render->occ_visible(m_TBBox))
 		return m_pReference->FrustumPick(frustum, _Transform());
     return false;
@@ -160,7 +222,7 @@ bool CSceneObject::FrustumPick(const CFrustum& frustum)
 
 bool CSceneObject::SpherePick(const Fvector& center, float radius)
 {
-	if (!m_pReference) return false;
+	if (!m_pReference && !m_pVisual) return false;
     float fR; Fvector vC;
 	m_TBBox.getsphere(vC,fR);
 	float R=radius+fR;
@@ -171,7 +233,22 @@ bool CSceneObject::SpherePick(const Fvector& center, float radius)
 
 bool CSceneObject::RayPick(float& dist, const Fvector& S, const Fvector& D, SRayPickInfo* pinf)
 {
-	if (!m_pReference) return false;
+	if (!m_pReference)
+	{
+		if (!m_pVisual)	return false;
+		Fvector pt;
+		if (Fbox::rpNone == m_TBBox.Pick2(S,D,pt))	return false;
+		const float d = S.distance_to(pt);
+		if (d >= dist)								return false;
+		dist = d;
+		if (pinf)
+		{
+			pinf->s_obj		= this;
+			pinf->pt.set	(pt);
+			pinf->inf.range	= d;
+		}
+		return true;
+	}
     if (::Render->occ_visible(m_TBBox))
 		if (m_pReference->RayPick(dist, S, D, _ITransform(), pinf)){
         	if (pinf) pinf->s_obj = this;
@@ -194,7 +271,12 @@ void CSceneObject::BoxQuery(SPickQuery& pinf)
 
 bool CSceneObject::BoxPick(const Fbox& box, SBoxPickInfoVec& pinf)
 {
-	if (!m_pReference) return false;
+	if (!m_pReference)
+	{
+		if (!m_pVisual)	return false;
+		Fbox probe;	probe.set(box);		// intersect() is non-const in this tree
+		return !!probe.intersect(m_TBBox);
+	}
 	return m_pReference->BoxPick(this, box, _ITransform(), pinf);
 }
 
@@ -231,6 +313,10 @@ CEditableObject* CSceneObject::UpdateReference()
 
 CEditableObject* CSceneObject::SetReference(LPCSTR ref_name)
 {
+	// the two modes are exclusive: a reference replaces a raw visual
+	DropVisual		();
+	m_VisualName	= "";
+	m_Flags.set		(flVisualMode,FALSE);
 	m_ReferenceName	= ref_name;
     return UpdateReference();
 }
@@ -304,7 +390,13 @@ void CSceneObject::FillProp(LPCSTR pref, PropItemVec& items)
 bool CSceneObject::GetSummaryInfo(SSceneSummary* inf)
 {
 	inherited::GetSummaryInfo	(inf);
-	CEditableObject* E 	= GetReference(); R_ASSERT(E);
+	if (!m_pReference)
+	{
+		// raw visual: report the model itself, there are no editable surfaces
+		if (m_VisualName.size())	inf->AppendObject(m_VisualName.c_str());
+		return true;
+	}
+	CEditableObject* E 	= GetReference();
 	if (IsStatic()||IsMUStatic()){
         for(SurfaceIt 	s_it=E->m_Surfaces.begin(); s_it!=E->m_Surfaces.end(); s_it++){
 			float area			= 0.f;
@@ -347,6 +439,12 @@ extern xr_token ECORE_API eo_type_token[];
 void CSceneObject::OnShowHint(AStringVec& dest)
 {
 	inherited::OnShowHint(dest);
+    if (!m_pReference)
+    {
+        // raw .ogf: there is no surface/material story to tell
+        dest.push_back(xr_string("Visual: ")+(m_VisualName.size()?*m_VisualName:"<none>"));
+        return;
+    }
     dest.push_back(xr_string("Reference: ")+*m_ReferenceName);
     dest.push_back(xr_string("-------"));
     float dist			= UI->ZFar();
@@ -384,7 +482,9 @@ void CSceneObject::Blink(CSurface* surf)
 
 bool CSceneObject::Validate(bool bMsg)
 {
-	CEditableObject* E 	= GetReference(); R_ASSERT(E);
+	// a raw visual has nothing an editable-object validation could inspect
+	if (!m_pReference)	return 0 != m_pVisual;
+	CEditableObject* E 	= GetReference();
     return E->Validate();
 }
 

@@ -593,9 +593,18 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 			sprintf_s(op_name, "%.*s_%u", int(sizeof(op_name) - 8), base, dup);
 		}
 
-		// visual paths in configs carry no extension - the engine appends .ogf
+		// Visual paths in configs are meshes-relative and carry no extension -
+		// the engine prepends $game_meshes$ and appends .ogf itself. A raw-visual
+		// object's path may name the file as the browser saw it, so both the
+		// extension and a leading meshes\ are clipped here.
 		char visual[256];
-		strncpy_s(visual, ref_name, _TRUNCATE);
+		{
+			LPCSTR src_ref = ref_name;
+			if (0 == _strnicmp(src_ref, "meshes\\", 7) || 0 == _strnicmp(src_ref, "meshes/", 7))
+				src_ref += 7;
+			strncpy_s(visual, src_ref, _TRUNCATE);
+		}
+		for (char* c = visual; *c; ++c) if (*c == '/') *c = '\\';
 		if (char* dot = strrchr(visual, '.')) *dot = 0;
 
 		const Fmatrix& xf = so->_Transform();

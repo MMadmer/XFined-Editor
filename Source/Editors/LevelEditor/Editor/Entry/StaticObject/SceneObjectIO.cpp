@@ -19,7 +19,17 @@ bool CSceneObject::LoadLTX(CInifile& ini, LPCSTR sect_name)
 
         xr_string ref_name  = ini.r_string			(sect_name, "reference_name");
 
-        if (!SetReference(ref_name.c_str()))
+        const u32 saved_flags = ini.line_exist(sect_name,"flags") ? ini.r_u32(sect_name,"flags") : 0;
+        if (saved_flags & flVisualMode)
+        {
+            if (!SetVisual(ref_name.c_str()))
+            {
+                m_VisualName = ref_name.c_str();
+                m_Flags.set(flVisualMode,TRUE);
+                ELog.Msg(mtError,"CSceneObject: visual '%s' failed to load, the object is kept empty",ref_name.c_str());
+            }
+        }
+        else if (!SetReference(ref_name.c_str()))
         {
             ELog.Msg            ( mtError, "CSceneObject: '%s' not found in library", ref_name.c_str() );
             bRes                = false;
@@ -116,9 +126,9 @@ void CSceneObject::SaveLTX(CInifile& ini, LPCSTR sect_name)
 
     ini.w_u32					(sect_name, "version", SCENEOBJ_CURRENT_VERSION);
 
-    // reference object version
-    R_ASSERT					(m_pReference);
-    ini.w_string				(sect_name, "reference_name", m_ReferenceName.c_str());
+    // reference object version (or the .ogf path in raw-visual mode)
+    R_ASSERT					(m_pReference||m_VisualName.size());
+    ini.w_string				(sect_name, "reference_name", m_pReference?m_ReferenceName.c_str():m_VisualName.c_str());
 
 	ini.w_u32					(sect_name, "flags", m_Flags.get());
     if (m_Flags.test(flUseSurface))
@@ -168,7 +178,22 @@ bool CSceneObject::LoadStream(IReader& F)
         }
         F.r_stringZ	(buf,sizeof(buf));
 
-        if (!SetReference(buf))
+        // chunked format: the flags can be read ahead of their place in the
+        // file, and they decide which loader owns the name above
+        u32 saved_flags = 0;
+        if (F.find_chunk(SCENEOBJ_CHUNK_FLAGS))	saved_flags = F.r_u32();
+        if (saved_flags & flVisualMode)
+        {
+            if (!SetVisual(buf))
+            {
+                // keep the name: the scene must survive a temporarily
+                // unreadable model, and a resave must not lose the object
+                m_VisualName = buf;
+                m_Flags.set(flVisualMode,TRUE);
+                ELog.Msg(mtError,"CSceneObject: visual '%s' failed to load, the object is kept empty",buf);
+            }
+        }
+        else if (!SetReference(buf))
         {
             ELog.Msg            ( mtError, "CSceneObject: '%s' not found in library", buf );
             bRes                = false;
@@ -262,9 +287,11 @@ void CSceneObject::SaveStream(IWriter& F)
 	F.w_u16			(SCENEOBJ_CURRENT_VERSION);
 	F.close_chunk	();
 
-    // reference object version
-    F.open_chunk	(SCENEOBJ_CHUNK_REFERENCE); R_ASSERT2(m_pReference,"Empty SceneObject REFS");
-    F.w_stringZ		(m_ReferenceName);
+    // The reference chunk carries whichever name the object lives by: the
+    // library reference, or the .ogf path in raw-visual mode (the flags
+    // chunk says which loader reads it back).
+    F.open_chunk	(SCENEOBJ_CHUNK_REFERENCE); R_ASSERT2(m_pReference||m_VisualName.size(),"Empty SceneObject REFS");
+    F.w_stringZ		(m_pReference?m_ReferenceName.c_str():m_VisualName.c_str());
     F.close_chunk	();
 
     F.open_chunk	(SCENEOBJ_CHUNK_FLAGS);

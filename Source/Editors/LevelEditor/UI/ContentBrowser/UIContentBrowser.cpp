@@ -1417,6 +1417,31 @@ bool UIContentBrowser::ResolveDropRef(LPCSTR name, string_path& ref)
 	return false;
 }
 
+// The other placeable thing: a compiled engine model. A .ogf out of the
+// project or the linked game (or a Visuals entry of the SDK library, which
+// is the same thing by name) becomes a raw-visual scene object - the drop
+// target passes the path through to COMMAND_CB_PLACE_ASSET with the visual
+// bit set, and CSceneObject::SetVisual does the rest.
+bool UIContentBrowser::ResolveDropVisual(LPCSTR name, string_path& path)
+{
+	path[0] = 0;
+	if (!name || !name[0])	return false;
+	const int source = Form ? Form->m_Source : 1;
+
+	LPCSTR ext = strrchr(name, '.');
+	if ((0 == source || 2 == source) && ext && 0 == _stricmp(ext, ".ogf"))
+	{
+		xr_strcpy(path, sizeof(string_path), name);
+		return true;
+	}
+	if (1 == source && Form && kCategories[Form->m_Category].id == smVisual)
+	{
+		xr_strcpy(path, sizeof(string_path), name);
+		return true;
+	}
+	return false;
+}
+
 //------------------------------------------------------------------------------
 // MCP entry points
 //------------------------------------------------------------------------------
