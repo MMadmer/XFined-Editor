@@ -517,13 +517,17 @@ static bool InsideGameGamedata(LPCSTR path)
 void EditorMod::GetOwnedFiles(LPCSTR project_root, xr_vector<xr_string>& rel)
 {
 	rel.push_back("mod.ltx");
-	rel.push_back("patch\\xms_modes.xmlp");
+	rel.push_back("patch\\xms_modes.xmlp");	// legacy generator output, still cleaned
 	rel.push_back("scripts\\mode_register.script");
-	// the string table carries the module id (it lands in the game's shared
-	// namespace) - resolve it from the manifest on disk
+	// these carry the module id (they land in the game's shared namespace) -
+	// resolve it from the manifest on disk
 	SManifest m;
 	if (project_root && Load(project_root, m) && !m.id.empty())
+	{
 		rel.push_back(xr_string("gamedata\\configs\\text\\rus\\") + m.id + "_modes.xml");
+		rel.push_back(xr_string("gamedata\\configs\\ui\\") + m.id + "_modes.xml");
+		rel.push_back(xr_string("gamedata\\configs\\ui\\") + m.id + "_modes_16.xml");
+	}
 }
 
 static bool WriteModeRegistration(LPCSTR project_root, const EditorMod::SManifest& m, xr_string& err)
@@ -541,6 +545,10 @@ static bool WriteModeRegistration(LPCSTR project_root, const EditorMod::SManifes
 		if (!m.id.empty())
 		{
 			sprintf_s(stale, "%s\\gamedata\\configs\\text\\rus\\%s_modes.xml", project_root, m.id.c_str());
+			if (::DeleteFileA(stale)) Msg("* [XMS] mode declaration gone - removed %s", stale);
+			sprintf_s(stale, "%s\\gamedata\\configs\\ui\\%s_modes.xml", project_root, m.id.c_str());
+			if (::DeleteFileA(stale)) Msg("* [XMS] mode declaration gone - removed %s", stale);
+			sprintf_s(stale, "%s\\gamedata\\configs\\ui\\%s_modes_16.xml", project_root, m.id.c_str());
 			if (::DeleteFileA(stale)) Msg("* [XMS] mode declaration gone - removed %s", stale);
 		}
 		return true;
@@ -568,70 +576,65 @@ static bool WriteModeRegistration(LPCSTR project_root, const EditorMod::SManifes
 	xr_string body;
 	body.resize(8192);
 
-	// ---- xml: one control pair per mode, below the campaign column ----------
-	// The rows go under the last one already there - the game's own, plus any
-	// another module added - and the frame around the column grows to hold
-	// them, pushing whatever sat below it down. Only layouts the linked game
-	// actually ships are patched; a patch aimed at a missing file is just a
-	// warning in the player's log.
-	static const char* kTargets[] = { "ui_mm_faction_select_16.xml", "ui_mm_faction_select.xml" };
-	xr_string xmlp = "<?xml version=\"1.0\" encoding=\"windows-1251\"?>\r\n";
+	// ---- xml: the module's OWN layout files with the fallback checkboxes ----
+	// The primary path needs no xml at all (the Refined dropdown builds its
+	// row in code); these files exist for the checkbox FALLBACK on installs
+	// without that layer. They are the module's own files - the screen's xml
+	// is never patched, so nothing here can fight the game's (or Refined's)
+	// idea of where the frame sits. Coordinates come from measuring the
+	// layout the linked game really ships, one file per aspect variant; the
+	// engine picks the _16 one on wide screens automatically.
+	static const char* kLayouts[]  = { "ui_mm_faction_select_16.xml", "ui_mm_faction_select.xml" };
+	static const char* kSuffixes[] = { "_16", "" };
 	int targets = 0;
 	for (int t = 0; t < 2; ++t)
 	{
 		string_path rel;
-		sprintf_s(rel, "configs\\ui\\%s", kTargets[t]);
+		sprintf_s(rel, "configs\\ui\\%s", kLayouts[t]);
 		EditorGameModes::SSlot slot;
 		xr_string slot_err;
 		if (!EditorGameModes::SuggestSlot(rel, (int)modes.size(), m.id.c_str(), slot, slot_err))
 			continue;
 		++targets;
 
-		sprintf_s(&body[0], body.size(), "<xms-patch target=\"ui\\%s\">\r\n", kTargets[t]);
-		xmlp += body.c_str();
-		if (!slot.frame_node.empty())
-		{
-			sprintf_s(&body[0], body.size(),
-				"\t<set-attr node=\"main_dialog:%s\" name=\"height\" value=\"%d\"/>\r\n",
-				slot.frame_node.c_str(), slot.frame_height);
-			xmlp += body.c_str();
-		}
-		for (u32 s = 0; s < slot.shift.size(); ++s)
-		{
-			sprintf_s(&body[0], body.size(),
-				"\t<set-attr node=\"main_dialog:%s\" name=\"y\" value=\"%d\"/>\r\n",
-				slot.shift[s].node.c_str(), slot.shift[s].y);
-			xmlp += body.c_str();
-		}
-		xmlp += "\t<append into=\"main_dialog\">\r\n";
+		xr_string ui = "<?xml version=\"1.0\" encoding=\"windows-1251\"?>\r\n<w>\r\n";
 		for (u32 i = 0; i < modes.size(); ++i)
 		{
 			const xr_string node	= "check_" + modes[i].id + "_mode";
 			const xr_string string_id = "st_cap_" + node;
 			const int dy = int(i) * slot.step;
 			sprintf_s(&body[0], body.size(),
-				"\t\t<cap_%s x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" stretch=\"1\">\r\n"
-				"\t\t\t<text r=\"170\" g=\"170\" b=\"170\" font=\"letterica16\" align=\"l\" vert_align=\"c\">%s</text>\r\n"
-				"\t\t</cap_%s>\r\n"
-				"\t\t<%s x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" stretch=\"1\">\r\n"
-				"\t\t</%s>\r\n",
+				"\t<cap_%s x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" stretch=\"1\">\r\n"
+				"\t\t<text r=\"170\" g=\"170\" b=\"170\" font=\"letterica16\" align=\"l\" vert_align=\"c\">%s</text>\r\n"
+				"\t</cap_%s>\r\n"
+				"\t<%s x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" stretch=\"1\">\r\n"
+				"\t</%s>\r\n",
 				node.c_str(), slot.cap_x, slot.cap_y + dy, slot.cap_w, slot.cap_h,
 				string_id.c_str(), node.c_str(),
 				node.c_str(), slot.check_x, slot.check_y + dy, slot.check_w, slot.check_h,
 				node.c_str());
-			xmlp += body.c_str();
+			ui += body.c_str();
 		}
-		xmlp += "\t</append>\r\n</xms-patch>\r\n";
+		ui += "</w>\r\n";
+
+		sprintf_s(path, "%s\\gamedata\\configs\\ui", project_root);
+		CreateDirChain(path);
+		sprintf_s(path, "%s\\gamedata\\configs\\ui\\%s_modes%s.xml", project_root, m.id.c_str(), kSuffixes[t]);
+		if (!WriteTextFile(path, ui.c_str())) { err = "cannot write the mode layout xml"; return false; }
 	}
 	if (!targets)
 	{
 		err = "the linked game has no new-game screen layout - nowhere to put the mode checkbox";
 		return false;
 	}
-	sprintf_s(path, "%s\\patch", project_root);
-	CreateDirChain(path);
-	sprintf_s(path, "%s\\patch\\xms_modes.xmlp", project_root);
-	if (!WriteTextFile(path, xmlp.c_str())) { err = "cannot write the mode xml patch"; return false; }
+
+	// the old generator emitted a patch against the screen's xml; a stale one
+	// would still move the frame around, so it dies here
+	{
+		string_path stale;
+		sprintf_s(stale, "%s\\patch\\xms_modes.xmlp", project_root);
+		if (::DeleteFileA(stale)) Msg("* [XMS] legacy xms_modes.xmlp removed - the fallback uses the module's own layout now");
+	}
 
 	// ---- text: what the player reads ----------------------------------------
 	// String tables are cp1251 like the rest of the game; the manifest caption
@@ -677,10 +680,15 @@ static bool WriteModeRegistration(LPCSTR project_root, const EditorMod::SManifes
 	xr_string lua = body.c_str();
 	for (u32 i = 0; i < modes.size(); ++i)
 	{
+		// reg stays "main_dialog:check_<id>_mode" - it is the DISCOVERY
+		// contract other systems (the exclusivity group) build from the mode
+		// id; xml_* are the node names inside the module's own layout file
 		sprintf_s(&body[0], body.size(),
-			"    { id = \"%s\", node = \"main_dialog:check_%s_mode\","
-			" cap = \"main_dialog:cap_check_%s_mode\", key = \"new_game_%s_mode\" },\r\n",
-			modes[i].id.c_str(), modes[i].id.c_str(), modes[i].id.c_str(), modes[i].id.c_str());
+			"    { id = \"%s\", reg = \"main_dialog:check_%s_mode\","
+			" xml_check = \"check_%s_mode\", xml_cap = \"cap_check_%s_mode\","
+			" key = \"new_game_%s_mode\" },\r\n",
+			modes[i].id.c_str(), modes[i].id.c_str(), modes[i].id.c_str(),
+			modes[i].id.c_str(), modes[i].id.c_str());
 		lua += body.c_str();
 	}
 	lua +=
@@ -706,22 +714,22 @@ static bool WriteModeRegistration(LPCSTR project_root, const EditorMod::SManifes
 		"    return\r\n"
 		"end\r\n"
 		"\r\n"
-		"-- The controls, added after the stock ones. The screen keeps its\r\n"
-		"-- CScriptXmlInit local, so this parses the same layout again - the engine\r\n"
-		"-- picks the aspect variant, exactly as the base call does.\r\n"
+		"-- The fallback controls come from the MODULE'S OWN layout file - the\r\n"
+		"-- screen's xml is never patched, so nothing fights over its frame. The\r\n"
+		"-- engine picks the _16 variant on wide screens by itself.\r\n"
 		"local base_init = cls.InitControls\r\n"
 		"if type(base_init) == \"function\" then\r\n"
 		"    cls.InitControls = function(self, f)\r\n"
 		"        base_init(self, f)\r\n"
 		"        self.xms_checks = {}\r\n"
 		"        local xml = CScriptXmlInit()\r\n"
-		"        xml:ParseFile(\"ui_mm_faction_select.xml\")\r\n"
+		"        xml:ParseFile(\"%MODID%_modes.xml\")\r\n"
 		"        for i = 1, #MODES do\r\n"
 		"            local m = MODES[i]\r\n"
 		"            local ok, err = pcall(function()\r\n"
-		"                xml:InitStatic(m.cap, self.dialog)\r\n"
-		"                self.xms_checks[m.id] = xml:InitCheck(m.node, self.dialog)\r\n"
-		"                self:Register(self.xms_checks[m.id], m.node)\r\n"
+		"                xml:InitStatic(m.xml_cap, self.dialog)\r\n"
+		"                self.xms_checks[m.id] = xml:InitCheck(m.xml_check, self.dialog)\r\n"
+		"                self:Register(self.xms_checks[m.id], m.reg)\r\n"
 		"            end)\r\n"
 		"            if not ok then xms.log(\"! \" .. m.id .. \" checkbox: \" .. tostring(err)) end\r\n"
 		"        end\r\n"
@@ -752,6 +760,10 @@ static bool WriteModeRegistration(LPCSTR project_root, const EditorMod::SManifes
 		"end\r\n"
 		"\r\n"
 		"xms.log(\"game mode(s) registered on the new-game screen: \" .. #MODES)\r\n";
+
+	// the fallback layout file carries the module id in its name
+	for (size_t at = lua.find("%MODID%"); at != xr_string::npos; at = lua.find("%MODID%"))
+		lua.replace(at, 7, m.id);
 
 	sprintf_s(path, "%s\\scripts", project_root);
 	CreateDirChain(path);
@@ -1190,8 +1202,9 @@ static void RunBuildIntoGame()
 		::WritePrivateProfileStringA("xms", "export_target", target, ini);
 		sprintf_s(s_Message,
 			"%s%sBuild complete: %d file(s) written to\n%s\n\n"
-			"Placed objects appear on a NEW GAME - the spawn of an old save is\n"
-			"already written, so loading one will not show them.\n"
+			"Added objects reach new games AND loaded saves (each applied once,\n"
+			"destroyed ones stay destroyed). Edits/removals of existing objects\n"
+			"need a new game. Mind the mode gate when testing.\n"
 			"Toggle the module from the console:  xms_enable %s  /  xms_disable %s",
 			bake_note.c_str(), bake_note.empty() ? "" : "\n",
 			files, path.c_str(), m.id.c_str(), m.id.c_str());

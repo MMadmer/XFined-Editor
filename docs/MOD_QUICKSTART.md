@@ -58,11 +58,18 @@ Other outputs, when you need them:
 
 ## 3. Testing it
 
-The game picks the module up on the next start, **but placed objects appear
-only on a NEW GAME**. A save's spawn is already written when the save is made —
-loading one shows the world as it was, without your additions. So: build,
-start the game, start a new game (in the mode the module targets!), then reach
-the level you edited.
+The game picks the module up on the next start — **and added objects reach
+existing saves too**: loading a save composes the module layers the same way
+a new game does, and anything this playthrough has never seen is spawned in
+once (the game remembers what it already applied, so a prop the player
+destroyed stays destroyed, and nothing ever doubles). Mind the mode gate:
+a module built for one campaign contributes nothing in another.
+
+What still needs a NEW game: *changing or removing* things that already exist
+in the playthrough — a save carries its own copy of every object, so edits to
+base objects and deletions apply to fresh games only. Level overlays
+(collision, visuals, AI map) rebuild on every level load and always reflect
+the current module.
 
 Console helpers:
 
