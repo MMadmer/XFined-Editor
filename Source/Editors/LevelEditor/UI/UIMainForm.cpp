@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "..\XrECore\Editor\EditorChooseEvents.h"
 #include "..\..\XrECore\Editor\EditorGameConfigs.h"
+#include "..\..\XrECore\Editor\EditorModManifest.h"
+#include "..\Editor\EditorModScene.h"
 #include "..\Editor\Utils\XrSEFactoryManager.h"
 #include "..\Editor\Tools\Spawn\ESceneSpawnTools.h"
 
@@ -33,6 +35,9 @@ UIMainForm::UIMainForm()
     m_Render->SetContextMenuEvent(TOnRenderContextMenu(this, &UIMainForm::DrawContextMenu));
     m_Render->SetToolBarEvent(TOnRenderToolBar(this, &UIMainForm::DrawRenderToolBar));
     m_Render->SetDropAssetEvent(TOnRenderDropAsset(this, &UIMainForm::DropAsset));
+    // every build path mirrors the open scene into its spawn layer first -
+    // "save scene, press Build" must ship what the viewport shows
+    EditorMod::SetPreBuildBake(&EditorModScene::BakeCurrentSceneSpawn);
     if (dynamic_cast<CLevelPreferences*>(EPrefs)->OpenObjectList)
     {
         UIObjectList::Show();

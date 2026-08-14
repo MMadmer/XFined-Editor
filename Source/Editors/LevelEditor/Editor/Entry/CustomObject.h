@@ -62,7 +62,13 @@ public:
     	flRenderAnyWayIfSelected	= (1<<4),
         flObjectInGroup				= (1<<5),
         flObjectInGroupUnique		= (1<<6),
-        
+        // set when the AUTHOR adds the object (tool add, drag&drop, paste,
+        // MCP place) and persisted with the scene; objects loaded from a file
+        // without it came with an imported base level. The mod export ships
+        // only authored objects - mirroring a whole imported level into spawn
+        // ops would double every stock NPC and prop in the game.
+        flAuthorPlaced				= (1<<7),
+
     	flAutoKey					= (1<<30),
     	flCameraView				= (1<<31),
     };
@@ -136,6 +142,8 @@ public:
 	IC BOOL 		Selected		()const {return m_RT_Flags.is(flRT_Selected);}
     IC BOOL			Valid			()const {return m_RT_Flags.is(flRT_Valid);}
     IC BOOL			IsDeleted		()const {return m_RT_Flags.is(flRT_NeedSelfDelete);}
+    IC BOOL			IsAuthorPlaced	()const {return m_CO_Flags.is(flAuthorPlaced);}
+    IC void			SetAuthorPlaced	(BOOL b){m_CO_Flags.set(flAuthorPlaced, b);}
 
 	// editor integration
     virtual bool	Validate		(bool bMsg){return true;}

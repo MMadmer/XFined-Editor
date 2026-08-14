@@ -27,6 +27,22 @@ can't delete one by accident, and the export regenerates them every time.
 Writes straight into `<linked game>\modules\<id>`. No packing step, no copying
 by hand — the game reads modules from that folder as-is.
 
+The build **bakes the open scene by itself**: every placed object goes into
+`spawn\<level>.xspawn` for the scene's level, and a model that lives in the
+project is staged into `gamedata\meshes\` — the one module subtree the game
+mounts into its file system. Save the scene, press Build, done. (The scene is
+the source of truth: objects you deleted from it disappear from the layer too,
+and an object whose model exists nowhere is refused with a warning instead of
+shipping a crash.)
+
+**What counts as "yours":** only objects you placed — tool add, drag&drop from
+the content browser, paste. Everything an imported base level brought (all the
+stock props, NPCs and logic of, say, Escape) is the game's, not the mod's, and
+never ships; baking it would double the whole level in game. The label is
+visible per object and can be flipped: **Mod → Mark Selection as Mod Content /
+as Base Level**. Objects placed in scenes saved before this flag existed count
+as base — re-mark them once.
+
 The build is a **mirror, not a merge**. Files the target holds and the project
 no longer has are deleted, so a stale file from an old build can never haunt
 you. If the target already holds files this project didn't put there (someone
@@ -42,7 +58,13 @@ Other outputs, when you need them:
 
 ## 3. Testing it
 
-The game picks the module up on the next start. In the console:
+The game picks the module up on the next start, **but placed objects appear
+only on a NEW GAME**. A save's spawn is already written when the save is made —
+loading one shows the world as it was, without your additions. So: build,
+start the game, start a new game (in the mode the module targets!), then reach
+the level you edited.
+
+Console helpers:
 
 ```
 xms_enable test
@@ -52,8 +74,14 @@ xms_enable test
 xms_disable test
 ```
 
-Disabled modules are listed in `<game>\modules\disabled.ltx`; enabling and
-disabling never touches the module's own files.
+```
+xms_list
+```
+
+`xms_why <file>` answers "which module gave me this file"; the log line
+`* XMS: spawn layers composed: +N added ...` confirms your ops applied on the
+new game. Disabled modules are listed in `<game>\modules\disabled.ltx`;
+enabling and disabling never touches the module's own files.
 
 ## 4. Shipping it to other people
 

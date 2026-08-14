@@ -1038,6 +1038,9 @@ bool EScene::OnLoadSelectionAppendObject(CCustomObject* obj)
     GenObjectName			(obj->FClassID,buf,obj->GetName());
     obj->SetName(buf);
     AppendObject			(obj, false);
+    // paste/duplicate is the author adding a copy - even a copy of a base
+    // object is THEIR addition and belongs to the mod
+    obj->SetAuthorPlaced	(TRUE);
     obj->Select				(true);
     return 					true;
 }

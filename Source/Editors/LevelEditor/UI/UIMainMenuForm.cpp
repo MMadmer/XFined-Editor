@@ -82,6 +82,32 @@ void UIMainMenuForm::Draw()
             ImGui::Separator();
             if (ImGui::MenuItem("Edit Manifest...", ""))			EditorMod::RequestEditManifest();
             ImGui::Separator();
+            // objects placed before this flag existed (or intentionally traded
+            // between mod and base) are re-labelled here; the build ships only
+            // mod content, an imported base level stays the game's
+            if (ImGui::MenuItem("Mark Selection as Mod Content", ""))
+            {
+                int n = 0;
+                ObjectList sel;
+                if (Scene && Scene->GetQueryObjects(sel, OBJCLASS_DUMMY, 1, -1, -1))
+                    for (ObjectIt it = sel.begin(); it != sel.end(); ++it)
+                        if (!(*it)->IsAuthorPlaced())
+                            { (*it)->SetAuthorPlaced(TRUE); ++n; }
+                if (n) Scene->UndoSave();
+                ELog.Msg(mtInformation, "Mod content: %d object(s) marked.", n);
+            }
+            if (ImGui::MenuItem("Mark Selection as Base Level", ""))
+            {
+                int n = 0;
+                ObjectList sel;
+                if (Scene && Scene->GetQueryObjects(sel, OBJCLASS_DUMMY, 1, -1, -1))
+                    for (ObjectIt it = sel.begin(); it != sel.end(); ++it)
+                        if ((*it)->IsAuthorPlaced())
+                            { (*it)->SetAuthorPlaced(FALSE); ++n; }
+                if (n) Scene->UndoSave();
+                ELog.Msg(mtInformation, "Base level: %d object(s) unmarked.", n);
+            }
+            ImGui::Separator();
             // level deltas baked from the current selection: spawn ops first,
             // they are the composable way to put something on a base level
             if (ImGui::BeginMenu("Bake Scene Layer"))

@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "EditorModScene.h"
+#include "..\..\XrECore\Editor\EditorGameContent.h"
 
 //------------------------------------------------------------------------------
 // small file/string helpers (WinAPI only, like EditorModManifest)
@@ -490,9 +491,10 @@ struct SSpawnResult
 	int			exported;
 	int			skipped;		// no reference / unusable object
 	int			scaled;			// non-unit scale: the spawn path has no scale
+	int			missing;		// visual found neither in the game nor the project
 	xr_string	path;
 	xr_string	names_json;
-	SSpawnResult() : exported(0), skipped(0), scaled(0) {}
+	SSpawnResult() : exported(0), skipped(0), scaled(0), missing(0) {}
 };
 
 // section names double as file-safe ids; keep the xspawn key charset tight
@@ -551,8 +553,12 @@ static void MergeSpawnText(const xr_string& old_text, const xr_vector<xr_string>
 	out += fresh;
 }
 
+// mirror=true makes the SCENE the source of truth for this level's file: no
+// merge with previous ops, and an empty scene clears the file entirely. The
+// menu/MCP exports keep merge semantics (mirror=false) so a selection-only
+// export still composes with earlier ones.
 static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_arg, LPCSTR mode_arg,
-						  SSpawnResult& res, xr_string& err)
+						  SSpawnResult& res, xr_string& err, bool mirror = false)
 {
 	res = SSpawnResult(); err.clear();
 	if (!EditorProject::Active())	{ err = "no active project"; return false; }
@@ -560,6 +566,24 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 	char level[128];
 	if (!ResolveLevelName(level_arg, level, sizeof(level)))
 									{ err = "no level name - open a scene or pass 'level'"; return false; }
+
+	// stale logic files would outlive their ops in a mirror pass
+	if (mirror)
+	{
+		WIN32_FIND_DATAA fd;
+		string_path cd_mask, cd_file;
+		sprintf_s(cd_mask, "%s\\spawn\\custom_data\\%s_*.ltx", EditorProject::Root(), level);
+		HANDLE h = ::FindFirstFileA(cd_mask, &fd);
+		if (INVALID_HANDLE_VALUE != h)
+		{
+			do
+			{
+				sprintf_s(cd_file, "%s\\spawn\\custom_data\\%s", EditorProject::Root(), fd.cFileName);
+				::DeleteFileA(cd_file);
+			} while (::FindNextFileA(h, &fd));
+			::FindClose(h);
+		}
+	}
 
 	// O_PHYS_S with an overridden visual is the vanilla recipe for a placed prop
 	const char* section = (section_arg && section_arg[0]) ? section_arg : "physic_object";
@@ -572,6 +596,9 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 	for (ObjectIt it = lst.begin(); it != lst.end(); ++it)
 	{
 		if (selected_only && !(*it)->Selected()) continue;
+		// objects that came with an imported base level are the level, not the
+		// mod - shipping them as adds would double every prop on the map
+		if (!(*it)->IsAuthorPlaced())	continue;
 		CSceneObject* so = dynamic_cast<CSceneObject*>(*it);
 		if (!so)						{ ++res.skipped; continue; }
 		LPCSTR ref_name = so->RefName();
@@ -606,6 +633,52 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 		}
 		for (char* c = visual; *c; ++c) if (*c == '/') *c = '\\';
 		if (char* dot = strrchr(visual, '.')) *dot = 0;
+
+		// A spawn op whose visual the game cannot resolve is a DELAYED FATAL:
+		// the crash fires at online spawn, when the player walks close enough.
+		// So the bake proves the model is reachable first - and a file living
+		// in the project is staged into gamedata\meshes\, the only module
+		// subtree the engine mirrors into its VFS.
+		{
+			bool visual_ok = false;
+			string_path staged;
+			sprintf_s(staged, "%s\\gamedata\\meshes\\%s.ogf", EditorProject::Root(), visual);
+			if (INVALID_FILE_ATTRIBUTES != ::GetFileAttributesA(staged))
+				visual_ok = true;										// already staged
+			if (!visual_ok)
+			{
+				string_path phys;
+				sprintf_s(phys, "%s\\%s", EditorProject::Root(), ref_name);
+				for (char* c = phys; *c; ++c) if (*c == '/') *c = '\\';
+				if (INVALID_FILE_ATTRIBUTES != ::GetFileAttributesA(phys))
+				{
+					string_path dir;
+					strcpy_s(dir, staged);
+					if (char* cut = strrchr(dir, '\\')) *cut = 0;
+					CreateDirChain(dir);
+					if (::CopyFileA(phys, staged, FALSE))
+					{
+						Msg("* [XMS] spawn export: staged '%s' -> gamedata\\meshes\\%s.ogf", ref_name, visual);
+						visual_ok = true;
+					}
+				}
+			}
+			if (!visual_ok)
+			{
+				char rel[300];
+				sprintf_s(rel, "meshes\\%s.ogf", visual);
+				xr_string gc_err;
+				if (EditorGameContent::EnsureMounted(gc_err) && EditorGameContent::Find(rel) >= 0)
+					visual_ok = true;									// ships with the game itself
+			}
+			if (!visual_ok)
+			{
+				Msg("! [XMS] spawn export: visual '%s' of '%s' is neither in the game nor in the project - op skipped, it would crash the game",
+					visual, op_name);
+				++res.missing; ++res.skipped;
+				continue;
+			}
+		}
 
 		const Fmatrix& xf = so->_Transform();
 		Fvector angles;
@@ -659,6 +732,8 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 		for (ObjectIt it = sp.begin(); it != sp.end(); ++it)
 		{
 			if (selected_only && !(*it)->Selected()) continue;
+			// an imported base level's spawns are the game's, not the mod's
+			if (!(*it)->IsAuthorPlaced())	continue;
 			CSpawnPoint* pt = dynamic_cast<CSpawnPoint*>(*it);
 			if (!pt)								{ ++res.skipped; continue; }
 			if (ptSpawnPoint != pt->m_Type)			{ ++res.skipped; continue; }
@@ -738,6 +813,16 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 
 	if (!res.exported)
 	{
+		// in a mirror pass an empty scene is an answer, not an error: the
+		// level's spawn layer is now empty, so its file goes away
+		if (mirror)
+		{
+			string_path stale;
+			sprintf_s(stale, "%s\\spawn\\%s.xspawn", EditorProject::Root(), level);
+			::DeleteFileA(stale);
+			Msg("* [XMS] spawn layer: scene is empty, %s cleared", level);
+			return true;
+		}
 		err = selected_only ? "no scene objects selected" : "the scene has no placeable objects";
 		return false;
 	}
@@ -748,9 +833,15 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 	if (!DirExists(dir))			{ err = "can't create the spawn folder"; return false; }
 	sprintf_s(path, "%s\\%s.xspawn", dir, level);
 
-	xr_string old_text, merged;
-	ReadTextFile(path, old_text);
-	MergeSpawnText(old_text, replaced, fresh, merged);
+	xr_string merged;
+	if (mirror)
+		merged = fresh;
+	else
+	{
+		xr_string old_text;
+		ReadTextFile(path, old_text);
+		MergeSpawnText(old_text, replaced, fresh, merged);
+	}
 	if (!WriteBinFile(path, merged.c_str(), (u32)merged.size()))
 									{ err = "can't write the .xspawn file"; return false; }
 
@@ -955,6 +1046,35 @@ void EditorModScene::DrawUI()
 		ImGui::CloseCurrentPopup();
 	}
 	ImGui::EndPopup();
+}
+
+//------------------------------------------------------------------------------
+// pre-build bake (registered with EditorMod::SetPreBuildBake)
+//------------------------------------------------------------------------------
+void EditorModScene::BakeCurrentSceneSpawn(xr_string& note)
+{
+	note.clear();
+	if (!EditorProject::Active() || !Scene) return;
+	char level[128];
+	if (!ResolveLevelName(0, level, sizeof(level))) return;		// no scene open
+
+	SSpawnResult res;
+	xr_string err;
+	char buf[384];
+	if (DoExportSpawn(0, false, 0, 0, res, err, true))
+	{
+		if (res.exported)	sprintf_s(buf, "Scene baked: %d object(s) -> spawn\\%s.xspawn", res.exported, level);
+		else				sprintf_s(buf, "Scene baked: empty, spawn\\%s.xspawn cleared", level);
+		if (res.missing)
+		{
+			char warn[160];
+			sprintf_s(warn, "\nWARNING: %d object(s) NOT baked - their model exists neither in the game nor in the project (see the log)", res.missing);
+			strcat_s(buf, warn);
+		}
+	}
+	else
+		sprintf_s(buf, "Scene bake FAILED for '%s': %s", level, err.c_str());
+	note = buf;
 }
 
 //------------------------------------------------------------------------------

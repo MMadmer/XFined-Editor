@@ -1190,10 +1190,22 @@ static void AppendObjectJson(xr_string& out, CCustomObject* obj, LPCSTR cls)
     const Fvector& p = obj->GetPosition();
     const Fvector& r = obj->GetRotation();
     const Fvector& s = obj->GetScale();
+    // object names on real levels are library paths ("statics\sign\...") -
+    // raw backslashes are invalid JSON escapes and kill the whole response
+    char safe[512];
+    {
+        u32 o = 0;
+        for (LPCSTR c = obj->GetName(); *c && o + 2 < sizeof(safe); ++c)
+        {
+            if (*c == '\\' || *c == '"') safe[o++] = '\\';
+            safe[o++] = *c;
+        }
+        safe[o] = 0;
+    }
     sprintf_s(tmp,
         "{\"name\":\"%s\",\"class\":\"%s\",\"selected\":%s,\"visible\":%s,"
         "\"position\":[%.3f,%.3f,%.3f],\"rotation\":[%.4f,%.4f,%.4f],\"scale\":[%.3f,%.3f,%.3f]}",
-        obj->GetName(), cls,
+        safe, cls,
         obj->Selected() ? "true" : "false",
         obj->Visible() ? "true" : "false",
         p.x, p.y, p.z, r.x, r.y, r.z, s.x, s.y, s.z);
@@ -1973,6 +1985,25 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             first = false;
         }
         out += "]}";
+        return true;
+    }
+
+    // {"authored":true|false} - flips the mod-content flag on the selection;
+    // the build ships only authored objects (imported base levels stay base)
+    if (0 == xr_strcmp(cmd, "mark_authored"))
+    {
+        if (!Scene) { out = "{\"ok\":false,\"error\":\"no scene\"}"; return true; }
+        const bool authored = GetArgBool(raw, "authored", true);
+        int n = 0;
+        ObjectList sel;
+        if (Scene->GetQueryObjects(sel, OBJCLASS_DUMMY, 1, -1, -1))
+            for (ObjectIt it = sel.begin(); it != sel.end(); ++it)
+                if (!!(*it)->IsAuthorPlaced() != authored)
+                    { (*it)->SetAuthorPlaced(authored ? TRUE : FALSE); ++n; }
+        if (n) Scene->UndoSave();
+        char buf[96];
+        sprintf_s(buf, "{\"ok\":true,\"changed\":%d,\"authored\":%s}", n, authored ? "true" : "false");
+        out = buf;
         return true;
     }
 

@@ -1099,6 +1099,10 @@ void EditorMod::RequestExportFlat()		{ PrepareExport(true); }
 // it did not put there.
 //------------------------------------------------------------------------------
 static bool					s_WantBuild		= false;
+static EditorMod::TPreBuildBake	s_PreBuildBake	= 0;
+
+void EditorMod::SetPreBuildBake(TPreBuildBake fn)	{ s_PreBuildBake = fn; }
+void EditorMod::RunPreBuildBake(xr_string& note)	{ note.clear(); if (s_PreBuildBake) s_PreBuildBake(note); }
 
 bool EditorMod::CanBuildIntoGame()
 {
@@ -1142,6 +1146,8 @@ static void RunBuildIntoGame()
 	}
 
 	LPCSTR target = EditorProject::GameRoot();
+	xr_string bake_note;
+	EditorMod::RunPreBuildBake(bake_note);
 	int files = 0;
 	xr_string path, err;
 	bool ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err);
@@ -1163,9 +1169,11 @@ static void RunBuildIntoGame()
 		ProjectIni(ini, sizeof(ini));
 		::WritePrivateProfileStringA("xms", "export_target", target, ini);
 		sprintf_s(s_Message,
-			"Build complete: %d file(s) written to\n%s\n\n"
-			"The game picks it up on the next start.\n"
-			"Toggle it from the console:  xms_enable %s  /  xms_disable %s",
+			"%s%sBuild complete: %d file(s) written to\n%s\n\n"
+			"Placed objects appear on a NEW GAME - the spawn of an old save is\n"
+			"already written, so loading one will not show them.\n"
+			"Toggle the module from the console:  xms_enable %s  /  xms_disable %s",
+			bake_note.c_str(), bake_note.empty() ? "" : "\n",
 			files, path.c_str(), m.id.c_str(), m.id.c_str());
 	}
 	else
@@ -1201,10 +1209,17 @@ static void DrawManifestModal()
 		EditorGameModes::Scan(scan_err);
 		const xr_vector<EditorGameModes::SMode>& modes = EditorGameModes::All();
 
-		// which of the three the manifest currently describes
-		// s_EdTarget records the choice itself: "default" is a decision, an
-		// empty manifest is not, and the export can tell them apart
-		int kind = s_EdPModeId[0] ? 2 : (s_EdMode[0] ? 1 : (0 == _stricmp(s_EdTarget, "default") ? 0 : -1));
+		// which of the three the manifest currently describes.
+		// s_EdTarget records the choice itself and the radios read ONLY it -
+		// deriving the choice from the mode fields un-picks "new mode" the
+		// frame after clicking it, while its id box is still empty.
+		int kind = -1;
+		if      (0 == _stricmp(s_EdTarget, "default"))	kind = 0;
+		else if (0 == _stricmp(s_EdTarget, "existing"))	kind = 1;
+		else if (0 == _stricmp(s_EdTarget, "new"))		kind = 2;
+		// legacy manifests carry no target key - infer it from the fields once
+		else if (s_EdPModeId[0])						kind = 2;
+		else if (s_EdMode[0])							kind = 1;
 		if (ImGui::RadioButton("the ordinary game (no mode)", 0 == kind))
 		{
 			kind = 0; s_EdMode[0] = 0; s_EdPModeId[0] = 0; s_EdPModeTitle[0] = 0;
@@ -1223,7 +1238,13 @@ static void DrawManifestModal()
 			strcpy_s(s_EdTarget, "new");
 		}
 		if (kind < 0)
-			ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "not chosen yet - the module cannot be exported");
+			ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "not chosen yet - the module cannot be built");
+		// the choice sticks even while its details are still blank, so say
+		// exactly what is missing instead of un-picking the radio
+		else if (1 == kind && !s_EdMode[0])
+			ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "pick which mode - the module cannot be built until then");
+		else if (2 == kind && !s_EdPModeId[0])
+			ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "enter the new mode's id - the module cannot be built until then");
 
 		if (1 == kind)
 		{
@@ -1320,11 +1341,21 @@ static void DrawManifestModal()
 	if (!pmode_ok)
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid mode id: a-z 0-9 _ . - only (or empty)");
 	ImGui::Separator();
-	ImGui::TextDisabled("one entry per line");
-	ImGui::InputTextMultiline("requires", s_EdRequires, sizeof(s_EdRequires), ImVec2(-1, 64));
-	ImGui::InputTextMultiline("after", s_EdAfter, sizeof(s_EdAfter), ImVec2(-1, 48));
-	ImGui::InputTextMultiline("before", s_EdBefore, sizeof(s_EdBefore), ImVec2(-1, 48));
-	ImGui::InputTextMultiline("conflicts", s_EdConflicts, sizeof(s_EdConflicts), ImVec2(-1, 64));
+	// full-width boxes leave no room for ImGui's right-side labels, so each
+	// field is titled above instead - four anonymous boxes explain nothing
+	ImGui::TextUnformatted("Relations to other modules (optional, module ids, one per line):");
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip(
+			"Only matters when the player runs several modules at once.\n"
+			"A standalone mod leaves all four empty.");
+	ImGui::TextUnformatted("Requires - refuses to load without these:");
+	ImGui::InputTextMultiline("##requires", s_EdRequires, sizeof(s_EdRequires), ImVec2(-1, 48));
+	ImGui::TextUnformatted("Load after these (their changes first, yours on top):");
+	ImGui::InputTextMultiline("##after", s_EdAfter, sizeof(s_EdAfter), ImVec2(-1, 48));
+	ImGui::TextUnformatted("Load before these (yours first, theirs on top):");
+	ImGui::InputTextMultiline("##before", s_EdBefore, sizeof(s_EdBefore), ImVec2(-1, 48));
+	ImGui::TextUnformatted("Conflicts - refuses to load together with these:");
+	ImGui::InputTextMultiline("##conflicts", s_EdConflicts, sizeof(s_EdConflicts), ImVec2(-1, 48));
 	ImGui::Separator();
 
 	ImGui::BeginDisabled(!id_ok || !mode_ok || !pmode_ok);
@@ -1389,6 +1420,8 @@ static void DrawExportModal(bool flat)
 	ImGui::BeginDisabled(!s_Target[0]);
 	if (ImGui::Button("Export", ImVec2(120, 0)))
 	{
+		xr_string bake_note;
+		EditorMod::RunPreBuildBake(bake_note);
 		int files = 0;
 		xr_string path, err;
 		bool ok = EditorMod::Export(EditorProject::Root(), s_Target, flat, files, path, err);
@@ -1415,7 +1448,8 @@ static void DrawExportModal(bool flat)
 			char ini[MAX_PATH];
 			ProjectIni(ini, sizeof(ini));
 			::WritePrivateProfileStringA("xms", "export_target", s_Target, ini);
-			sprintf_s(s_Message, "Export complete: %d file(s) copied to\n%s", files, path.c_str());
+			sprintf_s(s_Message, "%s%sExport complete: %d file(s) copied to\n%s",
+				bake_note.c_str(), bake_note.empty() ? "" : "\n", files, path.c_str());
 		}
 		else
 			sprintf_s(s_Message, "Export failed: %s", err.c_str());
@@ -1588,6 +1622,8 @@ void EditorMod::McpExport(LPCSTR raw, xr_string& out)
 		strncpy_s(target, sizeof(target), EditorProject::GameRoot(), _TRUNCATE);
 	}
 	const bool flat = ArgBool(raw, "flat", false);
+	xr_string bake_note;
+	RunPreBuildBake(bake_note);
 
 	int files = 0;
 	xr_string path, err;
@@ -1604,5 +1640,7 @@ void EditorMod::McpExport(LPCSTR raw, xr_string& out)
 	sprintf_s(head, "{\"ok\":true,\"files\":%d,\"path\":\"", files);
 	out = head;
 	JsonAppendPath(out, path.c_str());
+	out += "\",\"baked\":\"";
+	JsonAppend(out, bake_note.c_str());
 	out += "\"}";
 }

@@ -25,4 +25,10 @@ namespace EditorModScene
 	void McpExportCut			(LPCSTR raw, xr_string& out);	// mod_export_cut
 	void McpExportXCForm		(LPCSTR raw, xr_string& out);	// mod_export_xcform
 	void McpExportOGF			(LPCSTR raw, xr_string& out);	// mod_export_ogf_probe
+
+	// pre-build hook (EditorMod::SetPreBuildBake): mirrors the OPEN scene into
+	// its level's spawn file, so "save scene, press Build" ships what you see -
+	// nobody remembers a separate bake step, and stale ops of this level die.
+	// No scene open = does nothing. Other levels' files are never touched.
+	void BakeCurrentSceneSpawn	(xr_string& note);
 }

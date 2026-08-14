@@ -10,8 +10,32 @@ namespace ImGui {
 
         void LoadFont(float size) {
             ImGuiIO& io = ImGui::GetIO();
-            ImFont* font = io.Fonts->AddFontFromMemoryCompressedTTF(SourceSansProRegular_compressed_data, SourceSansProRegular_compressed_size, size);
+            // default ranges stop at Latin Supplement; game data (mode captions,
+            // item names) is Russian, so the atlas must carry Cyrillic too
+            static const ImWchar ranges[] = {
+                0x0020, 0x00FF,     // Basic Latin + Latin Supplement
+                0x0400, 0x052F,     // Cyrillic + Cyrillic Supplement
+                0x2DE0, 0x2DFF,     // Cyrillic Extended-A
+                0xA640, 0xA69F,     // Cyrillic Extended-B
+                0,
+            };
+            ImFont* font = io.Fonts->AddFontFromMemoryCompressedTTF(SourceSansProRegular_compressed_data, SourceSansProRegular_compressed_size, size, nullptr, ranges);
             assert(font != nullptr);
+            // if the embedded build lacks Cyrillic glyphs, fill exactly that gap
+            // from a font every Windows install has (merge skips codepoints the
+            // first font already covers, so Latin keeps the Spectrum look)
+            static const ImWchar cyrillic[] = { 0x0400, 0x052F, 0x2DE0, 0x2DFF, 0xA640, 0xA69F, 0 };
+            char fallback[MAX_PATH];
+            if (::GetWindowsDirectoryA(fallback, MAX_PATH))
+            {
+                strcat_s(fallback, "\\Fonts\\segoeui.ttf");
+                if (INVALID_FILE_ATTRIBUTES != ::GetFileAttributesA(fallback))
+                {
+                    ImFontConfig merge;
+                    merge.MergeMode = true;
+                    io.Fonts->AddFontFromFileTTF(fallback, size, &merge, cyrillic);
+                }
+            }
             io.FontDefault = font;
         }
 

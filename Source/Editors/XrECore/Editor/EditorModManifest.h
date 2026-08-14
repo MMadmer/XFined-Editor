@@ -84,6 +84,13 @@ namespace EditorMod
 	// "<game>\modules\<id>" for a menu tooltip; empty when it can't be built
 	ECORE_API void	BuildTargetText		(char* dst, u32 size);
 
+	// Scene work lives a layer above this dll, but a build must ship what the
+	// author sees - so the editor registers a bake here and every build path
+	// (menu, modal, MCP) runs it before Export. The note goes into the result.
+	typedef void (*TPreBuildBake)(xr_string& note);
+	ECORE_API void	SetPreBuildBake		(TPreBuildBake fn);
+	ECORE_API void	RunPreBuildBake		(xr_string& note);
+
 	// MCP command handlers: fill the full JSON response; raw = request line
 	ECORE_API void	McpManifest			(xr_string& out);
 	ECORE_API void	McpSetManifest		(LPCSTR raw, xr_string& out);

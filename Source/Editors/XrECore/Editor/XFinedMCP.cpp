@@ -460,8 +460,26 @@ static void Execute(SMCPRequest& r)
 		else
 		{
 			for (char* p = scene; *p; ++p) if (*p == '/') *p = '\\';
-			ExecCommand(COMMAND_LOAD, xr_string(scene));
-			r.response = "{\"ok\":true}";
+			// COMMAND_LOAD does FS.r_open on the string as-is and returns false
+			// silently on a miss, so a bare scene name must be resolved against
+			// the project's $maps$ before it goes in - "worked" bare names were
+			// really files lying in the editor's CWD
+			string_path full;
+			if (strchr(scene, ':'))		strcpy_s(full, scene);
+			else						FS.update_path(full, "$maps$", scene);
+			if (FS.exist(full))
+			{
+				ExecCommand(COMMAND_LOAD, xr_string(full));
+				r.response = "{\"ok\":true}";
+			}
+			else
+			{
+				char esc[MAX_PATH * 2];
+				JsonEscapePath(full, esc, sizeof(esc));
+				r.response = "{\"ok\":false,\"error\":\"scene not found: ";
+				r.response += esc;
+				r.response += "\"}";
+			}
 		}
 	}
 	else if (s_Handler && s_Handler(r.cmd.c_str(), r.raw.c_str(), r.response))

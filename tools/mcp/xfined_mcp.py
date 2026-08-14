@@ -473,6 +473,16 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "xfined_mark_authored",
+        "description": "Flip the mod-content flag on the SELECTED objects. The mod build ships only "
+                       "authored objects; everything an imported base level brought stays base. "
+                       "authored=false relabels back to base level.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"authored": {"type": "boolean", "description": "default true"}},
+        },
+    },
+    {
         "name": "xfined_object_set_position",
         "description": "Set an object's position. Omitted components keep their current value. Undo checkpoint included.",
         "inputSchema": {
@@ -758,6 +768,7 @@ CMD_MAP = {
     "xfined_camera_set": "camera_set",
     "xfined_select_objects": "select_objects",
     "xfined_deselect_all": "deselect_all",
+    "xfined_mark_authored": "mark_authored",
     "xfined_object_set_position": "object_set_position",
     "xfined_object_set_rotation": "object_set_rotation",
     "xfined_object_set_scale": "object_set_scale",

@@ -116,6 +116,12 @@ void EScene::AppendObject( CCustomObject* object, bool bUndo )
 	VERIFY			  	(object);
 	VERIFY				(m_Valid);
 
+	// bUndo separates the author acting (tool add, drag&drop, MCP place) from
+	// bulk paths replaying a file (scene load, undo restore) - the former is
+	// the mod's content, the latter must keep whatever the file said
+	if (bUndo)
+		object->SetAuthorPlaced(TRUE);
+
     switch (object->FClassID)
     {
     case OBJCLASS_SCENEOBJECT:
