@@ -104,16 +104,29 @@ ESceneSpawnTool::ESceneSpawnTool():ESceneCustomOTool(OBJCLASS_SPAWNPOINT)
 {
 	m_Flags.zero();
     UIChooseForm::AppendEvents	(smSpawnItem,		"Select Spawn Item",		FillSpawnItems,		0,0,0,0);
+    RefreshClasses			();
+}
+
+// The spawn roster IS pSettings: every section with a $spawn line, grouped
+// by class. Split out of the constructor because pSettings changes at
+// runtime - linking a game swaps it for that game's configs, and the list
+// built at startup would keep offering the SDK's stock roster.
+void ESceneSpawnTool::RefreshClasses()
+{
     m_Classes.clear			();
+    if (!pSettings)			return;
     CInifile::Root const& data 	= pSettings->sections();
     for (CInifile::RootCIt it=data.begin(); it!=data.end(); it++){
     	LPCSTR val;
     	if ((*it)->line_exist	("$spawn",&val)){
+            // a section without a class is data, not a spawnable thing
+            if (!pSettings->line_exist((*it)->Name,"class"))	continue;
         	CLASS_ID cls_id	= pSettings->r_clsid((*it)->Name,"class");
         	shared_str v	= pSettings->r_string_wb((*it)->Name,"$spawn");
         	m_Classes[cls_id].push_back(SChooseItem(*v,*(*it)->Name));
         }
     }
+    Msg("* spawn tool: %d spawnable class group(s) from pSettings", int(m_Classes.size()));
 }
 
 ESceneSpawnTool::~ESceneSpawnTool()

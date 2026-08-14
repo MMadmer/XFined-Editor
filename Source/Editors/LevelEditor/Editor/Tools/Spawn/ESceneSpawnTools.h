@@ -20,6 +20,11 @@ protected:
     DEFINE_VECTOR		(SChooseItem,SSVec,SSVecIt);
     DEFINE_MAP			(CLASS_ID,SSVec,ClassSpawnMap,ClassSpawnMapIt);
     ClassSpawnMap		m_Classes;
+public:
+    // rebuilds the roster from the CURRENT pSettings (it changes when a
+    // project links a game); the constructor calls it once at startup
+    void				RefreshClasses	();
+protected:
 
     // icon list
     DEFINE_MAP			(shared_str,ref_shader,ShaderMap,ShaderPairIt);

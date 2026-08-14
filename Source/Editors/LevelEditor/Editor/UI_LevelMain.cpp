@@ -2173,6 +2173,127 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
         return true;
     }
 
+    // ---- gameplay objects: the spawn roster and spawn placement ------------
+    // The roster IS pSettings (every $spawn section of the LINKED game once a
+    // project is linked), which is exactly what the old SDK's "Spawn Element"
+    // panel showed. list first, place by section - the entity, its shapes
+    // ($def_sphere) and its properties come from the section itself.
+    if (0 == xr_strcmp(cmd, "list_spawn_sections"))
+    {
+        char filter[256] = {};
+        XFinedMCP::GetArg(raw, "filter", filter, sizeof(filter));
+        strlwr(filter);
+        const int limit = GetArgInt(raw, "limit", 200);
+
+        int total = 0, shown = 0;
+        out = "{\"ok\":true,\"sections\":[";
+        if (pSettings)
+        {
+            CInifile::Root const& data = pSettings->sections();
+            for (CInifile::RootCIt it = data.begin(); it != data.end(); ++it)
+            {
+                LPCSTR val;
+                if (!(*it)->line_exist("$spawn", &val))                 continue;
+                if (!pSettings->line_exist((*it)->Name, "class"))       continue;
+                shared_str group = pSettings->r_string_wb((*it)->Name, "$spawn");
+                if (filter[0])
+                {
+                    string512 hay;
+                    xr_sprintf(hay, "%s %s", (*it)->Name.c_str(), group.size() ? group.c_str() : "");
+                    strlwr(hay);
+                    if (!strstr(hay, filter))                           continue;
+                }
+                ++total;
+                if (shown >= limit)                                     continue;
+                if (shown) out += ",";
+                out += "{\"section\":\"";
+                EditorGameContent::JsonAppendPath(out, (*it)->Name.c_str());
+                out += "\",\"group\":\"";
+                EditorGameContent::JsonAppendPath(out, group.size() ? group.c_str() : "");
+                out += "\",\"class\":\"";
+                EditorGameContent::JsonAppendPath(out, pSettings->r_string((*it)->Name, "class"));
+                out += "\"}";
+                ++shown;
+            }
+        }
+        char tail[96];
+        sprintf_s(tail, "],\"shown\":%d,\"total\":%d}", shown, total);
+        out += tail;
+        return true;
+    }
+
+    if (0 == xr_strcmp(cmd, "place_spawn"))
+    {
+        if (Scene->locked())
+        {
+            out = "{\"ok\":false,\"error\":\"scene locked\"}";
+            return true;
+        }
+        char section[256];
+        if (!XFinedMCP::GetArg(raw, "section", section, sizeof(section)))
+        {
+            out = "{\"ok\":false,\"error\":\"missing 'section' argument (see list_spawn_sections)\"}";
+            return true;
+        }
+        if (!pSettings || !pSettings->section_exist(section) || !pSettings->line_exist(section, "$spawn"))
+        {
+            out = "{\"ok\":false,\"error\":\"no such spawn section in pSettings (see list_spawn_sections)\"}";
+            return true;
+        }
+
+        Fvector pos;
+        pos.mad(EDevice->m_Camera.GetPosition(), EDevice->m_Camera.GetDirection(), 10.f);
+        GetArgFloat(raw, "x", pos.x);
+        GetArgFloat(raw, "y", pos.y);
+        GetArgFloat(raw, "z", pos.z);
+        if (!_valid(pos))
+        {
+            out = "{\"ok\":false,\"error\":\"non-finite position\"}";
+            return true;
+        }
+
+        ESceneCustomOTool* tool = Scene->GetOTool(OBJCLASS_SPAWNPOINT);
+        if (!tool)
+        {
+            out = "{\"ok\":false,\"error\":\"no spawn tool in this build\"}";
+            return true;
+        }
+
+        string256 namebuffer;
+        Scene->GenObjectName(OBJCLASS_SPAWNPOINT, namebuffer, section);
+        // the tool's own factory: builds the server entity from the section
+        // and auto-attaches whatever the section declares ($def_sphere shapes)
+        CCustomObject* obj = tool->CreateObject((LPVOID)section, namebuffer);
+        if (!obj)
+        {
+            out = "{\"ok\":false,\"error\":\"the spawn factory refused this section\"}";
+            return true;
+        }
+        obj->SetPosition(pos);
+
+        if (LTools->CurrentClassID() != OBJCLASS_SPAWNPOINT)
+            LTools->SetTarget(OBJCLASS_SPAWNPOINT, 0);
+        Scene->SelectObjects(false, OBJCLASS_SPAWNPOINT);
+        Scene->AppendObject(obj);
+
+        bool dropped = false;
+        if (GetArgBool(raw, "snap_to_ground", false))
+        {
+            ObjectList batch;
+            batch.push_back(obj);
+            dropped = DropObjectsToGround(batch, false, false) > 0;
+        }
+
+        UI->RedrawScene(true);
+        RespondObjectJson(out, obj);
+        if (!out.empty() && out[out.size() - 1] == '}')
+        {
+            out.erase(out.size() - 1);
+            out += dropped ? ",\"snapped_to_ground\":true}" : ",\"snapped_to_ground\":false}";
+        }
+        return true;
+    }
+
     if (0 == xr_strcmp(cmd, "view_mode"))
     {
         // presets first, so explicit fields can still override them

@@ -92,6 +92,8 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_object_set_scale` | set object scale by `name` (`x`/`y`/`z`, partial ok); undoable |
 | `xfined_place_object` | place a library object (`ref`) with a full transform: `x/y/z`, `rx/ry/rz` (radians), `sx/sy/sz` or `scale`, plus `snap_to_ground`/`align_normal`; no position = in front of the camera |
 | `xfined_drop_objects` | drop objects onto the surface below (the End key, Unreal Snap-to-Floor semantics); `mode` `box` (swept bounds, default) or `line` (pivot ray), `names` comma list or the selection, `align_normal` |
+| `xfined_list_spawn_sections` | the gameplay-object roster: every config section of the **linked game** with `$spawn` — actors, NPC, items, restrictors/triggers, anomalies; `filter` substring, `limit`; feeds `place_spawn` |
+| `xfined_place_spawn` | place a gameplay object by config `section` (spawn element, like the old SDK's Spawn Element mode): server entity from the section, declared shapes attached, properties (logic/custom_data) editable in Properties; optional `x`/`y`/`z`, `snap_to_ground` |
 | `xfined_view_mode` | read/set viewport rendering: `preset` (`unlit` = normal textured view, `lit` = 8-slot fixed-function lighting so most geometry goes black, `wireframe`, `point`), `fill`, `shade`, and the raw `lighting`/`textures`/`edged_faces`/`filter_linear`/`fog`/`environment`/`grid`/`safe_rect` toggles |
 | `xfined_list_assets` | list available assets: `category` (Objects by default), `filter`, `limit`; names feed `place_object`'s `ref` |
 | `xfined_asset_preview` | PNG thumbnail of one asset (`name`, optional `category`) for judging its look before placing |

@@ -546,6 +546,36 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_list_spawn_sections",
+        "description": "The gameplay-object roster: every config section of the LINKED game that declares $spawn - "
+                       "actors, NPC, items, restrictors/triggers, anomalies, physics. This is what the old SDK's "
+                       "'Spawn Element' panel listed. Filter is a substring over section and group; names feed "
+                       "xfined_place_spawn.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "filter": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+        },
+    },
+    {
+        "name": "xfined_place_spawn",
+        "description": "Place a GAMEPLAY object (spawn element) by its config section (see list_spawn_sections): "
+                       "the server entity is built from the section, shapes the section declares are attached, and "
+                       "its properties (logic/custom_data included) are editable in the Properties panel. Optional "
+                       "x/y/z (default: in front of the camera), snap_to_ground, name.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "section": {"type": "string", "description": "config section, e.g. stalker or space_restrictor"},
+                "x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"},
+                "snap_to_ground": {"type": "boolean"},
+            },
+            "required": ["section"],
+        },
+    },
+    {
         "name": "xfined_view_mode",
         "description": "Read or change how the viewport renders. Without arguments it returns the current state. "
                        "preset: unlit (the editor's normal textured view, this is the default), "
@@ -733,6 +763,8 @@ CMD_MAP = {
     "xfined_object_set_scale": "object_set_scale",
     "xfined_place_object": "place_object",
     "xfined_drop_objects": "drop_objects",
+    "xfined_list_spawn_sections": "list_spawn_sections",
+    "xfined_place_spawn": "place_spawn",
     "xfined_view_mode": "view_mode",
     "xfined_list_assets": "list_assets",
     "xfined_asset_preview": "asset_preview",

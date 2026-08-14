@@ -1,5 +1,8 @@
 #include "stdafx.h"
 #include "..\XrECore\Editor\EditorChooseEvents.h"
+#include "..\..\XrECore\Editor\EditorGameConfigs.h"
+#include "..\Editor\Utils\XrSEFactoryManager.h"
+#include "..\Editor\Tools\Spawn\ESceneSpawnTools.h"
 
 #if defined(USE_DX11)
 // ImGui binds a shader resource view under D3D11; surface_get() returns the
@@ -133,6 +136,43 @@ void UIMainForm::DropAsset(LPCSTR name)
     ELog.Msg(mtError, "'%s' cannot be placed in the scene - only .object references and .ogf models can.", name);
 }
 
+// Swap pSettings for the linked game's configs, then rebuild everything that
+// cached the old ones: the server-entity factory (its statics parse actor
+// profiles out of pSettings) and the Spawn tool's class roster. Runs once
+// per link fingerprint; scene entities are not touched, because this fires
+// before the pending scene of a fresh link ever loads.
+static void SyncGameConfigs()
+{
+    static xr_string s_active;
+    if (!EditorProject::Active() || !EditorProject::GameLinked())
+        return;
+    if (s_active.size() && s_active == EditorGameConfigs::ActiveFingerprint())
+        return;
+
+    xr_string err;
+    if (!EditorGameConfigs::Activate(err))
+    {
+        static bool s_said = false;
+        if (!s_said)
+        {
+            Msg("! game configs: %s - the editor keeps its bundled ones", err.c_str());
+            s_said = true;
+        }
+        return;
+    }
+
+    // the factory's initialize() re-reads $game_config$, which now points at
+    // the extracted tree; its destroy() also frees the pSettings Activate
+    // just built, and initialize() creates the final one
+    xr_delete(g_SEFactoryManager);
+    g_SEFactoryManager = xr_new<XrSEFactoryManager>();
+
+    if (ESceneSpawnTool* tool = Scene ? dynamic_cast<ESceneSpawnTool*>(Scene->GetTool(OBJCLASS_SPAWNPOINT)) : 0)
+        tool->RefreshClasses();
+
+    s_active = EditorGameConfigs::ActiveFingerprint();
+}
+
 void UIMainForm::Draw()
 {
     bOpen = true;
@@ -143,6 +183,11 @@ void UIMainForm::Draw()
     // a project with no valid game link blocks the editor exactly the same way
     if (EditorProject::DrawGameLink())
         return;
+    // The game is linked from here on - make its configs the editor's own.
+    // Order matters: this must happen BEFORE the pending scene loads, or the
+    // scene's spawn entities would be built by a factory reading the wrong
+    // game's sections. Fingerprinted, so every later frame is a no-op.
+    SyncGameConfigs();
     // deferred last-scene autoload — first clean frame after the browser closed
     if (LPCSTR pending = EditorProject::PopPendingScene())
         ExecCommand(COMMAND_LOAD, xr_string(pending));

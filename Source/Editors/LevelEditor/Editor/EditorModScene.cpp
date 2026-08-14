@@ -647,6 +647,93 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 		res.names_json += "\"";
 		++res.exported;
 	}
+
+	// ---- gameplay objects: spawn elements travel with their REAL section ----
+	// A CSpawnPoint carries the server entity built from a config section of
+	// the linked game; the op ships that section, the transform, and the
+	// entity's logic (custom_data) as a module file the engine reads back via
+	// the @path form. RPoints and env-mods are level-compiler things, not
+	// alife spawns - skipped.
+	{
+		ObjectList& sp = Scene->ListObj(OBJCLASS_SPAWNPOINT);
+		for (ObjectIt it = sp.begin(); it != sp.end(); ++it)
+		{
+			if (selected_only && !(*it)->Selected()) continue;
+			CSpawnPoint* pt = dynamic_cast<CSpawnPoint*>(*it);
+			if (!pt)								{ ++res.skipped; continue; }
+			if (ptSpawnPoint != pt->m_Type)			{ ++res.skipped; continue; }
+			if (!pt->m_SpawnData.Valid())			{ ++res.skipped; continue; }
+			LPCSTR sp_section = pt->m_SpawnData.m_Data->name();
+			if (!sp_section || !sp_section[0])		{ ++res.skipped; continue; }
+
+			char op_name[128];
+			SanitizeOpName(pt->GetName(), op_name, sizeof(op_name));
+			for (u32 dup = 2; ; ++dup)
+			{
+				bool taken = false;
+				for (u32 i = 0; i < replaced.size(); ++i)
+					if (0 == xr_strcmp(replaced[i].c_str() + 4, op_name)) { taken = true; break; }
+				if (!taken) break;
+				char base[128];
+				SanitizeOpName(pt->GetName(), base, sizeof(base));
+				sprintf_s(op_name, "%.*s_%u", int(sizeof(op_name) - 8), base, dup);
+			}
+
+			const Fmatrix& xf = pt->_Transform();
+			Fvector angles;
+			xf.getXYZ(angles);
+
+			char entry[1024];
+			sprintf_s(entry,
+				"[obj:%s]\r\n"
+				"op        = add\r\n"
+				"section   = %s\r\n"
+				"level     = %s\r\n"
+				"position  = %f,%f,%f\r\n"
+				"direction = %f,%f,%f\r\n",
+				op_name, sp_section, level,
+				xf.c.x, xf.c.y, xf.c.z,
+				angles.x, angles.y, angles.z);
+			fresh += entry;
+
+			// logic: written as a module file so it stays multi-line ltx, and the
+			// op only carries the @reference the engine resolves inside the module
+			LPCSTR ini = pt->m_SpawnData.m_Data->m_ini_string.size()
+				? pt->m_SpawnData.m_Data->m_ini_string.c_str() : 0;
+			if (ini && ini[0])
+			{
+				string_path cd_dir, cd_file;
+				sprintf_s(cd_dir, "%s\\spawn\\custom_data", EditorProject::Root());
+				CreateDirChain(cd_dir);
+				sprintf_s(cd_file, "%s\\%s_%s.ltx", cd_dir, level, op_name);
+				if (WriteBinFile(cd_file, ini, (u32)xr_strlen(ini)))
+				{
+					char cd_line[300];
+					sprintf_s(cd_line, "custom_data = @spawn/custom_data/%s_%s.ltx\r\n", level, op_name);
+					fresh += cd_line;
+				}
+				else
+					Msg("! [XMS] spawn export: can't write custom_data for '%s'", op_name);
+			}
+			if (mode_arg && mode_arg[0])
+			{
+				fresh += "mode      = ";
+				fresh += mode_arg;
+				fresh += "\r\n";
+			}
+			fresh += "\r\n";
+
+			char header[160];
+			sprintf_s(header, "obj:%s", op_name);
+			replaced.push_back(xr_string(header));
+
+			if (res.exported) res.names_json += ",";
+			res.names_json += "\"";
+			JsonAppend(res.names_json, op_name);
+			res.names_json += "\"";
+			++res.exported;
+		}
+	}
 	res.names_json += "]";
 
 	if (!res.exported)

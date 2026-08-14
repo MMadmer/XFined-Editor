@@ -1,4 +1,6 @@
 #include "stdafx.h"
+// game-archive fallback for spawn visuals
+#include "..\..\..\..\XrECore\Editor\EThumbnailVisual.h"
 
 
 #define SPAWNPOINT_CHUNK_VERSION		0xE411
@@ -61,6 +63,17 @@ void CLE_Visual::OnChangeVisual	()
     if (source->visual_name.size())
     {
         visual				= ::Render->model_Create(source->visual_name.c_str());
+
+        // The editor tree only carries the SDK's own meshes. A section out
+        // of the linked game names visuals that live in ITS archives - load
+        // through the game-content fallback before bothering the author.
+        if (NULL==visual)
+        {
+            string_path game_path;
+            sprintf_s(game_path, "meshes\\%s.ogf", source->visual_name.c_str());
+            for (char* c = game_path; *c; ++c) if (*c == '/') *c = '\\';
+            visual = CreateSceneVisual(game_path);
+        }
 
         if(NULL==visual && !g_tmp_lock)
         {
