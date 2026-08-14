@@ -19,6 +19,13 @@ port of the original GSC editors to x64 + ImGui.
   Rename work on any mix of them, and a paste goes into the folder you are
   looking at. The SDK library and the linked game install are read-only sources
   you copy out of.
+* **Gameplay objects from the linked game** — linking a game makes its configs
+  the editor's configs, so the Spawn tool offers that game's real roster
+  (14k+ sections for Dead Air) instead of the SDK's stock one. Pick the tool
+  with the radio button in `LeftBar → Tools`; its panel opens underneath.
+* **One-click mod build** — `Mod → Build Mod into Game` (`Ctrl+B`, or the
+  toolbar button) does a clean mirrored build into `<game>\modules\<id>`.
+  See [docs/MOD_QUICKSTART.md](docs/MOD_QUICKSTART.md).
 * Per-monitor DPI awareness, GPU picker for hybrid laptops
   (`Options → Render → GPU`), CoC/Dead Air data compatibility fixes.
 

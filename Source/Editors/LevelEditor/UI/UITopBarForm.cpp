@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "UITopBarForm.h"
+#include "../../XrECore/Editor/EditorModManifest.h"
 
 #if defined(USE_DX11)
 // ImGui binds a shader resource view under D3D11; surface_get() returns the
@@ -180,6 +181,22 @@ void UITopBarForm::Draw()
 		{
 			ClickOpenGameData();
 		}
+
+		// Shipping the mod is the single most-used action in this editor, so it
+		// gets a labelled button - the icon strip next to it is all level-compiler
+		// work and reads as the same kind of thing when it is not.
+		ImGui::SameLine(0, 12);
+		char build_target[MAX_PATH] = {};
+		EditorMod::BuildTargetText(build_target, sizeof(build_target));
+		ImGui::BeginDisabled(!EditorMod::CanBuildIntoGame());
+		if (ImGui::Button("Build Mod", ImVec2(0, 22)))
+			ExecCommand(COMMAND_MOD_BUILD);
+		ImGui::EndDisabled();
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip(build_target[0]
+				? "Clean build into the linked game (Ctrl+B):\n%s"
+				: "Link a game and set a valid module id first.%s",
+				build_target);
 	}
 	ImGui::SameLine(0,1);
 	ImGui::End();

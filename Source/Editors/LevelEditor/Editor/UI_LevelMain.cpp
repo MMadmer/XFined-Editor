@@ -1172,6 +1172,15 @@ CCommandVar CommandDropToGround(CCommandVar p1, CCommandVar p2)
     return moved ? TRUE : FALSE;
 }
 
+// A command rather than a plain menu handler so the shortcut editor, macros
+// and MCP all reach it. The build itself runs from EditorMod::DrawUI - it may
+// pop a confirmation, which belongs in the frame, not in a hotkey callback.
+CCommandVar CommandModBuild(CCommandVar p1, CCommandVar p2)
+{
+    EditorMod::RequestBuildIntoGame();
+    return TRUE;
+}
+
 //------------------------------------------------------------------------------
 // MCP inspector: scene / selection / per-object info for AI agents
 //------------------------------------------------------------------------------
@@ -2914,7 +2923,16 @@ void CLevelMain::RegisterCommands()
 	REGISTER_CMD_S	    (COMMAND_CREATE_SOUND_LIB,          CommandCreateSoundLib);
 	REGISTER_CMD_SE	    (COMMAND_TOGGLE_AIMAP_VISIBILITY,   "Visibility\\Toggle AIMap",			CommandToggleAiMapVisibility,true);
 	REGISTER_CMD_S	    (COMMAND_SHOW_CLIP_EDITOR,			CommandShowClipEditor);
-    
+	REGISTER_CMD_SE	    (COMMAND_MOD_BUILD,					"Mod\\Build Into Game",			CommandModBuild,true);
+
+	// Ctrl+B out of the box. LoadShortcuts runs later and only touches keys
+	// level.ini actually lists, so a rebind still wins.
+	{
+		ECommandVec& cmds = GetEditorCommands();
+		if (COMMAND_MOD_BUILD < cmds.size() && cmds[COMMAND_MOD_BUILD] &&
+			!cmds[COMMAND_MOD_BUILD]->sub_commands.empty())
+			cmds[COMMAND_MOD_BUILD]->sub_commands[0]->shortcut = xr_shortcut('B', FALSE, TRUE, FALSE);
+	}
 }
 
 char* CLevelMain::GetCaption()

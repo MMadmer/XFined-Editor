@@ -56,24 +56,44 @@ void UIMainMenuForm::Draw()
                 ImGui::EndMenu();
             }
             ImGui::Separator();
-            if (ImGui::BeginMenu("Mod"))
+            if (ImGui::MenuItem("Quit", "")) { ExecCommand(COMMAND_QUIT); }
+            ImGui::EndMenu();
+        }
+
+        // Mod is the whole point of this editor, so it is a menu of its own -
+        // buried under File nobody found it, and "Compile" next door is the
+        // level geometry compiler, which has nothing to do with shipping a mod.
+        if (ImGui::BeginMenu("Mod"))
+        {
+            char build_target[MAX_PATH] = {};
+            EditorMod::BuildTargetText(build_target, sizeof(build_target));
+
+            ImGui::BeginDisabled(!EditorMod::CanBuildIntoGame());
+            if (ImGui::MenuItem("Build Mod into Game", "Ctrl+B"))	EditorMod::RequestBuildIntoGame();
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(build_target[0]
+                    ? "Clean build straight into the linked game:\n%s\n\nThe folder is mirrored - files the project\nno longer has are removed."
+                    : "Link a game and set a valid module id first.%s",
+                    build_target);
+
+            if (ImGui::MenuItem("Build to Another Folder...", ""))	EditorMod::RequestExportModule();
+            if (ImGui::MenuItem("Export Flat Gamedata...", ""))		EditorMod::RequestExportFlat();
+            ImGui::Separator();
+            if (ImGui::MenuItem("Edit Manifest...", ""))			EditorMod::RequestEditManifest();
+            ImGui::Separator();
+            // level deltas baked from the current selection: spawn ops first,
+            // they are the composable way to put something on a base level
+            if (ImGui::BeginMenu("Bake Scene Layer"))
             {
-                if (ImGui::MenuItem("Edit Manifest...", ""))		EditorMod::RequestEditManifest();
-                if (ImGui::MenuItem("Export XMS Module...", ""))	EditorMod::RequestExportModule();
-                if (ImGui::MenuItem("Export Flat Gamedata...", ""))	EditorMod::RequestExportFlat();
-                ImGui::Separator();
-                // level deltas baked from the current selection: spawn ops first,
-                // they are the composable way to put something on a base level
-                if (ImGui::MenuItem("Export Spawn Layer...", ""))		EditorModScene::RequestExportSpawn();
+                if (ImGui::MenuItem("Spawn Layer...", ""))			EditorModScene::RequestExportSpawn();
                 // level overlays baked from the current selection (sector 0)
-                if (ImGui::MenuItem("Export Collision Overlay...", ""))	EditorModScene::RequestExportXCForm();
-                if (ImGui::MenuItem("Export Visual Overlay...", ""))	EditorModScene::RequestExportOGF();
+                if (ImGui::MenuItem("Collision Overlay...", ""))		EditorModScene::RequestExportXCForm();
+                if (ImGui::MenuItem("Visual Overlay...", ""))		EditorModScene::RequestExportOGF();
                 // selection used as volumes: removes base collision + visuals
-                if (ImGui::MenuItem("Export Level Cut...", ""))			EditorModScene::RequestExportCut();
+                if (ImGui::MenuItem("Level Cut...", ""))			EditorModScene::RequestExportCut();
                 ImGui::EndMenu();
             }
-            ImGui::Separator();
-            if (ImGui::MenuItem("Quit", "")) { ExecCommand(COMMAND_QUIT); }
             ImGui::EndMenu();
         }
 

@@ -71,11 +71,18 @@ namespace EditorMod
 										 int& files, xr_string& out_path, xr_string& err,
 										 bool confirmed = false);
 
-	// modal windows (drawn from CLevelMain::OnDrawUI) + File\Mod menu triggers
+	// modal windows (drawn from CLevelMain::OnDrawUI) + Mod menu triggers
 	ECORE_API void	DrawUI				();
 	ECORE_API void	RequestEditManifest	();
 	ECORE_API void	RequestExportModule	();
 	ECORE_API void	RequestExportFlat	();
+
+	// the everyday build: no target picker, no options - the linked game IS
+	// the target, so this is Export(flat=false) straight to <game>\modules\<id>
+	ECORE_API void	RequestBuildIntoGame();
+	ECORE_API bool	CanBuildIntoGame	();
+	// "<game>\modules\<id>" for a menu tooltip; empty when it can't be built
+	ECORE_API void	BuildTargetText		(char* dst, u32 size);
 
 	// MCP command handlers: fill the full JSON response; raw = request line
 	ECORE_API void	McpManifest			(xr_string& out);

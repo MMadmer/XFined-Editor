@@ -50,10 +50,19 @@ void UILeftBarForm::Draw()
 				id = (i / 2);
 			ESceneToolBase* tool = Scene->GetTool(Tools[id]);
 			bool visble = tool->IsVisible();
+			const bool active = (LTools->GetTarget() == Tools[id]);
 			ImGui::PushID(tool->ClassName());
-			if (ImGui::Checkbox("##value", &visble)) { tool->m_EditFlags.set(ESceneToolBase::flVisible, visble);UI->RedrawScene(); }; ImGui::SameLine();
-			
-			if (ImGui::RadioButton(tool->ClassDesc(),LTools->GetTarget() == Tools[id]))
+			if (ImGui::Checkbox("##value", &visble)) { tool->m_EditFlags.set(ESceneToolBase::flVisible, visble);UI->RedrawScene(); };
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show %s objects in the viewport", tool->ClassDesc());
+			ImGui::SameLine();
+
+			// the radio - not the checkbox - is what opens the tool's panel
+			// below, so the active row is spelled out instead of implied
+			if (active) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
+			const bool clicked = ImGui::RadioButton(tool->ClassDesc(), active);
+			if (active) ImGui::PopStyleColor();
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Make %s the active tool (its panel opens below)", tool->ClassDesc());
+			if (clicked)
 			{
 				ExecCommand(COMMAND_CHANGE_TARGET, Tools[id]);
 			}
@@ -131,7 +140,18 @@ void UILeftBarForm::Draw()
 
 		ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
 	}
-	if(LTools->GetToolForm())LTools->GetToolForm()->Draw();
+	// the panel below belongs to whichever tool the radio selected - say whose
+	// it is, otherwise "Object List" reads as a generic scene list
+	if (UIToolCustom* form = LTools->GetToolForm())
+	{
+		ESceneToolBase* active_tool = Scene->GetTool(LTools->GetTarget());
+		char title[128];
+		sprintf_s(title, "%s Tool", active_tool ? active_tool->ClassDesc() : "Active");
+		ImGui::Separator();
+		ImGui::TextColored(ImGui::GetStyleColorVec4(ImGuiCol_CheckMark), "%s", title);
+		ImGui::Separator();
+		form->Draw();
+	}
 	ImGui::End();
 }
 

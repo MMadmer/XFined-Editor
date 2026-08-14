@@ -1072,7 +1072,7 @@ static void PrepareExport(bool flat)
 	{
 		sprintf_s(s_Message,
 			"Module id is missing or invalid.\n"
-			"Fix it via File > Mod > Edit Manifest... (allowed: a-z 0-9 _ . -)");
+			"Fix it via Mod > Edit Manifest... (allowed: a-z 0-9 _ . -)");
 		s_WantMessage = true;
 		return;
 	}
@@ -1089,6 +1089,89 @@ static void PrepareExport(bool flat)
 
 void EditorMod::RequestExportModule()	{ PrepareExport(false); }
 void EditorMod::RequestExportFlat()		{ PrepareExport(true); }
+
+//------------------------------------------------------------------------------
+// one-click build into the linked game
+//
+// Every question the export modal asks has one right answer once a game is
+// linked: the target is that game, the layout is a module, and the id comes
+// from the manifest. So this path asks nothing - except before deleting files
+// it did not put there.
+//------------------------------------------------------------------------------
+static bool					s_WantBuild		= false;
+
+bool EditorMod::CanBuildIntoGame()
+{
+	return EditorProject::Active() && EditorProject::GameLinked() && EditorProject::GameRoot()[0];
+}
+
+void EditorMod::BuildTargetText(char* dst, u32 size)
+{
+	dst[0] = 0;
+	if (!CanBuildIntoGame()) return;
+	SManifest m;
+	if (!Load(EditorProject::Root(), m) || !ValidateId(m.id.c_str())) return;
+	sprintf_s(dst, size, "%s\\modules\\%s", EditorProject::GameRoot(), m.id.c_str());
+}
+
+void EditorMod::RequestBuildIntoGame()
+{
+	s_WantBuild = CanBuildIntoGame();
+	if (s_WantBuild) return;
+	sprintf_s(s_Message,
+		"No linked game.\n\n"
+		"Link one first - the build writes the module into\n"
+		"<game>\\modules\\<id>, which is where the game reads it from.");
+	s_WantMessage = true;
+}
+
+// runs inside the ImGui frame (from DrawUI), like the export modal's Export
+static void RunBuildIntoGame()
+{
+	if (!s_WantBuild) return;
+	s_WantBuild = false;
+
+	EditorMod::SManifest m;
+	if (!EditorMod::Load(EditorProject::Root(), m) || !EditorMod::ValidateId(m.id.c_str()))
+	{
+		sprintf_s(s_Message,
+			"Module id is missing or invalid.\n"
+			"Fix it via Mod > Edit Manifest... (allowed: a-z 0-9 _ . -)");
+		s_WantMessage = true;
+		return;
+	}
+
+	LPCSTR target = EditorProject::GameRoot();
+	int files = 0;
+	xr_string path, err;
+	bool ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err);
+	if (!ok && 0 == strncmp(err.c_str(), "target already holds a module", 29))
+	{
+		if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
+			"%s\n\n%s\n\nThose files will be DELETED. Continue?", err.c_str(), path.c_str()))
+			ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err, true);
+		else
+		{
+			sprintf_s(s_Message, "Build cancelled.");
+			s_WantMessage = true;
+			return;
+		}
+	}
+	if (ok)
+	{
+		char ini[MAX_PATH];
+		ProjectIni(ini, sizeof(ini));
+		::WritePrivateProfileStringA("xms", "export_target", target, ini);
+		sprintf_s(s_Message,
+			"Build complete: %d file(s) written to\n%s\n\n"
+			"The game picks it up on the next start.\n"
+			"Toggle it from the console:  xms_enable %s  /  xms_disable %s",
+			files, path.c_str(), m.id.c_str(), m.id.c_str());
+	}
+	else
+		sprintf_s(s_Message, "Build failed: %s", err.c_str());
+	s_WantMessage = true;
+}
 
 static void DrawManifestModal()
 {
@@ -1368,6 +1451,7 @@ static void DrawMessageModal()
 void EditorMod::DrawUI()
 {
 	if (!EditorProject::Active()) return;
+	RunBuildIntoGame();
 	DrawManifestModal();
 	DrawExportModal(false);
 	DrawExportModal(true);

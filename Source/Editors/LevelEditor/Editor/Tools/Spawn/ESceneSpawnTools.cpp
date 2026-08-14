@@ -126,6 +126,12 @@ void ESceneSpawnTool::RefreshClasses()
         	m_Classes[cls_id].push_back(SChooseItem(*v,*(*it)->Name));
         }
     }
+    // the LeftBar panel builds its own roster from the same pSettings, so it
+    // goes stale in exactly the same way - refresh it here or the author keeps
+    // browsing the SDK's stock list after linking a game
+    if (pForm)
+        ((UISpawnTool*)pForm)->RefreshList();
+
     Msg("* spawn tool: %d spawnable class group(s) from pSettings", int(m_Classes.size()));
 }
 
