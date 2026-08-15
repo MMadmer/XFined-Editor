@@ -246,7 +246,8 @@ private:
 										 bool overwrite, xr_string& err);
 
 	// folder authoring, project source only
-	void			CreateFolder		();				// in the folder now open
+	void			CreateFolder		();
+	void			CreateQuest			();				// NewQuest.nqasset in the folder now open				// in the folder now open
 	void			BeginRename			(LPCSTR path);	// inline edit on that tile
 	void			CommitRename		();
 	// Inline rename of a folder tile: the created folder starts here with its

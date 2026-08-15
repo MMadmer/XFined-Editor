@@ -20,6 +20,7 @@
 #include "SoundManager.h"
 #include "ResourceManager.h"
 #include "engine\XrGamePersistentEditors.h"
+#include "Nq\NqDoc.h"
 
 
 ECommandVec 		ECommands;
@@ -330,6 +331,9 @@ CCommandVar 	CommandQuit(CCommandVar p1, CCommandVar p2)
     // The IsModified() gate here was inverted logic: File\Quit did nothing at all
     // on a saved scene. Quit unconditionally - the save prompt belongs to
     // COMMAND_EXIT, which callers run before this one when they want it.
+    // Quest documents have no such prompt (a modal would stall MCP and -nodlg),
+    // so their unsaved edits are written out instead of dying with the process.
+    NqDocs::SaveDirty	();
     UI->Quit			();
     return				TRUE;
 }

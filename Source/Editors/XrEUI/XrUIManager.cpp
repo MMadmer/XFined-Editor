@@ -309,6 +309,13 @@ void XrUIManager::DockLayoutPlace(const char* window_name, EDockSlot slot)
 	ImGui::DockBuilderDockWindow(window_name, (ImGuiID)m_DockNodes[slot]);
 }
 
+void XrUIManager::DockNextWindowWith(const char* next_to)
+{
+	if (!next_to) return;
+	ImGuiWindow* w = ImGui::FindWindowByName(next_to);
+	if (w && w->DockId) ImGui::SetNextWindowDockID(w->DockId, ImGuiCond_FirstUseEver);
+}
+
 void XrUIManager::DockLayoutEnd()
 {
 	if (!m_DockRoot) return;

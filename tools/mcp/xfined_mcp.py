@@ -726,6 +726,180 @@ TOOLS = [
         "description": "Redo the last undone scene operation.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    # ---- quest graph (NQ) ------------------------------------------------------
+    # One .nqasset = one quest = declarative Lua (`return { ... }`), see
+    # docs/NQ_ARCHITECTURE.md. Structured arguments travel as STRINGS holding
+    # Lua table text; every response carries {"ok":...}, problems as
+    # [{code,severity,node,slot,message}] with the codes of §15 (E = blocks the
+    # build, W = warning) and an outline (text description of the graph).
+    {
+        "name": "xfined_quest_catalog",
+        "description": "The quest kind catalog: every trigger / main action / extra action / condition kind with "
+                       "group, title, desc, use, params (name, type, required, default, min/max, enum), pins, "
+                       "wait/once (main), event (cond), plus catalog version and source ('game' = read from the "
+                       "linked game install, 'bundled' = the editor's fallback copy). Read it before writing a quest.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "xfined_quest_list",
+        "description": "Every *.nqasset of the project: path, id, title, node count, error/warning counts, open/dirty "
+                       "state (files that do not parse come back with readable=false and the parse error).",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "xfined_quest_new",
+        "description": "Create a quest file from the minimal template (trigger.start -> flow.end; id = file name, "
+                       "title 'Новый квест') at 'path' (project-relative, '.nqasset' appended when missing; refuses to "
+                       "overwrite) and open it. Returns the canonical text, outline and problems.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "e.g. quests/wolf_debt.nqasset"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_quest_open",
+        "description": "Open a quest document (loads the file, lays out nodes without pos, validates). Returns id, "
+                       "problems, outline. Opening an already open document just returns its state.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_quest_close",
+        "description": "Close an open quest document. A dirty document answers error 'unsaved' unless discard=true.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "discard": {"type": "boolean"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_quest_get",
+        "description": "Read a quest as text: 'lua' (canonical file text), 'outline' (one line per node in flow order "
+                       "plus the problems), 'problems', counts. Works for files that are not open (read from disk).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_quest_write",
+        "description": "Replace a quest with the whole file text 'lua' (return { nq = 1, id = ..., nodes = { ... } }). "
+                       "Open document: replaced in memory with an undo snapshot (saved=false, call xfined_quest_save). "
+                       "Closed or new file: the canonical text is written to disk when it parses (saved=true). "
+                       "Validation problems are returned, they do not block the write - only the build refuses errors.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "lua": {"type": "string", "description": "complete .nqasset text"},
+            },
+            "required": ["path", "lua"],
+        },
+    },
+    {
+        "name": "xfined_quest_undo",
+        "description": "Undo the last change of an open quest document (its own undo ring, separate from the scene).",
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+    },
+    {
+        "name": "xfined_quest_redo",
+        "description": "Redo the last undone change of an open quest document.",
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+    },
+    {
+        "name": "xfined_quest_apply",
+        "description": "Apply operations to a quest (opens the document when needed; all-or-nothing, one undo step). "
+                       "'ops' is Lua text of a list: { { op = \"add_node\", node = { id = ..., kind = ..., params = { ... }, "
+                       "out = { next = \"x\" } } }, { op = \"set_node\", id = ..., patch = { kind/once/params/cond/on_enter/"
+                       "on_exit/out/pos/comment } }, { op = \"rename_node\", id, new_id } (updates references), "
+                       "{ op = \"remove_node\", id } (drops edges), { op = \"connect\", from, pin, to }, "
+                       "{ op = \"disconnect\", from, pin[, to] }, { op = \"add_action\", id, slot = \"enter\"|\"exit\"[, index], "
+                       "action = { kind, params } }, { op = \"set_action\", id, slot, index, patch = { kind/params } }, "
+                       "{ op = \"move_action\", id, slot, index[, to_id][, to_slot][, to_index] }, "
+                       "{ op = \"remove_action\", id, slot, index }, { op = \"set_quest\", patch = { id/title/activation/"
+                       "vars/tasks } }, { op = \"set_pos\", id, x, y } }. Indexes are 1-based. Returns problems and outline; "
+                       "the document stays open and dirty (xfined_quest_save writes it).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "ops": {"type": "string", "description": "Lua table text with the operation list"},
+            },
+            "required": ["path", "ops"],
+        },
+    },
+    {
+        "name": "xfined_quest_validate",
+        "description": "Validate a quest (open document or file on disk): problems with codes E001-E050 (block the "
+                       "build) and W011-W070 (warnings), plus outline.",
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+    },
+    {
+        "name": "xfined_quest_save",
+        "description": "Write an open quest document to its file (canonical text). Refuses with 'modified externally' "
+                       "when the file changed on disk since it was loaded, unless force=true.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "force": {"type": "boolean"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_quest_reload",
+        "description": "Re-read an open quest document from disk (drops unsaved changes and the undo history).",
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+    },
+    {
+        "name": "xfined_quest_layout",
+        "description": "Deterministic auto layout of the graph (layers by depth from the triggers, top-down). "
+                       "all=false places only nodes without pos. Returns the positions; the document stays dirty.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "all": {"type": "boolean"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_quest_view",
+        "description": "Open (or focus) the graph tab of a quest and set its view: frame='all' or a node id, "
+                       "zoom_level 0..9 (6 = 100%), cx/cy = world centre (cx/cy override 'frame'), "
+                       "slot='enter:0'/'exit:1' opens that action of the framed node in the inspector ('none' clears it). "
+                       "Then use xfined_screenshot_editor to look at it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "frame": {"type": "string"}, "zoom_level": {"type": "integer"},
+                           "cx": {"type": "number"}, "cy": {"type": "number"}, "slot": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_quest_lookup",
+        "description": "Search the game data behind the parameter pickers: type = item_section | squad_section | "
+                       "level | smart | story_id | profile | community | info | spot_type (from the linked game, cached), "
+                       "or the document-scoped task_id | var_name | ref_name | node_id (needs 'path') | quest_id "
+                       "(quests of the project). 'query' is a case-insensitive substring of id or name; 'limit' default 50.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string"},
+                "query": {"type": "string"},
+                "limit": {"type": "integer"},
+                "path": {"type": "string", "description": "quest path for document-scoped types"},
+            },
+            "required": ["type"],
+        },
+    },
+    {
+        "name": "xfined_quest_check_all",
+        "description": "The build gate: validate every quest of the project like xfined_mod_export does. Returns "
+                       "passed (no errors), error/warning counts and the log lines ('<path>: <code> <node>: <message>').",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 CMD_MAP = {
@@ -788,6 +962,23 @@ CMD_MAP = {
     "xfined_scene_tree": "scene_tree",
     "xfined_undo": "undo",
     "xfined_redo": "redo",
+    "xfined_quest_catalog": "quest_catalog",
+    "xfined_quest_list": "quest_list",
+    "xfined_quest_new": "quest_new",
+    "xfined_quest_open": "quest_open",
+    "xfined_quest_close": "quest_close",
+    "xfined_quest_get": "quest_get",
+    "xfined_quest_write": "quest_write",
+    "xfined_quest_undo": "quest_undo",
+    "xfined_quest_redo": "quest_redo",
+    "xfined_quest_apply": "quest_apply",
+    "xfined_quest_validate": "quest_validate",
+    "xfined_quest_save": "quest_save",
+    "xfined_quest_reload": "quest_reload",
+    "xfined_quest_layout": "quest_layout",
+    "xfined_quest_view": "quest_view",
+    "xfined_quest_lookup": "quest_lookup",
+    "xfined_quest_check_all": "quest_check_all",
 }
 
 

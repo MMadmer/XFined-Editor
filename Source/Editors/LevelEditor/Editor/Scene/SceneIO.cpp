@@ -859,6 +859,65 @@ bool EScene::LoadLTX(LPCSTR map_name, bool bUndo)
 	return false;
 }
 
+bool EScene::IsSceneFile(LPCSTR full_name, xr_string& why)
+{
+    why.clear();
+    if (!full_name || !full_name[0])		{ why = "empty scene name"; return false; }
+    if (!FS.exist(full_name))				{ why = "file not found"; return false; }
+
+    IReader* F = FS.r_open(full_name);
+    if (!F)									{ why = "cannot open the file"; return false; }
+
+    bool ok = false;
+    if (F->elapsed() > 0)
+    {
+        // the loader itself sniffs the first byte to pick the ltx path
+        const char first = *(const char*)F->pointer();
+        if ('[' == first)
+        {
+            // An ltx scene carries [version] value = N. Any other ini file (a
+            // project.ltx, a mod manifest, a config) would reach LoadLTX and die
+            // inside CInifile::r_u32 on the missing key, so check it by text -
+            // CInifile itself is fatal on malformed input.
+            const u32 len = F->elapsed();
+            xr_string text;
+            text.assign((const char*)F->pointer(), len);
+            xr_string low = text;
+            xr_strlwr(low);
+            u32 version = 0;
+            size_t sec = low.find("[version]");
+            if (sec == xr_string::npos)			why = "not a level file (no [version] section)";
+            else
+            {
+                size_t val = low.find("value", sec);
+                size_t next_sec = low.find('[', sec + 1);
+                if (val == xr_string::npos || (next_sec != xr_string::npos && val > next_sec))
+                    why = "not a level file (no version value)";
+                else
+                {
+                    size_t eq = low.find('=', val);
+                    if (eq != xr_string::npos) version = (u32)atoi(low.c_str() + eq + 1);
+                    if (version != CURRENT_FILE_VERSION)	why = "unsupported level version";
+                    else									ok = true;
+                }
+            }
+        }
+        else
+        {
+            u32 version = 0;
+            if (!F->r_chunk(CHUNK_VERSION, &version))	why = "not a level file (no version chunk)";
+            else if (version != CURRENT_FILE_VERSION)	why = "unsupported level version";
+            else										ok = true;
+        }
+    }
+    else
+        why = "the file is empty";
+
+    FS.r_close(F);
+    if (!ok && why.empty()) why = "not a level file";
+    return ok;
+}
+
 bool EScene::Load(LPCSTR map_name, bool bUndo)
 {
     u32 version = 0;
@@ -875,8 +934,15 @@ bool EScene::Load(LPCSTR map_name, bool bUndo)
             
         // read main level
         IReader* F 	= FS.r_open(full_name.c_str()); VERIFY(F);
-        // Version
-        R_ASSERT	(F->r_chunk(CHUNK_VERSION, &version));
+        // Version. A file the user picked is untrusted input, so a missing
+        // version chunk is a refusal, not an assert that kills the editor.
+        if (!F->r_chunk(CHUNK_VERSION, &version))
+        {
+            ELog.DlgMsg( mtError, "EScene: '%s' is not a level file.", map_name);
+            UI->UpdateScene();
+            FS.r_close(F);
+            return false;
+        }
         if (version!=CURRENT_FILE_VERSION)
         {
             ELog.DlgMsg( mtError, "EScene: unsupported file version. Can't load Level.");

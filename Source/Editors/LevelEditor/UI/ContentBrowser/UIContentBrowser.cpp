@@ -4,6 +4,8 @@
 #include "..\..\..\XrECore\Editor\EDX11Utils.h"
 #include "..\..\..\XrECore\Editor\EditorFileOps.h"
 #include "..\..\..\XrECore\Editor\EditorModManifest.h"
+#include "..\..\..\XrECore\Editor\Nq\NqExport.h"
+#include "..\QuestGraph\UIQuestGraph.h"
 
 // image formats the thumbnail path can decode directly
 static bool IsImageExt(LPCSTR name)
@@ -32,6 +34,13 @@ static bool IsObjectExt(LPCSTR name)
 {
 	LPCSTR ext = name ? strrchr(name, '.') : 0;
 	return ext && !_stricmp(ext, ".object");
+}
+
+// NQ quest graph asset (docs/NQ_ARCHITECTURE.md)
+static bool IsQuestExt(LPCSTR name)
+{
+	LPCSTR ext = name ? strrchr(name, '.') : 0;
+	return ext && !_stricmp(ext, ".nqasset");
 }
 
 // Nothing under the project root is registered in the editor FS: a project may
@@ -951,6 +960,16 @@ bool UIContentBrowser::OpenAsset(LPCSTR name, xr_string* err)
 		else if (s_ShowVisual)
 			s_ShowVisual(name);
 		return true;
+	}
+
+	// Quest graphs open in their own tab (project files only: the graph editor
+	// writes back through NqDoc, and the game/library sources are read-only)
+	if (IsQuestExt(name))
+	{
+		if (m_Source != 0) OPEN_FAILED("%s: quest graphs open from the project only", name);
+		xr_string q_err;
+		if (UIQuestGraph::Open(name, &q_err)) return true;
+		OPEN_FAILED("%s: %s", name, q_err.c_str());
 	}
 
 	// Textures get their own window, whatever source they came from. In the SDK
@@ -2122,6 +2141,11 @@ void UIContentBrowser::DrawGridContextMenu()
 	{
 		// the root included: a module's layout is its author's business
 		if (ImGui::MenuItem("New folder"))	CreateFolder();
+		if (ImGui::BeginMenu("Create"))
+		{
+			if (ImGui::MenuItem("Quest Graph"))	CreateQuest();
+			ImGui::EndMenu();
+		}
 		ImGui::Separator();
 	}
 
@@ -2283,6 +2307,41 @@ void UIContentBrowser::CreateFolder()
 	BeginRename		(rel.c_str());
 }
 
+void UIContentBrowser::CreateQuest()
+{
+	if (m_Source != 0 || !EditorProject::Active())	return;
+
+	// first free NewQuest.nqasset, NewQuest2.nqasset, ... in the open folder
+	xr_string rel;
+	string_path probe;
+	for (int n = 1; n <= 999; ++n)
+	{
+		char leaf[64];
+		if (1 == n)	xr_strcpy(leaf, sizeof(leaf), "NewQuest.nqasset");
+		else		sprintf_s(leaf, "NewQuest%d.nqasset", n);
+		if (m_CurFolder.empty())	sprintf_s(probe, "%s\\%s", EditorProject::Root(), leaf);
+		else						sprintf_s(probe, "%s\\%s\\%s", EditorProject::Root(), m_CurFolder.c_str(), leaf);
+		if (INVALID_FILE_ATTRIBUTES == ::GetFileAttributesA(probe))
+		{
+			rel = m_CurFolder;
+			if (!rel.empty()) rel += "\\";
+			rel += leaf;
+			break;
+		}
+	}
+	if (rel.empty())	{ ELog.DlgMsg(mtError, "Too many unnamed quests here."); return; }
+
+	xr_string err;
+	if (!NqExport::NewQuestTemplate(probe, err))
+	{
+		ELog.DlgMsg(mtError, "Cannot create the quest: %s", err.c_str());
+		return;
+	}
+	Refresh			();
+	ClearSelection	();
+	BeginRename		(rel.c_str());
+}
+
 void UIContentBrowser::BeginRename(LPCSTR path)
 {
 	if (m_Source != 0 || !path || !path[0])	return;
@@ -2317,6 +2376,16 @@ void UIContentBrowser::CommitRename()
 		ELog.DlgMsg(mtError, "A name cannot contain \\ / : * ? \" < > |");
 		return;
 	}
+	// a quest renamed without an extension keeps being a quest; putting the
+	// extension back can land on the old name again ("Quest.nqasset" -> "Quest"),
+	// which is not a rename at all
+	xr_string keep_ext;
+	if (IsQuestExt(old_leaf) && !strrchr(s, '.'))
+	{
+		keep_ext = xr_string(s) + ".nqasset";
+		s = const_cast<char*>(keep_ext.c_str());
+		if (0 == xr_strcmp(s, old_leaf)) return;
+	}
 
 	xr_string parent(was);
 	if (LPCSTR cut = strrchr(parent.c_str(), '\\'))
@@ -2336,7 +2405,7 @@ void UIContentBrowser::CommitRename()
 	}
 	if (!::MoveFileA(from, to))
 	{
-		ELog.DlgMsg(mtError, "Cannot rename the folder (error %d).", int(::GetLastError()));
+		ELog.DlgMsg(mtError, "Cannot rename '%s' (error %d).", old_leaf, int(::GetLastError()));
 		return;
 	}
 

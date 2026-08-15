@@ -5,6 +5,8 @@
 #include "..\..\XrECore\Editor\EditorGameModes.h"
 #include "..\..\XrECore\Editor\EditorFileOps.h"
 #include "..\..\XrECore\Editor\EThumbnailVisual.h"
+#include "..\..\XrECore\Editor\Nq\NqMcp.h"
+#include "..\UI\QuestGraph\UIQuestGraph.h"
 #include "EditorModScene.h"
 #include "Utils\Cursor3D.h"
 #include "..\xrengine\GameFont.h"
@@ -182,9 +184,19 @@ CCommandVar CommandLoad(CCommandVar p1, CCommandVar p2)
 	        xr_string temp_fn		= p1;
             xr_strlwr				(temp_fn);
 
+            // COMMAND_CLEAR below throws the open scene away, so a name that is
+            // not a scene at all must be refused BEFORE that - it used to reach
+            // EScene::Load and take the editor down with it
+            xr_string why;
+            if (!EScene::IsSceneFile(temp_fn.c_str(), why))
+            {
+                ELog.DlgMsg			(mtError, "Can't load map '%s': %s", temp_fn.c_str(), why.c_str());
+                return FALSE;
+            }
+
             if (!Scene->IfModified())
             	return FALSE;
-            
+
             UI->SetStatus			("Level loading...");
             ExecCommand				(COMMAND_CLEAR);
 
@@ -1184,28 +1196,43 @@ CCommandVar CommandModBuild(CCommandVar p1, CCommandVar p2)
 //------------------------------------------------------------------------------
 // MCP inspector: scene / selection / per-object info for AI agents
 //------------------------------------------------------------------------------
+// JSON string body. Object names on real levels are library paths
+// ("statics\sign\..."), scene names are full paths: a raw copy is not valid
+// JSON and a strict client fails on the whole reply. Never truncates.
+static xr_string JsonStr(LPCSTR s)
+{
+    xr_string r;
+    for (LPCSTR c = s ? s : ""; *c; ++c)
+    {
+        switch (*c)
+        {
+        case '\\':	r += "\\\\";	break;
+        case '"':	r += "\\\"";	break;
+        case '\n':	r += "\\n";		break;
+        case '\r':	r += "\\r";		break;
+        case '\t':	r += "\\t";		break;
+        default:
+            if (u8(*c) < 0x20)	{ char u[8]; sprintf_s(u, "\\u%04x", int(u8(*c))); r += u; }
+            else				r += *c;
+        }
+    }
+    return r;
+}
+
 static void AppendObjectJson(xr_string& out, CCustomObject* obj, LPCSTR cls)
 {
-    char tmp[1024];
+    char tmp[512];
     const Fvector& p = obj->GetPosition();
     const Fvector& r = obj->GetRotation();
     const Fvector& s = obj->GetScale();
-    // object names on real levels are library paths ("statics\sign\...") -
-    // raw backslashes are invalid JSON escapes and kill the whole response
-    char safe[512];
-    {
-        u32 o = 0;
-        for (LPCSTR c = obj->GetName(); *c && o + 2 < sizeof(safe); ++c)
-        {
-            if (*c == '\\' || *c == '"') safe[o++] = '\\';
-            safe[o++] = *c;
-        }
-        safe[o] = 0;
-    }
+    out += "{\"name\":\"";
+    out += JsonStr(obj->GetName());
+    out += "\",\"class\":\"";
+    out += JsonStr(cls);
+    out += "\",";
     sprintf_s(tmp,
-        "{\"name\":\"%s\",\"class\":\"%s\",\"selected\":%s,\"visible\":%s,"
+        "\"selected\":%s,\"visible\":%s,"
         "\"position\":[%.3f,%.3f,%.3f],\"rotation\":[%.4f,%.4f,%.4f],\"scale\":[%.3f,%.3f,%.3f]}",
-        safe, cls,
         obj->Selected() ? "true" : "false",
         obj->Visible() ? "true" : "false",
         p.x, p.y, p.z, r.x, r.y, r.z, s.x, s.y, s.z);
@@ -1376,9 +1403,12 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             if (!first) out += ",";
             first = false;
 
-            char head[192];
-            sprintf_s(head, sizeof(head), "{\"id\":%u,\"name\":\"%s\"", i, C->Name());
+            // command names are menu paths ("Mod\Build Into Game")
+            char head[64];
+            sprintf_s(head, sizeof(head), "{\"id\":%u,\"name\":\"", i);
             out += head;
+            out += JsonStr(C->Name());
+            out += "\"";
             if (C->Desc() && C->Desc()[0])
             {
                 out += ",\"menu\":\"";
@@ -1454,9 +1484,11 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
 
         CCommandVar res = ExecCommand(u32(id), P1, P2);
 
-        char head[128];
-        sprintf_s(head, sizeof(head), "{\"ok\":true,\"id\":%d,\"name\":\"%s\",\"result\":", id, cmds[id]->Name());
+        char head[64];
+        sprintf_s(head, sizeof(head), "{\"ok\":true,\"id\":%d,\"name\":\"", id);
         out = head;
+        out += JsonStr(cmds[id]->Name());		// menu path: carries backslashes
+        out += "\",\"result\":";
         if (res.IsInteger())	{ char b[16]; sprintf_s(b, "%u", u32(res)); out += b; }
         else					{ out += "\""; out += JsonEscapePath(xr_string(res).c_str()); out += "\""; }
         out += "}";
@@ -1793,9 +1825,11 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
                 if (contains[0] && !strstr(low, contains)) continue;
                 ++matched;
                 if (emitted >= limit) continue;
-                char tmp[512];
-                sprintf_s(tmp, "%s{\"name\":\"%s\",\"selected\":%s,\"visible\":%s}",
-                    emitted ? "," : "", (*o)->GetName(),
+                char tmp[128];
+                if (emitted) body += ",";
+                body += "{\"name\":\"";
+                body += JsonStr((*o)->GetName());
+                sprintf_s(tmp, "\",\"selected\":%s,\"visible\":%s}",
                     (*o)->Selected() ? "true" : "false",
                     (*o)->Visible() ? "true" : "false");
                 body += tmp;
@@ -1834,10 +1868,12 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
                 if (contains[0] && !strstr((*o)->GetName(), contains)) continue;
                 ++total;
                 if (emitted >= limit) continue;
-                char tmp[512];
-                sprintf_s(tmp, "%s{\"name\":\"%s\",\"class\":\"%s\"}",
-                    emitted ? "," : "", (*o)->GetName(), t->ClassName());
-                out += tmp;
+                if (emitted) out += ",";
+                out += "{\"name\":\"";
+                out += JsonStr((*o)->GetName());
+                out += "\",\"class\":\"";
+                out += JsonStr(t->ClassName());
+                out += "\"}";
                 ++emitted;
             }
         }
@@ -2848,6 +2884,10 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
         return true;
     }
 
+    // quest graph (NQ) commands: project-scoped, no scene needed, no dialogs
+    if (0 == xr_strcmp(cmd, "quest_view")) { UIQuestGraph::McpView(raw, out); return true; }
+    if (NqMcp::Handle(cmd, raw, out)) return true;
+
     return false;
 }
 
@@ -3324,6 +3364,11 @@ void CLevelMain::OnDrawUI()
     inherited::OnDrawUI();
     // floating panels stay hidden while the project browser or the blocking
     // Link Game page owns the screen
+    // quest tabs need a project, not a linked game: their documents can be opened
+    // over MCP before the link exists, and a tab that is never pumped keeps a
+    // document nobody can see (the Link Game page is a modal, so it stays on top)
+    if (EditorProject::Active())
+        UIQuestGraph::Update();
     if (EditorProject::Active() && EditorProject::GameLinked())
     {
         UIObjectList::Update();

@@ -40,3 +40,6 @@ gamedata/spawns/
 gamedata/textures/
 /*.ini
 *.vcxproj.user
+
+# local documentation search index, not project content
+/docs/index.bleve/

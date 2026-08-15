@@ -174,6 +174,10 @@ public:
 
 	bool 			Load(LPCSTR map_name, bool bUndo);
 	bool 			LoadLTX(LPCSTR map_name, bool bUndo);
+	// Is this file loadable as a scene at all? A load clears the open scene
+	// before it reads anything, so an untrusted name (MCP, recent list, a
+	// double click on the wrong asset) has to be rejected before that happens.
+	static bool		IsSceneFile(LPCSTR full_name, xr_string& why);
 
 	void 			Save(LPCSTR map_name, bool bUndo, bool bForceSaveAll);
 	void 			SaveLTX(LPCSTR map_name, bool bUndo, bool bForceSaveAll);

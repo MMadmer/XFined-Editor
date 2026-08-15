@@ -68,6 +68,10 @@ public:
 	void DockLayoutBegin(unsigned int dockspace_id);
 	void DockLayoutPlace(const char* window_name, EDockSlot slot);
 	void DockLayoutEnd();
+	// Docks the window that is about to Begin() where `next_to` sits right now
+	// (first use only, so the user can move it afterwards). Windows created at
+	// runtime carry a generated name, so the default layout cannot name them.
+	void DockNextWindowWith(const char* next_to);
 protected:
 	virtual void OnDrawUI();
 

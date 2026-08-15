@@ -50,6 +50,9 @@ target_link_libraries(XrDXT PRIVATE RedImageTool XrCore)
 #-- XrECore --------------------------------------------------------------------
 # in-project trees
 xray_glob(XRECORE_EDITOR "${ED}/XrECore/Editor" EXCLUDE bone.cpp)
+# quest graph core (model, Lua IO, catalog, validator, documents, MCP, export gate)
+file(GLOB XRECORE_NQ CONFIGURE_DEPENDS "${ED}/XrECore/Editor/Nq/*.cpp")
+list(APPEND XRECORE_EDITOR ${XRECORE_NQ})
 xray_glob(XRECORE_ENGINE "${ED}/XrECore/Engine"
     EXCLUDE cl_collector.cpp GameMtlLib.cpp GameMtlLib_Engine.cpp)
 xray_glob(XRECORE_WM     "${ED}/XrECore/WildMagic")

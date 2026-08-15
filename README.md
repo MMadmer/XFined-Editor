@@ -23,6 +23,14 @@ port of the original GSC editors to x64 + ImGui.
   the editor's configs, so the Spawn tool offers that game's real roster
   (14k+ sections for Dead Air) instead of the SDK's stock one. Pick the tool
   with the radio button in `LeftBar → Tools`; its panel opens underneath.
+* **Quest graphs (NQ)** — author whole quests as node graphs: dialogs, PDA
+  tasks, objectives, triggers and conditions in one `.nqasset` per quest. The
+  editor never compiles them — it validates and ships the file, and Dead Air
+  Refined's NQ runtime interprets it, so a game update fixes every mod's quests
+  at once. Infinite top-down canvas plus a text path that is equally
+  first-class: the file is declarative Lua and the full `quest_*` MCP toolset
+  reads and writes it without a single screenshot. See
+  [docs/nq/NQ_FORMAT.md](docs/nq/NQ_FORMAT.md).
 * **One-click mod build** — `Mod → Build Mod into Game` (`Ctrl+B`, or the
   toolbar button) does a clean mirrored build into `<game>\modules\<id>`.
   See [docs/MOD_QUICKSTART.md](docs/MOD_QUICKSTART.md).

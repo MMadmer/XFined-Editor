@@ -115,9 +115,50 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_exec_command` | execute ANY registry command — the same dispatch menus and shortcuts use. Address by `id`, `COMMAND_*` `name` or menu path; `p1s`/`p2s` pass strings, `p1i`/`p2i` integers. Prefer a dedicated tool when one exists; this is the escape hatch for everything else |
 | `xfined_undo` | undo the last scene operation |
 | `xfined_redo` | redo the last undone scene operation |
+| `xfined_quest_catalog` | the quest kind catalog (NQ, see below): every trigger / main action / extra action / condition kind with `group`, `title`, `desc`, `use`, `params` (name, type, required, default, min/max, enum), `pins`, `wait`/`once`, `event`; plus catalog `version` and `source` (`game` = read from the linked install, `bundled` = the editor's fallback copy). Read it before writing a quest |
+| `xfined_quest_list` | every `*.nqasset` of the project: path, id, title, node count, errors/warnings, open/dirty (unparsable files: `readable:false` + the parse error) |
+| `xfined_quest_new` | create a quest from the minimal template (`trigger.start -> flow.end`, id = file name) at a project-relative `path` and open it; refuses to overwrite |
+| `xfined_quest_open` / `xfined_quest_close` | open a quest document (validates, lays out nodes without `pos`) / close it (`discard:true` drops unsaved edits, otherwise a dirty document answers `unsaved`) |
+| `xfined_quest_get` | the quest as text: `lua` (canonical file text), `outline` (one line per node in flow order + the problems), `problems` `[{code,severity,node,slot,message}]`, counts. Works for files that are not open |
+| `xfined_quest_write` | replace a quest with the whole file text `lua`. Open document: replaced in memory with an undo snapshot (`saved:false`, then `xfined_quest_save`). Closed or new file: written to disk canonically when it parses (`saved:true`). Validation problems are returned but never block the write - only the build refuses errors |
+| `xfined_quest_apply` | point edits: `ops` = Lua text of a list of operations (`add_node`, `set_node`, `rename_node`, `remove_node`, `connect`, `disconnect`, `add_action`, `set_action`, `move_action`, `remove_action`, `set_quest`, `set_pos`; 1-based indexes), all-or-nothing, one undo step; opens the document when needed and leaves it dirty |
+| `xfined_quest_undo` / `xfined_quest_redo` | the quest document's own undo ring (200 steps; the scene undo never touches quests) |
+| `xfined_quest_validate` | problems of a quest (open document or file): `E001-E050` block the build, `W011-W070` warn |
+| `xfined_quest_save` / `xfined_quest_reload` | write the open document canonically (`force:true` overrides "modified externally") / re-read it from disk |
+| `xfined_quest_layout` | deterministic top-down auto layout (`all:false` = only nodes without `pos`); returns the positions |
+| `xfined_quest_view` | open/focus the graph tab and set the view (`frame:"all"|<node>`, `zoom_level` 0..9, `cx`/`cy` which override `frame`, `slot:"enter:0"`/`"exit:1"` to open that action of the framed node in the inspector, `"none"` to clear); answers with the resulting `zoom_level`/`center`/`selected`/`slot`; follow with `xfined_screenshot_editor` |
+| `xfined_quest_lookup` | search picker data: `type` = `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `spot_type` (from the linked game) or `task_id`, `var_name`, `ref_name`, `node_id` (need `path`), `quest_id` (project quests); `query` substring, `limit` |
+| `xfined_quest_check_all` | the build gate on its own: validates every quest of the project exactly like `xfined_mod_export` does (`passed`, counts, log lines) |
 
 Everything that writes is clamped to the project folder: the linked game install
 and the shared SDK library are sources you copy **out of**, never into.
+
+## Quest workflow for AI (NQ quest graphs)
+
+A quest is one `.nqasset` file = declarative Lua (`return { nq = 1, id = ...,
+title = ..., activation = "auto", vars = {...}, tasks = {...}, nodes = {...} }`)
+that the game interprets at runtime; the editor never compiles it. Everything is
+text, no screenshots needed: coordinates (`pos`) are optional, problems come
+back as codes, `xfined_quest_get` returns the canonical file plus an outline of
+the graph. Full contract: `docs/NQ_ARCHITECTURE.md` (§4 format, §6 kinds, §15
+codes), examples: `docs/nq/examples/*.nqasset`.
+
+1. `xfined_quest_catalog` — learn the kinds: node kinds (`use` main/trigger)
+   with their `params` and `pins`, extra actions for `on_enter`/`on_exit`,
+   conditions for `cond` (`event = true` ones only in `trigger.when` /
+   `wait.when` / `wait.any`).
+2. `xfined_quest_write` with the whole file (or `xfined_quest_new` + `xfined_quest_apply`).
+   Ids are `[a-z0-9_]`; a node is `{ id, kind, params, cond, on_enter, on_exit, out = { pin = "id" | { "id", ... } } }`;
+   phrases (`dialog.npc_phrase` / `dialog.actor_phrase`) hang off a `dialog.topic`
+   through `next` and must alternate speakers; refs to things the quest spawns
+   are `{ ref = "name" }`, world objects `{ story = "story_id" }` (look them up
+   with `xfined_quest_lookup`).
+3. Read the answer: `errors` must be 0 (`W`-codes are hints: `W060` = value not
+   found in the linked game, `W011` = a phrase with only conditional replies).
+   Fix and write again; `xfined_quest_get` shows the canonical text and outline.
+4. `xfined_quest_check_all`, then `xfined_mod_export` — the export refuses with
+   `quest graph errors: N (see log)` while any quest has an `E` problem; the
+   `.nqasset` files ship into `<game>\modules\<id>\` unchanged.
 
 ## Raw protocol (if you don't want the bridge)
 
@@ -161,3 +202,10 @@ error. One client connection at a time.
 > ("Editor Content") and the linked game install ("DARF Content") are read-only
 > sources: pull assets out of them with `xfined_content_browser_copy`, which
 > puts each one where the engine expects it.
+>
+> Quests are `.nqasset` files (declarative Lua graphs, see the "Quest workflow"
+> section): `xfined_quest_catalog` for the kinds, `xfined_quest_write` /
+> `xfined_quest_apply` to author, `xfined_quest_get` for the canonical text and
+> outline, `xfined_quest_validate` / `xfined_quest_check_all` before
+> `xfined_mod_export`. Never draw the graph from screenshots - the outline and
+> the problem codes are the working view.

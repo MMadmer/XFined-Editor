@@ -1,0 +1,951 @@
+#include "stdafx.h"
+#include "NqInspector.h"
+#include "../../../XrECore/Editor/Nq/NqLua.h"
+#include "../../../XrECore/Editor/Nq/NqPickers.h"
+#include "../../../XrECore/Editor/Nq/NqUtil.h"
+
+namespace
+{
+	// text widgets over xr_string: the buffer is refilled from the model every
+	// frame and written back on every change, so ImGui's own edit state and the
+	// staged copy never diverge. It grows with the value - a fixed buffer would
+	// silently truncate long texts and Lua bodies the moment they are edited.
+	bool InputStr(LPCSTR label, xr_string& s, bool multiline = false, float height = 0.f)
+	{
+		static xr_vector<char> buf;
+		const size_t need = s.size() + 4096;
+		if (buf.size() < need) buf.resize(need);
+		memcpy(&buf[0], s.c_str(), s.size() + 1);
+		bool changed = multiline
+			? ImGui::InputTextMultiline(label, &buf[0], buf.size(), ImVec2(-FLT_MIN, height > 0.f ? height : ImGui::GetTextLineHeight() * 4.f))
+			: ImGui::InputText(label, &buf[0], buf.size());
+		if (changed) s = &buf[0];
+		return changed;
+	}
+
+	// ImGui hides everything after "##" in a widget label, plain text does not -
+	// labels that carry an id suffix must be trimmed before they are printed
+	LPCSTR Shown(LPCSTR label, xr_string& tmp)
+	{
+		LPCSTR h = label ? strstr(label, "##") : 0;
+		if (!h) return label ? label : "";
+		tmp.assign(label, h - label);
+		return tmp.c_str();
+	}
+
+	bool ComboStr(LPCSTR label, xr_string& cur, const xr_vector<xr_string>& items, LPCSTR empty_label = 0)
+	{
+		bool changed = false;
+		LPCSTR preview = cur.empty() ? (empty_label ? empty_label : "") : cur.c_str();
+		if (ImGui::BeginCombo(label, preview))
+		{
+			if (empty_label && ImGui::Selectable(empty_label, cur.empty())) { cur.clear(); changed = true; }
+			for (u32 i = 0; i < items.size(); ++i)
+				if (ImGui::Selectable(items[i].c_str(), cur == items[i])) { cur = items[i]; changed = true; }
+			ImGui::EndCombo();
+		}
+		return changed;
+	}
+
+	xr_vector<xr_string> Items(LPCSTR a, LPCSTR b = 0, LPCSTR c = 0, LPCSTR d = 0, LPCSTR e = 0)
+	{
+		xr_vector<xr_string> v;
+		if (a) v.push_back(a); if (b) v.push_back(b); if (c) v.push_back(c); if (d) v.push_back(d); if (e) v.push_back(e);
+		return v;
+	}
+
+	// which single key of a "mode table" is set (story/ref/profile/community/...)
+	xr_string ModeOf(const SNqValue& v, const xr_vector<xr_string>& modes)
+	{
+		if (!v.IsTable()) return "";
+		for (u32 i = 0; i < modes.size(); ++i) if (v.Has(modes[i].c_str())) return modes[i];
+		return "";
+	}
+
+	bool NodeEquals(const SNqNode& a, const SNqNode& b)
+	{
+		SNqValue va, vb;
+		NqLua::NodeToValue(a, va);
+		NqLua::NodeToValue(b, vb);
+		return va.Equals(vb) && a.has_pos == b.has_pos;
+	}
+
+	void SplitSlot(const xr_string& sel, xr_string& slot, int& index)
+	{
+		slot.clear(); index = -1;
+		LPCSTR c = strchr(sel.c_str(), ':');
+		if (!c) return;
+		slot.assign(sel.c_str(), c - sel.c_str());
+		index = atoi(c + 1);
+	}
+}
+
+NqInspector::NqInspector(NqDoc* doc) : m_Doc(doc)
+{
+	m_NodeRev = m_QuestRev = u32(-1);
+	m_NodeDirty = m_QuestDirty = false;
+	m_FocusRename = m_FocusAction = false;
+	m_Search[0] = 0;
+}
+
+//------------------------------------------------------------------------------
+// staging
+//------------------------------------------------------------------------------
+void NqInspector::SyncNode()
+{
+	xr_string sel = m_Doc->selection.size() == 1 ? m_Doc->selection[0] : "";
+	if (sel != m_NodeId || m_NodeRev != m_Doc->revision)
+	{
+		// a pending edit reaches the document before the staged copy is
+		// refilled - the document moving under us (MCP, layout, canvas drag)
+		// must not swallow what the user typed
+		if (m_NodeDirty) CommitNode();
+		m_NodeId = sel;
+		m_NodeRev = m_Doc->revision;
+		m_NodeDirty = false;
+		const SNqNode* n = sel.empty() ? 0 : m_Doc->quest.FindNode(sel.c_str());
+		if (n) m_Node = *n; else m_Node = SNqNode();
+	}
+}
+
+void NqInspector::CommitNode()
+{
+	if (!m_NodeDirty || m_NodeId.empty()) return;
+	const SNqNode* cur = m_Doc->quest.FindNode(m_NodeId.c_str());
+	m_NodeDirty = false;
+	if (!cur || NodeEquals(*cur, m_Node)) return;
+	SNqNode staged = m_Node;
+	xr_string id = m_NodeId;
+	m_Doc->Edit([&](SNqQuest& q)
+	{
+		SNqNode* n = q.FindNode(id.c_str());
+		if (!n) return;
+		// the canvas owns the coordinates; the inspector never edits them and
+		// must not write a stale copy back over a drag or an auto layout
+		const Fvector2 keep_pos = n->pos;
+		const bool keep_has = n->has_pos;
+		*n = staged;
+		n->pos = keep_pos;
+		n->has_pos = keep_has;
+	});
+	m_NodeRev = m_Doc->revision;
+}
+
+void NqInspector::SyncQuest()
+{
+	if (m_QuestRev != m_Doc->revision)
+	{
+		if (m_QuestDirty) CommitQuest();
+		m_Quest = m_Doc->quest;
+		m_Quest.nodes.clear();		// only the header is staged here
+		m_QuestRev = m_Doc->revision;
+		m_QuestDirty = false;
+	}
+}
+
+void NqInspector::CommitQuest()
+{
+	if (!m_QuestDirty) return;
+	m_QuestDirty = false;
+	SNqQuest h = m_Quest;
+	m_Doc->Edit([&](SNqQuest& q)
+	{
+		q.id = h.id; q.title = h.title; q.activation = h.activation;
+		q.vars = h.vars; q.tasks = h.tasks;
+	});
+	m_QuestRev = m_Doc->revision;
+}
+
+//------------------------------------------------------------------------------
+// frame
+//------------------------------------------------------------------------------
+void NqInspector::Draw(bool focus_rename, bool focus_action)
+{
+	m_FocusRename |= focus_rename;
+	m_FocusAction |= focus_action;
+	SyncNode();
+	SyncQuest();
+
+	float avail = ImGui::GetContentRegionAvail().y;
+	float upper = avail * 0.6f;
+	xr_string slot; int index;
+	SplitSlot(m_Doc->sel_slot, slot, index);
+	bool has_action = !m_NodeId.empty() && !slot.empty();
+	if (!has_action) upper = avail;
+
+	ImGui::BeginChild("nq_insp_top", ImVec2(0, upper), true);
+	if (m_NodeId.empty())	DrawQuestSection();
+	else					DrawNodeSection();
+	ImGui::EndChild();
+
+	if (has_action)
+	{
+		ImGui::BeginChild("nq_insp_bottom", ImVec2(0, 0), true);
+		DrawActionSection();
+		ImGui::EndChild();
+	}
+
+	// commit staged edits once the user lets go of the widget
+	if (!ImGui::IsAnyItemActive())
+	{
+		if (m_NodeDirty)  CommitNode();
+		if (m_QuestDirty) CommitQuest();
+	}
+}
+
+//------------------------------------------------------------------------------
+// quest header
+//------------------------------------------------------------------------------
+void NqInspector::DrawQuestSection()
+{
+	ImGui::TextDisabled("Quest");
+	ImGui::Separator();
+	bool ch = false;
+	ch |= InputStr("id", m_Quest.id);
+	ch |= DrawText("title", m_Quest.title, false);
+	{
+		xr_vector<xr_string> acts = Items("auto", "manual");
+		ch |= ComboStr("activation", m_Quest.activation, acts);
+	}
+
+	if (ImGui::CollapsingHeader("Variables", ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		// CollapsingHeader pushes no id scope, so without one of its own this
+		// list shares its ids with the Tasks list below (both PushID(i), both
+		// label the delete button "x") and only the first "x" drawn ever fires
+		ImGui::PushID("vars");
+		for (u32 i = 0; i < m_Quest.vars.size(); ++i)
+		{
+			ImGui::PushID((int)i);
+			ImGui::SetNextItemWidth(120.f);
+			ch |= InputStr("##name", m_Quest.vars[i].name);
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(-40.f);
+			ch |= DrawScalarValue("##val", m_Quest.vars[i].value);
+			ImGui::SameLine();
+			if (ImGui::SmallButton("x")) { m_Quest.vars.erase(m_Quest.vars.begin() + i); ch = true; ImGui::PopID(); break; }
+			ImGui::PopID();
+		}
+		if (ImGui::SmallButton("+ variable"))
+		{
+			SNqVar v; v.name = NqUtil::Format("var%d", int(m_Quest.vars.size() + 1)); v.value = SNqValue::Bool(false);
+			m_Quest.vars.push_back(v); ch = true;
+		}
+		ImGui::PopID();
+	}
+
+	if (ImGui::CollapsingHeader("Tasks", ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		ImGui::PushID("tasks");
+		for (u32 i = 0; i < m_Quest.tasks.size(); ++i)
+		{
+			SNqTask& t = m_Quest.tasks[i];
+			ImGui::PushID((int)i);
+			bool open = ImGui::TreeNodeEx("##task", ImGuiTreeNodeFlags_DefaultOpen, "%s", t.id.c_str());
+			ImGui::SameLine();
+			if (ImGui::SmallButton("x")) { m_Quest.tasks.erase(m_Quest.tasks.begin() + i); ch = true; if (open) ImGui::TreePop(); ImGui::PopID(); break; }
+			if (open)
+			{
+				ch |= InputStr("id##t", t.id);
+				ch |= DrawText("title##t", t.title, false);
+				ch |= DrawText("descr##t", t.descr, true);
+				xr_vector<xr_string> types = Items("additional", "storyline");
+				ch |= ComboStr("type##t", t.type, types);
+				ch |= DrawNpcRef("target##t", t.target, true, false);
+				ch |= InputStr("icon##t", t.icon);
+				ImGui::TreePop();
+			}
+			ImGui::PopID();
+		}
+		if (ImGui::SmallButton("+ task"))
+		{
+			SNqTask t; t.id = NqUtil::Format("task%d", int(m_Quest.tasks.size() + 1)); t.type = "additional";
+			t.title = SNqValue::String(""); t.descr = SNqValue::String("");
+			m_Quest.tasks.push_back(t); ch = true;
+		}
+		ImGui::PopID();
+	}
+	if (ch) m_QuestDirty = true;
+
+	ImGui::Separator();
+	ImGui::TextDisabled("%d node(s), %d error(s), %d warning(s)", int(m_Doc->quest.nodes.size()), m_Doc->ErrorCount(), m_Doc->WarningCount());
+}
+
+//------------------------------------------------------------------------------
+// node
+//------------------------------------------------------------------------------
+void NqInspector::DrawNodeSection()
+{
+	const NqCatalog::SKind* k = NqCatalog::Find(m_Node.kind.c_str());
+	bool trig = NqText::IsTrigger(m_Node.kind.c_str());
+	ImGui::TextDisabled(trig ? "Trigger" : "Node");
+	ImGui::SameLine();
+	ImGui::TextDisabled("  %s", m_Node.kind.c_str());
+	ImGui::Separator();
+
+	// id: renamed through the document so references follow
+	{
+		static char idbuf[128];
+		strncpy_s(idbuf, sizeof(idbuf), m_Node.id.c_str(), _TRUNCATE);
+		if (m_FocusRename) { ImGui::SetKeyboardFocusHere(); m_FocusRename = false; }
+		if (ImGui::InputText("id", idbuf, sizeof(idbuf), ImGuiInputTextFlags_EnterReturnsTrue) || ImGui::IsItemDeactivatedAfterEdit())
+		{
+			xr_string nid = NqUtil::Trim(idbuf);
+			if (nid != m_Node.id && !nid.empty())
+			{
+				CommitNode();
+				xr_string err;
+				if (m_Doc->RenameNode(m_Node.id.c_str(), nid.c_str(), err))
+				{
+					m_Doc->selection.clear(); m_Doc->selection.push_back(nid);
+					m_NodeId = nid; m_Node.id = nid; m_NodeRev = m_Doc->revision;
+				}
+				else if (!err.empty()) Msg("! [nq] rename: %s", err.c_str());
+			}
+		}
+	}
+
+	bool ch = false;
+	// kind
+	{
+		xr_string kind = m_Node.kind;
+		if (DrawKindCombo("kind", trig ? NqCatalog::useTrigger : NqCatalog::useMain, kind) && kind != m_Node.kind)
+		{
+			m_Node.kind = kind;
+			m_Node.params = SNqValue::Table();
+			m_Node.once_set = false;
+			k = NqCatalog::Find(kind.c_str());
+			// par. 13.9 resets the parameters, not the wiring: an edge on a pin the
+			// new kind still declares stays (next -> next, done -> done). Case pins
+			// go with the cases the parameter reset just dropped.
+			xr_vector<SNqPin> keep;
+			for (u32 p = 0; p < m_Node.out.size(); ++p)
+				if (k && k->HasPin(m_Node.out[p].first.c_str())) keep.push_back(m_Node.out[p]);
+			m_Node.out = keep;
+			ch = true;
+		}
+	}
+	// once
+	if (!trig && k)
+	{
+		bool once = m_Node.once_set ? m_Node.once : k->once_default;
+		if (ImGui::Checkbox("once", &once)) { m_Node.once = once; m_Node.once_set = true; ch = true; }
+		if (m_Node.once_set) { ImGui::SameLine(); if (ImGui::SmallButton("default##once")) { m_Node.once_set = false; m_Node.once = k->once_default; ch = true; } }
+	}
+
+	if (k)
+	{
+		if (!k->desc.empty()) ImGui::TextWrapped("%s", k->desc.c_str());
+		ImGui::Spacing();
+		ch |= DrawParams(k, m_Node.params, "np");
+	}
+	else
+		ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "unknown kind - not in the catalog");
+
+	// conditions (all main/trigger kinds may carry them; the validator says where they matter)
+	if (ImGui::CollapsingHeader("Conditions", ImGuiTreeNodeFlags_DefaultOpen))
+		ch |= DrawCondList(m_Node.cond, "nc", 0);
+
+	// comment
+	ch |= InputStr("comment", m_Node.comment);
+
+	// pins summary
+	if (!m_Node.out.empty())
+	{
+		ImGui::Separator();
+		ImGui::TextDisabled("Outputs");
+		for (u32 p = 0; p < m_Node.out.size(); ++p)
+		{
+			xr_string tg;
+			for (u32 t = 0; t < m_Node.out[p].second.size(); ++t) { if (t) tg += ", "; tg += m_Node.out[p].second[t]; }
+			ImGui::BulletText("%s -> %s", m_Node.out[p].first.c_str(), tg.c_str());
+		}
+	}
+
+	// actions summary with selection
+	ImGui::Separator();
+	for (int pass = 0; pass < 2; ++pass)
+	{
+		LPCSTR slot = pass == 0 ? "enter" : "exit";
+		xr_vector<SNqAction>& v = m_Node.Slot(slot);
+		ImGui::TextDisabled(pass == 0 ? "on_enter" : "on_exit");
+		for (u32 i = 0; i < v.size(); ++i)
+		{
+			const NqCatalog::SKind* ak = NqCatalog::Find(v[i].kind.c_str());
+			xr_string sel = xr_string(slot) + ":" + NqUtil::Format("%d", (int)i);
+			xr_string label = NqUtil::Format("%d. %s##%s%d", (int)i + 1, ak ? ak->title.c_str() : v[i].kind.c_str(), slot, (int)i);
+			if (ImGui::Selectable(label.c_str(), m_Doc->sel_slot == sel)) m_Doc->sel_slot = sel;
+		}
+	}
+
+	// node problems
+	bool any = false;
+	for (u32 i = 0; i < m_Doc->problems.size(); ++i)
+		if (m_Doc->problems[i].node_id == m_NodeId)
+		{
+			if (!any) { ImGui::Separator(); any = true; }
+			ImGui::TextColored(m_Doc->problems[i].IsError() ? ImVec4(1, 0.45f, 0.4f, 1) : ImVec4(1, 0.85f, 0.4f, 1), "%s", m_Doc->problems[i].Text().c_str());
+		}
+
+	if (ch) m_NodeDirty = true;
+}
+
+//------------------------------------------------------------------------------
+// action
+//------------------------------------------------------------------------------
+void NqInspector::DrawActionSection()
+{
+	xr_string slot; int index;
+	SplitSlot(m_Doc->sel_slot, slot, index);
+	// SNqNode::Slot answers on_enter for every name it does not know, so an
+	// unexpected slot would silently edit the wrong list
+	if (!m_Node.SlotC(slot.c_str())) { ImGui::TextDisabled("no action selected"); m_Doc->sel_slot.clear(); return; }
+	xr_vector<SNqAction>& v = m_Node.Slot(slot.c_str());
+	if (index < 0 || index >= (int)v.size()) { ImGui::TextDisabled("no action selected"); m_Doc->sel_slot.clear(); return; }
+	SNqAction& a = v[index];
+	ImGui::TextDisabled("Action  %s #%d", slot.c_str(), index + 1);
+	ImGui::SameLine(ImGui::GetContentRegionAvail().x - 90.f);
+	bool ch = false;
+	if (ImGui::SmallButton("up") && index > 0)   { std::swap(v[index], v[index - 1]); m_Doc->sel_slot = slot + ":" + NqUtil::Format("%d", index - 1); ch = true; }
+	ImGui::SameLine();
+	if (ImGui::SmallButton("down") && index + 1 < (int)v.size()) { std::swap(v[index], v[index + 1]); m_Doc->sel_slot = slot + ":" + NqUtil::Format("%d", index + 1); ch = true; }
+	ImGui::SameLine();
+	if (ImGui::SmallButton("remove")) { v.erase(v.begin() + index); m_Doc->sel_slot.clear(); m_NodeDirty = true; return; }
+	ImGui::Separator();
+	if (ch) { m_NodeDirty = true; return; }
+
+	if (m_FocusAction) { ImGui::SetKeyboardFocusHere(); m_FocusAction = false; }
+	xr_string kind = a.kind;
+	if (DrawKindCombo("kind##a", NqCatalog::useExtra, kind) && kind != a.kind) { a.kind = kind; a.params = SNqValue::Table(); ch = true; }
+	const NqCatalog::SKind* k = NqCatalog::Find(a.kind.c_str());
+	if (k)
+	{
+		if (!k->desc.empty()) ImGui::TextWrapped("%s", k->desc.c_str());
+		ch |= DrawParams(k, a.params, "ap");
+	}
+	else ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "unknown kind");
+	if (ch) m_NodeDirty = true;
+}
+
+//------------------------------------------------------------------------------
+// generic editors
+//------------------------------------------------------------------------------
+bool NqInspector::DrawKindCombo(LPCSTR label, u32 use_mask, xr_string& kind)
+{
+	bool changed = false;
+	const NqCatalog::SKind* cur = NqCatalog::Find(kind.c_str());
+	xr_string preview = cur ? cur->title : kind;
+	if (ImGui::BeginCombo(label, preview.c_str()))
+	{
+		xr_vector<const NqCatalog::SKind*> kinds;
+		NqCatalog::KindsFor(use_mask, kinds);
+		xr_string group;
+		for (u32 i = 0; i < kinds.size(); ++i)
+		{
+			if (kinds[i]->group != group) { group = kinds[i]->group; ImGui::TextDisabled("%s", group.c_str()); }
+			xr_string item = kinds[i]->title + "##" + kinds[i]->id;
+			if (ImGui::Selectable(item.c_str(), kinds[i]->id == kind)) { kind = kinds[i]->id; changed = true; }
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%s", kinds[i]->id.c_str(), kinds[i]->desc.c_str());
+		}
+		ImGui::EndCombo();
+	}
+	return changed;
+}
+
+bool NqInspector::DrawParams(const NqCatalog::SKind* k, SNqValue& params, LPCSTR id_prefix)
+{
+	bool ch = false;
+	if (!params.IsTable()) params = SNqValue::Table();
+	ImGui::PushID(id_prefix);
+	for (u32 i = 0; i < k->params.size(); ++i)
+	{
+		ImGui::PushID((int)i);
+		ch |= DrawParam(k->params[i], params, id_prefix);
+		ImGui::PopID();
+	}
+	// parameters present in the file but unknown to the catalog stay editable as raw Lua
+	for (u32 i = 0; i < params.keys.size(); ++i)
+	{
+		if (k->Param(params.keys[i].c_str())) continue;
+		ImGui::PushID(1000 + (int)i);
+		xr_string label = params.keys[i] + " (unknown)";
+		ch |= DrawRaw(label.c_str(), params.vals[i]);
+		ImGui::PopID();
+	}
+	ImGui::PopID();
+	return ch;
+}
+
+bool NqInspector::DrawParam(const NqCatalog::SParam& p, SNqValue& params, LPCSTR)
+{
+	SNqValue* slot = params.Get(p.name.c_str());
+	SNqValue v = slot ? *slot : SNqValue::Nil();
+	xr_string label = p.name;
+	if (p.required) label += " *";
+	bool ch = DrawTyped(p.type.c_str(), &p, label.c_str(), v);
+	if (ImGui::IsItemHovered())
+	{
+		xr_string tip = p.type;
+		if (p.has_default) tip += " (default " + p.def + ")";
+		ImGui::SetTooltip("%s", tip.c_str());
+	}
+	if (ch)
+	{
+		if (v.IsNil()) params.Erase(p.name.c_str()); else params.Set(p.name.c_str(), v);
+	}
+	return ch;
+}
+
+bool NqInspector::DrawTyped(LPCSTR type, const NqCatalog::SParam* p, LPCSTR label, SNqValue& v)
+{
+	xr_string t = type;
+	if (t == "text")				return DrawText(label, v, true);
+	if (t == "lua")					return DrawLua(label, v);
+	if (t == "bool")
+	{
+		bool set = v.IsBool();
+		bool b = set ? v.b : (p && p->has_default && p->def == "true");
+		bool ch = false;
+		if (ImGui::Checkbox(label, &b)) { v = SNqValue::Bool(b); ch = true; }
+		if (set) { ImGui::SameLine(); if (ImGui::SmallButton("default")) { v = SNqValue::Nil(); ch = true; } }
+		return ch;
+	}
+	if (t == "int" || t == "float")
+	{
+		bool is_int = t == "int";
+		double d = v.IsNumber() ? v.n : (p && p->has_default ? atof(p->def.c_str()) : 0.0);
+		bool ch = false;
+		if (is_int) { int i = (int)d; if (ImGui::InputInt(label, &i)) { d = i; ch = true; } }
+		else { float f = (float)d; if (ImGui::InputFloat(label, &f)) { d = f; ch = true; } }
+		if (ch)
+		{
+			if (p && p->has_min && d < p->min) d = p->min;
+			if (p && p->has_max && d > p->max) d = p->max;
+			v = SNqValue::Number(d);
+		}
+		if (!v.IsNil()) { ImGui::SameLine(); if (ImGui::SmallButton("default")) { v = SNqValue::Nil(); ch = true; } }
+		return ch;
+	}
+	if (t == "enum" || t == "relation")
+	{
+		xr_vector<xr_string> items = (t == "relation") ? Items("enemy", "neutral", "friend") : (p ? p->enums : xr_vector<xr_string>());
+		xr_string cur = v.IsString() ? v.s : "";
+		xr_string def = p && p->has_default ? "(default " + p->def + ")" : "(unset)";
+		if (ComboStr(label, cur, items, def.c_str())) { v = cur.empty() ? SNqValue::Nil() : SNqValue::String(cur); return true; }
+		return false;
+	}
+	if (t == "duration")			return DrawDuration(label, v);
+	if (t == "npc_ref")				return DrawNpcRef(label, v, false, false);
+	if (t == "target_ref")			return DrawNpcRef(label, v, true, false);
+	if (t == "kill_target")			return DrawNpcRef(label, v, false, true);
+	if (t == "place")				return DrawPlace(label, v);
+	if (t == "spawn_spec")			return DrawSpawnSpec(label, v);
+	if (t == "cases_cond")			return DrawCases(label, v, false);
+	if (t == "cases_weight")		return DrawCases(label, v, true);
+	if (t == "cond_list")			return DrawCondValue(label, v, 1);
+	if (t == "value")				return DrawScalarValue(label, v);
+	if (t == "count_or_all")
+	{
+		xr_string s = v.IsNumber() ? NqUtil::Format("%d", (int)v.n) : v.AsString("");
+		if (InputStr(label, s))
+		{
+			s = NqUtil::Trim(s);
+			if (s.empty()) v = SNqValue::Nil();
+			else if (s == "all") v = SNqValue::String("all");
+			else v = SNqValue::Number(atof(s.c_str()));
+			return true;
+		}
+		return false;
+	}
+	// strings with (or without) a picker
+	xr_string s = v.AsString("");
+	if (DrawPicked(label, type, s)) { v = s.empty() ? SNqValue::Nil() : SNqValue::String(s); return true; }
+	return false;
+}
+
+bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
+{
+	bool picked = false;
+	if (!ImGui::BeginPopup(popup)) return false;
+	if (ImGui::IsWindowAppearing()) { m_Search[0] = 0; ImGui::SetKeyboardFocusHere(); }
+	ImGui::InputTextWithHint("##search", "search", m_Search, sizeof(m_Search));
+	ImGui::Separator();
+	xr_string t = type;
+	if (t == "task_id" || t == "var_name" || t == "ref_name" || t == "node_id" || t == "quest_id")
+	{
+		xr_vector<xr_string> ids;
+		const SNqQuest& q = m_Doc->quest;
+		if (t == "task_id")	for (u32 i = 0; i < q.tasks.size(); ++i) ids.push_back(q.tasks[i].id);
+		if (t == "var_name") for (u32 i = 0; i < q.vars.size(); ++i) ids.push_back(q.vars[i].name);
+		if (t == "node_id")	for (u32 i = 0; i < q.nodes.size(); ++i) ids.push_back(q.nodes[i].id);
+		if (t == "ref_name") NqValidate::DeclaredRefs(q, ids);
+		if (t == "quest_id") { NqDocs::OtherQuestIds(m_Doc->path.c_str(), ids); ids.insert(ids.begin(), q.id); }
+		for (u32 i = 0; i < ids.size(); ++i)
+		{
+			if (m_Search[0] && !strstr(ids[i].c_str(), m_Search)) continue;
+			if (ImGui::Selectable(ids[i].c_str())) { out = ids[i]; picked = true; ImGui::CloseCurrentPopup(); }
+		}
+	}
+	else
+	{
+		NqPickers::EType pt = NqPickers::TypeFromName(type);
+		if (pt == NqPickers::tCount) ImGui::TextDisabled("no index for %s", type);
+		else if (!NqPickers::Available()) ImGui::TextDisabled("link a game to get suggestions");
+		else
+		{
+			xr_vector<const NqPickers::SEntry*> found;
+			NqPickers::Search(pt, m_Search, 200, found);
+			ImGui::BeginChild("##list", ImVec2(360.f, 260.f));
+			for (u32 i = 0; i < found.size(); ++i)
+			{
+				xr_string label = found[i]->id;
+				if (!found[i]->name.empty()) label += "  -  " + found[i]->name;
+				if (ImGui::Selectable(label.c_str())) { out = found[i]->id; picked = true; ImGui::CloseCurrentPopup(); }
+			}
+			if (found.empty()) ImGui::TextDisabled("nothing matches");
+			ImGui::EndChild();
+		}
+	}
+	ImGui::EndPopup();
+	return picked;
+}
+
+bool NqInspector::DrawPicked(LPCSTR label, LPCSTR type, xr_string& s)
+{
+	bool ch = false;
+	ImGui::PushID(label);
+	ImGui::SetNextItemWidth(-60.f);
+	ch |= InputStr(label, s);
+	ImGui::SameLine();
+	if (ImGui::SmallButton("...")) ImGui::OpenPopup("pick");
+	if (PickerPopup("pick", type, s)) ch = true;
+	ImGui::PopID();
+	return ch;
+}
+
+bool NqInspector::DrawText(LPCSTR label, SNqValue& v, bool multiline)
+{
+	bool ch = false;
+	ImGui::PushID(label);
+	if (v.IsTable())
+	{
+		xr_string lt;
+		ImGui::TextDisabled("%s (per language)", Shown(label, lt));
+		for (u32 i = 0; i < v.keys.size(); ++i)
+		{
+			xr_string s = v.vals[i].AsString("");
+			ImGui::PushID((int)i);
+			if (InputStr(v.keys[i].c_str(), s, multiline, ImGui::GetTextLineHeight() * 3.f)) { v.vals[i] = SNqValue::String(s); ch = true; }
+			ImGui::PopID();
+		}
+		if (!v.Has("eng") && ImGui::SmallButton("+ eng")) { v.Set("eng", SNqValue::String("")); ch = true; }
+		ImGui::SameLine();
+		if (ImGui::SmallButton("single")) { xr_string keep = NqText::Preview(v); v = SNqValue::String(keep); ch = true; }
+	}
+	else
+	{
+		xr_string s = v.AsString("");
+		if (InputStr(label, s, multiline, ImGui::GetTextLineHeight() * 3.f)) { v = SNqValue::String(s); ch = true; }
+		if (ImGui::SmallButton("per language")) { SNqValue t = SNqValue::Table(); t.Set("rus", SNqValue::String(s)); v = t; ch = true; }
+	}
+	ImGui::PopID();
+	return ch;
+}
+
+bool NqInspector::DrawDuration(LPCSTR label, SNqValue& v)
+{
+	static const xr_vector<xr_string> units = Items("seconds", "game_minutes", "game_hours");
+	xr_string unit = ModeOf(v, units);
+	double num = unit.empty() ? 0.0 : v.GetNumber(unit.c_str());
+	bool ch = false;
+	ImGui::PushID(label);
+	ImGui::SetNextItemWidth(90.f);
+	float f = (float)num;
+	if (ImGui::InputFloat("##n", &f)) { num = f; ch = true; }
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(120.f);
+	xr_string u = unit.empty() ? "seconds" : unit;
+	if (ComboStr("##u", u, units)) { unit = u; ch = true; }
+	ImGui::SameLine();
+	xr_string lt;
+	ImGui::TextUnformatted(Shown(label, lt));
+	if (ch)
+	{
+		if (unit.empty()) unit = "seconds";
+		SNqValue t = SNqValue::Table();
+		t.Set(unit.c_str(), SNqValue::Number(num));
+		v = t;
+	}
+	ImGui::PopID();
+	return ch;
+}
+
+bool NqInspector::DrawNpcRef(LPCSTR label, SNqValue& v, bool with_smart, bool with_spawn)
+{
+	xr_vector<xr_string> modes = Items("story", "ref", "profile", "community");
+	if (with_smart) modes.push_back("smart");
+	if (with_spawn) modes.push_back("spawn");
+	xr_string mode = ModeOf(v, modes);
+	bool ch = false;
+	ImGui::PushID(label);
+	xr_string lt;
+	ImGui::TextUnformatted(Shown(label, lt));
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(110.f);
+	xr_string m = mode;
+	if (ComboStr("##mode", m, modes, "(unset)"))
+	{
+		ch = true;
+		if (m.empty()) v = SNqValue::Nil();
+		else
+		{
+			SNqValue t = SNqValue::Table();
+			if (m == "spawn") { SNqValue s = SNqValue::Table(); s.Set("section", SNqValue::String("")); s.Set("smart", SNqValue::String("")); t.Set("spawn", s); }
+			else t.Set(m.c_str(), SNqValue::String(""));
+			v = t;
+		}
+		mode = m;
+	}
+	if (!mode.empty() && mode != "spawn")
+	{
+		xr_string s = v.GetString(mode.c_str());
+		LPCSTR type = mode == "story" ? "story_id" : mode == "ref" ? "ref_name" : mode == "smart" ? "smart" : mode.c_str();
+		if (DrawPicked("##value", type, s)) { v.Set(mode.c_str(), SNqValue::String(s)); ch = true; }
+		if (mode == "community")
+		{
+			xr_string lvl = v.GetString("level");
+			if (DrawPicked("level##community", "level", lvl)) { if (lvl.empty()) v.Erase("level"); else v.Set("level", SNqValue::String(lvl)); ch = true; }
+		}
+	}
+	else if (mode == "spawn")
+	{
+		SNqValue* sp = v.Get("spawn");
+		if (sp && DrawSpawnSpec("spawn", *sp)) ch = true;
+	}
+	ImGui::PopID();
+	return ch;
+}
+
+bool NqInspector::DrawSpawnSpec(LPCSTR label, SNqValue& v)
+{
+	if (!v.IsTable()) v = SNqValue::Table();
+	bool ch = false;
+	ImGui::PushID(label);
+	ImGui::Indent();
+	xr_string s = v.GetString("section");
+	if (DrawPicked("section", "squad_section", s)) { v.Set("section", SNqValue::String(s)); ch = true; }
+	s = v.GetString("smart");
+	if (DrawPicked("smart", "smart", s)) { v.Set("smart", SNqValue::String(s)); ch = true; }
+	s = v.GetString("ref");
+	if (DrawPicked("ref", "ref_name", s)) { if (s.empty()) v.Erase("ref"); else v.Set("ref", SNqValue::String(s)); ch = true; }
+	bool hold = v.GetBool("hold", true);
+	if (ImGui::Checkbox("hold", &hold)) { v.Set("hold", SNqValue::Bool(hold)); ch = true; }
+	ImGui::Unindent();
+	ImGui::PopID();
+	return ch;
+}
+
+bool NqInspector::DrawPlace(LPCSTR label, SNqValue& v)
+{
+	xr_vector<xr_string> modes = Items("pos", "restrictor", "smart");
+	xr_string mode = ModeOf(v, modes);
+	if (mode.empty() && v.IsTable() && v.Has("level")) mode = "pos";
+	bool ch = false;
+	ImGui::PushID(label);
+	xr_string lt;
+	ImGui::TextUnformatted(Shown(label, lt));
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(110.f);
+	xr_string m = mode;
+	if (ComboStr("##mode", m, modes, "(unset)"))
+	{
+		ch = true;
+		if (m.empty()) v = SNqValue::Nil();
+		else
+		{
+			SNqValue t = SNqValue::Table();
+			if (m == "pos") { t.Set("level", SNqValue::String(NqDocs::CurrentLevel())); SNqValue p = SNqValue::Table(); p.Push(SNqValue::Number(0)); p.Push(SNqValue::Number(0)); p.Push(SNqValue::Number(0)); t.Set("pos", p); t.Set("radius", SNqValue::Number(5)); }
+			else t.Set(m.c_str(), SNqValue::String(""));
+			v = t;
+		}
+		mode = m;
+	}
+	if (mode == "pos")
+	{
+		ImGui::Indent();
+		xr_string lvl = v.GetString("level");
+		if (DrawPicked("level", "level", lvl)) { v.Set("level", SNqValue::String(lvl)); ch = true; }
+		SNqValue* pos = v.Get("pos");
+		float xyz[3] = { 0, 0, 0 };
+		if (pos && pos->IsTable()) for (u32 i = 0; i < 3 && i < pos->arr.size(); ++i) xyz[i] = (float)pos->arr[i].AsNumber();
+		if (ImGui::InputFloat3("x y z", xyz))
+		{
+			SNqValue p = SNqValue::Table();
+			for (int i = 0; i < 3; ++i) p.Push(SNqValue::Number(xyz[i]));
+			v.Set("pos", p); ch = true;
+		}
+		float r = (float)v.GetNumber("radius", 5.0);
+		if (ImGui::InputFloat("radius", &r)) { v.Set("radius", SNqValue::Number(r)); ch = true; }
+		if (ImGui::SmallButton("from camera"))
+		{
+			// the current scene level and the viewport camera position
+			SNqValue p = SNqValue::Table();
+			p.Push(SNqValue::Number(EDevice->vCameraPosition.x));
+			p.Push(SNqValue::Number(EDevice->vCameraPosition.y));
+			p.Push(SNqValue::Number(EDevice->vCameraPosition.z));
+			v.Set("pos", p);
+			xr_string cl = NqDocs::CurrentLevel();
+			if (!cl.empty()) v.Set("level", SNqValue::String(cl));
+			ch = true;
+		}
+		ImGui::Unindent();
+	}
+	else if (!mode.empty())
+	{
+		xr_string s = v.GetString(mode.c_str());
+		if (DrawPicked("##value", mode == "smart" ? "smart" : "string", s)) { v.Set(mode.c_str(), SNqValue::String(s)); ch = true; }
+	}
+	ImGui::PopID();
+	return ch;
+}
+
+bool NqInspector::DrawCases(LPCSTR label, SNqValue& v, bool weights)
+{
+	if (!v.IsTable()) v = SNqValue::Table();
+	bool ch = false;
+	ImGui::PushID(label);
+	xr_string lt;
+	ImGui::TextDisabled("%s", Shown(label, lt));
+	for (u32 i = 0; i < v.arr.size(); ++i)
+	{
+		SNqValue& c = v.arr[i];
+		if (!c.IsTable()) c = SNqValue::Table();
+		ImGui::PushID((int)i);
+		xr_string name = c.GetString("name");
+		ImGui::SetNextItemWidth(120.f);
+		if (InputStr("##name", name)) { c.Set("name", SNqValue::String(name)); ch = true; }
+		ImGui::SameLine();
+		if (weights)
+		{
+			float w = (float)c.GetNumber("weight", 1.0);
+			ImGui::SetNextItemWidth(80.f);
+			if (ImGui::InputFloat("weight", &w)) { c.Set("weight", SNqValue::Number(w)); ch = true; }
+			ImGui::SameLine();
+		}
+		if (ImGui::SmallButton("x")) { v.arr.erase(v.arr.begin() + i); ch = true; ImGui::PopID(); break; }
+		if (!weights)
+		{
+			// the case's cond list lives as generic values; edit through typed conds
+			SNqValue* cl = c.Get("cond");
+			SNqValue tmp = cl ? *cl : SNqValue::Table();
+			ImGui::Indent();
+			if (DrawCondValue("cond", tmp, 1)) { c.Set("cond", tmp); ch = true; }
+			ImGui::Unindent();
+		}
+		ImGui::PopID();
+	}
+	if (ImGui::SmallButton("+ case"))
+	{
+		SNqValue c = SNqValue::Table();
+		c.Set("name", SNqValue::String(NqUtil::Format("case%d", int(v.arr.size() + 1))));
+		if (weights) c.Set("weight", SNqValue::Number(1));
+		else c.Set("cond", SNqValue::Table());
+		v.Push(c); ch = true;
+	}
+	ImGui::PopID();
+	return ch;
+}
+
+bool NqInspector::DrawCondValue(LPCSTR label, SNqValue& v, int depth)
+{
+	// generic cond list <-> typed conds round trip
+	xr_vector<SNqCond> conds;
+	if (v.IsTable())
+		for (u32 i = 0; i < v.arr.size(); ++i)
+		{
+			SNqCond c; xr_string err;
+			if (NqLua::CondFromValue(v.arr[i], c, err)) conds.push_back(c);
+		}
+	if (!DrawCondList(conds, label, depth)) return false;
+	SNqValue out = SNqValue::Table();
+	for (u32 i = 0; i < conds.size(); ++i) { SNqValue cv; NqLua::CondToValue(conds[i], cv); out.Push(cv); }
+	v = out;
+	return true;
+}
+
+bool NqInspector::DrawCondList(xr_vector<SNqCond>& conds, LPCSTR id_prefix, int depth)
+{
+	bool ch = false;
+	ImGui::PushID(id_prefix);
+	for (u32 i = 0; i < conds.size(); ++i)
+	{
+		SNqCond& c = conds[i];
+		ImGui::PushID((int)i);
+		if (ImGui::Checkbox("not", &c.negate)) ch = true;
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(-30.f);
+		xr_string kind = c.kind;
+		if (DrawKindCombo("##kind", NqCatalog::useCond, kind) && kind != c.kind) { c.kind = kind; c.params = SNqValue::Table(); ch = true; }
+		ImGui::SameLine();
+		if (ImGui::SmallButton("x")) { conds.erase(conds.begin() + i); ch = true; ImGui::PopID(); break; }
+		const NqCatalog::SKind* k = NqCatalog::Find(c.kind.c_str());
+		if (k && !k->params.empty() && depth < 4)
+		{
+			ImGui::Indent();
+			ch |= DrawParams(k, c.params, "cp");
+			ImGui::Unindent();
+		}
+		ImGui::PopID();
+	}
+	if (ImGui::SmallButton("+ condition"))
+	{
+		SNqCond c; c.kind = "has_item"; c.params = SNqValue::Table();
+		conds.push_back(c); ch = true;
+	}
+	ImGui::PopID();
+	return ch;
+}
+
+bool NqInspector::DrawLua(LPCSTR label, SNqValue& v)
+{
+	bool ch = false;
+	ImGui::PushID(label);
+	xr_string code = v.AsString("");
+	if (InputStr(label, code, true, ImGui::GetTextLineHeight() * 10.f)) { v = SNqValue::String(code); ch = true; }
+	if (ImGui::SmallButton("check syntax"))
+	{
+		NqLua::SError err;
+		m_LuaCheck = NqLua::SyntaxCheck(code.c_str(), err) ? "ok" : NqUtil::Format("%s (%d:%d)", err.message.c_str(), err.line, err.col);
+	}
+	if (!m_LuaCheck.empty()) { ImGui::SameLine(); ImGui::TextDisabled("%s", m_LuaCheck.c_str()); }
+	ImGui::PopID();
+	return ch;
+}
+
+bool NqInspector::DrawScalarValue(LPCSTR label, SNqValue& v)
+{
+	// bool / number / string typed by content: true, false, 12.5, anything else
+	xr_string s = v.IsBool() ? (v.b ? "true" : "false") : (v.IsNumber() ? NqUtil::Format("%g", v.n) : v.AsString(""));
+	if (!InputStr(label, s)) return false;
+	xr_string t = NqUtil::Trim(s);
+	if (t == "true") v = SNqValue::Bool(true);
+	else if (t == "false") v = SNqValue::Bool(false);
+	else
+	{
+		char* end = 0;
+		double d = strtod(t.c_str(), &end);
+		if (!t.empty() && end && *end == 0) v = SNqValue::Number(d);
+		else v = SNqValue::String(s);
+	}
+	return true;
+}
+
+bool NqInspector::DrawRaw(LPCSTR label, SNqValue& v)
+{
+	xr_string s = NqLua::WriteValue(v, 0);
+	if (!InputStr(label, s)) return false;
+	SNqValue nv; NqLua::SError err;
+	xr_string chunk = "return " + s;
+	if (NqLua::ParseValue(chunk.c_str(), (u32)chunk.size(), "raw", nv, err)) { v = nv; return true; }
+	return false;
+}

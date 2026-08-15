@@ -469,8 +469,20 @@ static void Execute(SMCPRequest& r)
 			else						FS.update_path(full, "$maps$", scene);
 			if (FS.exist(full))
 			{
-				ExecCommand(COMMAND_LOAD, xr_string(full));
-				r.response = "{\"ok\":true}";
+				// COMMAND_LOAD refuses a file that is not a scene (and says so in
+				// the log) instead of loading it; report what actually happened
+				// rather than a blanket ok
+				const bool loaded = !!(BOOL)ExecCommand(COMMAND_LOAD, xr_string(full));
+				if (loaded)
+					r.response = "{\"ok\":true}";
+				else
+				{
+					char esc[MAX_PATH * 2];
+					JsonEscapePath(full, esc, sizeof(esc));
+					r.response = "{\"ok\":false,\"error\":\"not a loadable scene: ";
+					r.response += esc;
+					r.response += "\"}";
+				}
 			}
 			else
 			{

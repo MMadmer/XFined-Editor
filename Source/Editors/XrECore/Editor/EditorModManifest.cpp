@@ -4,6 +4,8 @@
 #include "EditorModManifest.h"
 #include "EditorProject.h"
 #include "XFinedMCP.h"
+#include "Nq/NqExport.h"
+#include "Nq/NqDoc.h"
 
 //------------------------------------------------------------------------------
 // small file/string helpers (WinAPI only, like EditorProject)
@@ -860,6 +862,14 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 		return false;
 	}
 
+	// Quest graphs ship as they are, so a broken one would only be found by
+	// the player: every *.nqasset must validate before anything is copied.
+	{
+		xr_vector<xr_string> nq_log;
+		if (!NqExport::ValidateProject(project_root, err, nq_log))
+			return false;
+	}
+
 	// A declared mode is worthless until the player can tick it, so the files
 	// that put it on the new-game screen are generated as part of the export.
 	if (!flat && !WriteModeRegistration(project_root, m, err))
@@ -903,12 +913,19 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 		const int c_spawn	= CountFilesRec(d_spawn, 0);
 		const int c_scripts	= CountFilesRec(d_scripts, 0);
 		const int c_levels	= CountFilesRec(d_levels, 0);
+		// quests are module-only content wherever they sit: the NQ runtime finds
+		// them through xms.list_files(<module id>), i.e. under <game>\modules\<id>.
+		// A flat overlay is not a module and is never scanned, so a copy that
+		// lands in gamedata\ is inert and one outside gamedata\ is not copied.
+		xr_vector<NqDocs::SProjectQuest> nq_quests;
+		NqDocs::ProjectQuests(nq_quests, true);
+		const int c_quests	= (int)nq_quests.size();
 
 		xr_string rep = "XMS flat export report - module '";
 		rep += m.id;
 		rep += "'\r\n\r\n";
 		char line[128];
-		if (!c_patch && !c_spawn && !c_scripts && !c_levels && m.mode.empty() && m.provides_modes.empty())
+		if (!c_patch && !c_spawn && !c_scripts && !c_levels && !c_quests && m.mode.empty() && m.provides_modes.empty())
 			rep += "fully vanilla-compatible\r\n";
 		else
 		{
@@ -924,6 +941,7 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 			if (c_spawn)	{ sprintf_s(line, "spawn: %d file(s) - NOT exported (XMS-only)\r\n", c_spawn); rep += line; }
 			if (c_scripts)	{ sprintf_s(line, "scripts: %d file(s) - NOT exported (XMS-only)\r\n", c_scripts); rep += line; }
 			if (c_levels)	{ sprintf_s(line, "levels: %d overlay file(s) - NOT exported (XMS-only)\r\n", c_levels); rep += line; }
+			if (c_quests)	{ sprintf_s(line, "quests: %d .nqasset - NOT usable flat (the NQ runtime only scans <game>\\modules\\<id>)\r\n", c_quests); rep += line; }
 			if (!m.mode.empty())
 			{
 				rep += "target mode: ";
