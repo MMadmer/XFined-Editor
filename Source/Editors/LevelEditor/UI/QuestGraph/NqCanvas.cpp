@@ -17,6 +17,18 @@ namespace
 	const float kFontBase	= 14.f;		// world font size at zoom 1
 	const float kLinkTangent = 48.f;
 
+	// Grab zones, in screen pixels at 100% DPI. The dot a pin is drawn as follows
+	// the zoom and is three pixels wide at 20%, so the zone cannot be the dot: it
+	// is the dot plus a fixed slack, floored so that the far zoom levels stay
+	// usable and capped so that a pin never swallows its own node. Towards the
+	// body the zone is tightened back to roughly the drawn size - the bottom band
+	// of a box has to keep starting a node drag, not a link.
+	const float kPinGrabPad		= 8.f;
+	const float kPinGrabMin		= 12.f;
+	const float kPinGrabMax		= 22.f;
+	const float kPinGrabInside	= 0.7f;		// share of the radius that reaches inwards
+	const float kLinkGrab		= 9.f;		// around a link curve
+
 	const float kPickerRows	= 12.f;		// rows a search popup shows before it scrolls
 	const float kPickerMinW	= 320.f;
 	const float kPickerMaxW	= 640.f;
@@ -39,6 +51,22 @@ namespace
 	IC ImVec2 Sub(const ImVec2& a, const ImVec2& b) { return ImVec2(a.x - b.x, a.y - b.y); }
 	IC bool InRect(const ImVec2& p, const ImVec2& a, const ImVec2& b) { return p.x >= a.x && p.y >= a.y && p.x <= b.x && p.y <= b.y; }
 	IC float Snap(float v) { return floorf(v / NqLayout::kGrid + 0.5f) * NqLayout::kGrid; }
+	IC float Dist2(const ImVec2& a, const ImVec2& b) { return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y); }
+
+	// `out` is pin -> targets, so a pin is free exactly when it carries none
+	bool PinFree(const SNqNode& n, LPCSTR pin)
+	{
+		const xr_vector<xr_string>* t = n.Targets(pin);
+		return !t || t->empty();
+	}
+
+	// a node can take one more incoming edge when nothing arrives yet; flow.join is
+	// the exception - merging several paths is the whole point of it
+	bool CanTakeInput(const SNqQuest& q, const SNqNode& n)
+	{
+		if (NqText::IsTrigger(n.kind.c_str())) return false;
+		return n.kind == "flow.join" || 0 == q.InDegree(n.id.c_str());
+	}
 
 	// squared distance from p to segment ab
 	float SegDist2(const ImVec2& p, const ImVec2& a, const ImVec2& b)
@@ -129,7 +157,8 @@ NqCanvas::NqCanvas(NqDoc* doc) : m_Doc(doc)
 	m_Dragging = m_DragMoved = false;
 	m_Marquee = false;
 	m_Linking = m_PendingLink = false;
-	m_RefusedAt = 0.0;
+	m_StatusAt = 0.0;
+	m_HotNode = m_HotPin = -1;
 	m_ChipDragIndex = -1;
 	m_WantFrameAll = m_WantFrameSel = m_WantRename = m_WantFocusAction = m_OpenAddAction = false;
 	m_WantZoom = -1;
@@ -451,6 +480,9 @@ void NqCanvas::BuildGeometry()
 			for (u32 p = 0; p < k->pins.size(); ++p)
 				if (k->pins[p] != "cases") g.pins.push_back(k->pins[p]);
 		}
+		// everything pushed so far is what the kind declares; what the file adds
+		// below would be an E007 pin, so automatic wiring must not aim at it
+		g.declared = (int)g.pins.size();
 		// pins present in the file but unknown to the catalog still get a handle
 		for (u32 p = 0; p < n.out.size(); ++p)
 		{
@@ -511,6 +543,33 @@ void NqCanvas::BuildLinks()
 	}
 }
 
+// the editor bakes the monitor DPI into the font (XrUIManager loads it at
+// 16 * dpi), so the font size is the scale factor the raw constants live in
+float NqCanvas::UiScale() const
+{
+	float fs = ImGui::GetFontSize();
+	return fs > 1.f ? fs / 16.f : 1.f;
+}
+
+float NqCanvas::PinGrab() const
+{
+	const float s = UiScale();
+	const float drawn = _max(3.f, kPinR * Zoom());		// the dot DrawNode paints
+	const float r = drawn + kPinGrabPad * s;
+	return _min(_max(r, kPinGrabMin * s), kPinGrabMax * s);
+}
+
+// `inward` points from the pin into its node (-1 for an output pin on the bottom
+// edge, +1 for the input pin on the top one): that half of the zone stays narrow
+bool NqCanvas::NearPin(const ImVec2& s, const ImVec2& c, float inward, float& d2) const
+{
+	ImVec2 d = Sub(s, c);
+	if (d.y * inward > 0.f) d.y /= kPinGrabInside;
+	d2 = d.x * d.x + d.y * d.y;
+	const float r = PinGrab();
+	return d2 <= r * r;
+}
+
 int NqCanvas::HitNode(const ImVec2& s) const
 {
 	// topmost = last drawn = highest index
@@ -523,17 +582,80 @@ int NqCanvas::HitNode(const ImVec2& s) const
 	return -1;
 }
 
-int NqCanvas::HitPin(int node, const ImVec2& s) const
+int NqCanvas::HitNodeNear(const ImVec2& s, int except) const
+{
+	const float r = PinGrab(), lim = r * r;
+	float best = FLT_MAX;
+	int hit = -1;
+	// topmost first, strict <: the node drawn last wins an exact tie
+	for (int i = (int)m_Geom.size() - 1; i >= 0; --i)
+	{
+		if (i == except) continue;
+		const SNodeGeom& g = m_Geom[i];
+		ImVec2 a = ToScreen(g.pos), b = ToScreen(Add(g.pos, g.size));
+		float dx = s.x < a.x ? a.x - s.x : (s.x > b.x ? s.x - b.x : 0.f);
+		float dy = s.y < a.y ? a.y - s.y : (s.y > b.y ? s.y - b.y : 0.f);
+		float d = dx * dx + dy * dy;
+		if (d <= lim && d < best) { best = d; hit = i; }
+	}
+	return hit;
+}
+
+int NqCanvas::HitPin(int node, const ImVec2& s, float* out_d2) const
 {
 	if (node < 0) return -1;
 	const SNodeGeom& g = m_Geom[node];
-	float r = _max(kPinR * Zoom(), 6.f) + 3.f;
+	float best = FLT_MAX;
+	int hit = -1;
+	// pins of one node sit close together at low zoom, so the nearest one wins
 	for (u32 p = 0; p < g.pins.size(); ++p)
 	{
-		ImVec2 c = ToScreen(OutputPin(g, (int)p));
-		if ((s.x - c.x) * (s.x - c.x) + (s.y - c.y) * (s.y - c.y) <= r * r) return (int)p;
+		float d2;
+		if (NearPin(s, ToScreen(OutputPin(g, (int)p)), -1.f, d2) && d2 < best) { best = d2; hit = (int)p; }
 	}
-	return -1;
+	if (hit >= 0 && out_d2) *out_d2 = best;
+	return hit;
+}
+
+bool NqCanvas::HitAnyPin(const ImVec2& s, int& node, int& pin) const
+{
+	node = pin = -1;
+	float best = FLT_MAX;
+	for (int i = (int)m_Geom.size() - 1; i >= 0; --i)
+	{
+		float d2 = FLT_MAX;
+		int p = HitPin(i, s, &d2);
+		if (p >= 0 && d2 < best) { best = d2; node = i; pin = p; }
+	}
+	return pin >= 0;
+}
+
+// pin under the cursor, for the hover highlight. While a link is in the air the
+// only pin that matters is the input it would land on - the very node EndLink
+// will pick, so the highlight and the drop can never disagree.
+void NqCanvas::UpdateHot()
+{
+	m_HotNode = m_HotPin = -1;
+	if (!m_Hovered) return;
+	const ImVec2 mouse = ImGui::GetMousePos();
+	if (m_Linking)
+	{
+		int from = m_Doc->quest.NodeIndex(m_LinkFrom.c_str());
+		int node = HitNode(mouse);
+		if (node < 0) node = HitNodeNear(mouse, from);
+		if (node >= 0 && node != from && !m_Geom[node].trigger) m_HotNode = node;
+		return;
+	}
+	if (m_Dragging || m_Marquee || m_Panning) return;
+	float best = FLT_MAX;
+	for (int i = (int)m_Geom.size() - 1; i >= 0; --i)
+	{
+		const SNodeGeom& g = m_Geom[i];
+		float d2 = FLT_MAX;
+		int p = HitPin(i, mouse, &d2);
+		if (p >= 0 && d2 < best) { best = d2; m_HotNode = i; m_HotPin = p; }
+		if (!g.trigger && NearPin(mouse, ToScreen(InputPin(g)), 1.f, d2) && d2 < best) { best = d2; m_HotNode = i; m_HotPin = -1; }
+	}
 }
 
 bool NqCanvas::HitChip(int node, const ImVec2& s, xr_string& slot, int& index, bool& plus) const
@@ -566,7 +688,9 @@ bool NqCanvas::HitChip(int node, const ImVec2& s, xr_string& slot, int& index, b
 
 int NqCanvas::HitLink(const ImVec2& s) const
 {
-	float best = 36.f;		// squared pixels
+	// the curve is one to four pixels thick: half of it plus the same slack a pin gets
+	const float r = kLinkGrab * UiScale() + _max(1.f, 2.f * Zoom()) * 0.5f;
+	float best = r * r;		// squared pixels
 	int hit = -1;
 	for (u32 i = 0; i < m_Links.size(); ++i)
 	{
@@ -799,14 +923,19 @@ void NqCanvas::DrawNode(ImDrawList* dl, int index)
 		}
 	}
 
-	// output pins with labels
+	// output pins with labels. A pin the cursor can grab grows and shows the halo
+	// of its grab zone: the zone is wider than the dot, and nothing else says so.
 	float pr = _max(3.f, kPinR * z);
+	float halo = PinGrab();
 	for (u32 p = 0; p < g.pins.size(); ++p)
 	{
 		ImVec2 c = ToScreen(OutputPin(g, (int)p));
 		bool hot = m_Linking && m_LinkFrom == n.id && m_LinkPin == g.pins[p];
-		dl->AddCircleFilled(c, pr, hot ? Col(255, 220, 120) : Col(230, 230, 230), 12);
-		dl->AddCircle(c, pr, Col(20, 20, 20), 12, 1.f);
+		bool over = m_HotNode == index && m_HotPin == (int)p;
+		if (over) dl->AddCircleFilled(c, halo, Col(255, 220, 120, 38), 16);
+		float r = over ? pr * 1.4f : pr;
+		dl->AddCircleFilled(c, r, (hot || over) ? Col(255, 220, 120) : Col(230, 230, 230), 12);
+		dl->AddCircle(c, r, Col(20, 20, 20), 12, 1.f);
 		if (z >= 0.5f && (g.pins.size() > 1 || g.pins[p] != "next"))
 		{
 			ImVec2 ts = font->CalcTextSizeA(fs * 0.75f, FLT_MAX, 0.f, g.pins[p].c_str());
@@ -817,8 +946,11 @@ void NqCanvas::DrawNode(ImDrawList* dl, int index)
 	if (!g.trigger)
 	{
 		ImVec2 c = ToScreen(InputPin(g));
-		dl->AddCircleFilled(c, pr, Col(200, 200, 200), 12);
-		dl->AddCircle(c, pr, Col(20, 20, 20), 12, 1.f);
+		bool over = (m_HotNode == index && m_HotPin < 0);
+		if (over) dl->AddCircleFilled(c, halo, Col(255, 220, 120, 38), 16);
+		float r = over ? pr * 1.4f : pr;
+		dl->AddCircleFilled(c, r, over ? Col(255, 220, 120) : Col(200, 200, 200), 12);
+		dl->AddCircle(c, r, Col(20, 20, 20), 12, 1.f);
 	}
 	// problem badge
 	int sev = Severity(n.id.c_str());
@@ -898,12 +1030,9 @@ void NqCanvas::HandleInput()
 		int pin = HitPin(node, mouse);
 		if (node < 0)
 		{
-			// pins stick out below the box: test every node's pins
-			for (int i = (int)m_Geom.size() - 1; i >= 0 && pin < 0; --i)
-			{
-				int p = HitPin(i, mouse);
-				if (p >= 0) { node = i; pin = p; }
-			}
+			// pins stick out below the box: the nearest one over every node wins
+			int pnode = -1, ppin = -1;
+			if (HitAnyPin(mouse, pnode, ppin)) { node = pnode; pin = ppin; }
 		}
 		if (pin >= 0)
 		{
@@ -1059,27 +1188,60 @@ void NqCanvas::EndDrag()
 	m_DragStart.clear();
 }
 
+// the fading line at the top of the canvas, plus the log so a headless run
+// (-nodlg) records what the gesture did
+void NqCanvas::SetStatus(LPCSTR text)
+{
+	m_Status = text ? text : "";
+	m_StatusAt = ImGui::GetTime();
+	if (!m_Status.empty()) Msg("~ [nq] %s", m_Status.c_str());
+}
+
+bool NqCanvas::CanLink(LPCSTR from, LPCSTR to, xr_string& why) const
+{
+	why.clear();
+	const SNqNode* t = m_Doc->quest.FindNode(to);
+	if (!t)
+		why = NqUtil::Format("'%s' does not exist", to);
+	else if (0 == strcmp(from, to))
+		why = "a node cannot link to itself";
+	else if (NqText::IsTrigger(t->kind.c_str()))
+		why = NqUtil::Format("'%s' is a trigger - triggers have no input", t->id.c_str());
+	return why.empty();
+}
+
 void NqCanvas::EndLink()
 {
 	m_Linking = false;
-	m_Refused.clear();
+	m_Status.clear();
 	ImVec2 mouse = ImGui::GetMousePos();
 	int node = HitNode(mouse);
+	xr_string why;
 	if (node >= 0)
 	{
-		const SNqNode& to = m_Doc->quest.nodes[node];
 		// a refused drop used to vanish without a word; say why instead
-		if (to.id == m_LinkFrom)
-			m_Refused = "a node cannot link to itself";
-		else if (NqText::IsTrigger(to.kind.c_str()))
-			m_Refused = NqUtil::Format("'%s' is a trigger - triggers have no input", to.id.c_str());
-		else
+		if (!CanLink(m_LinkFrom.c_str(), m_Doc->quest.nodes[node].id.c_str(), why))
 		{
-			xr_string err;
-			if (!m_Doc->Connect(m_LinkFrom.c_str(), m_LinkPin.c_str(), to.id.c_str(), err) && !err.empty())
-				Msg("! [nq] connect: %s", err.c_str());
+			m_Status = why;
+			m_StatusAt = ImGui::GetTime();
+			Msg("~ [nq] link: %s", m_Status.c_str());
+			return;
 		}
-		if (!m_Refused.empty()) { Msg("~ [nq] link: %s", m_Refused.c_str()); m_RefusedAt = ImGui::GetTime(); }
+	}
+	else
+	{
+		// a drop that lands beside a box still means that box: its input pin sits
+		// on the edge and hitting it exactly is what was too hard. The source node
+		// and a neighbour that could not take the edge anyway are not guesses worth
+		// making - for them the drop stays "empty space" and offers a new node.
+		node = HitNodeNear(mouse, m_Doc->quest.NodeIndex(m_LinkFrom.c_str()));
+		if (node >= 0 && !CanLink(m_LinkFrom.c_str(), m_Doc->quest.nodes[node].id.c_str(), why)) node = -1;
+	}
+	if (node >= 0)
+	{
+		xr_string err;
+		if (!m_Doc->Connect(m_LinkFrom.c_str(), m_LinkPin.c_str(), m_Doc->quest.nodes[node].id.c_str(), err) && !err.empty())
+			Msg("! [nq] connect: %s", err.c_str());
 	}
 	else if (m_Hovered)
 	{
@@ -1105,6 +1267,60 @@ void NqCanvas::EndMarquee()
 	}
 }
 
+// Q: the selected node reaches for the nearest node it can still be wired to,
+// in either direction (its free output -> another input, or another free output
+// -> its own input). Only pins the catalog declares are candidates and the drop
+// goes through CanLink, so the edge can never be one the validator refuses on
+// the spot. Distances are world units, so the answer does not depend on the zoom.
+void NqCanvas::ConnectNearest()
+{
+	if (m_Doc->selection.size() != 1) { SetStatus("Q wires one node - select exactly one"); return; }
+	int si = -1;
+	const SNodeGeom* sg = GeomOf(m_Doc->selection[0].c_str(), &si);
+	if (!sg) return;
+	const SNqQuest& q = m_Doc->quest;
+	const SNqNode& sn = q.nodes[si];
+
+	float best = FLT_MAX;
+	xr_string from, pin, to;
+	// out of the selection into somebody's input
+	for (int p = 0; p < sg->declared; ++p)
+	{
+		if (!PinFree(sn, sg->pins[p].c_str())) continue;
+		ImVec2 a = OutputPin(*sg, p);
+		for (u32 i = 0; i < q.nodes.size(); ++i)
+		{
+			if ((int)i == si || !CanTakeInput(q, q.nodes[i])) continue;
+			float d = Dist2(a, InputPin(m_Geom[i]));
+			if (d < best) { best = d; from = sn.id; pin = sg->pins[p]; to = q.nodes[i].id; }
+		}
+	}
+	// somebody's free output into the selection
+	if (CanTakeInput(q, sn))
+	{
+		ImVec2 b = InputPin(*sg);
+		for (u32 i = 0; i < q.nodes.size(); ++i)
+		{
+			if ((int)i == si) continue;
+			const SNqNode& o = q.nodes[i];
+			for (int p = 0; p < m_Geom[i].declared; ++p)
+			{
+				if (!PinFree(o, m_Geom[i].pins[p].c_str())) continue;
+				float d = Dist2(OutputPin(m_Geom[i], p), b);
+				if (d < best) { best = d; from = o.id; pin = m_Geom[i].pins[p]; to = sn.id; }
+			}
+		}
+	}
+	if (from.empty()) { SetStatus("Q found no free pin to connect"); return; }
+	xr_string why;
+	if (!CanLink(from.c_str(), to.c_str(), why)) { SetStatus(why.c_str()); return; }
+	xr_string err;
+	if (!m_Doc->Connect(from.c_str(), pin.c_str(), to.c_str(), err))
+		SetStatus(err.empty() ? "connect refused" : err.c_str());
+	else
+		SetStatus(NqUtil::Format("connected %s.%s -> %s", from.c_str(), pin.c_str(), to.c_str()).c_str());
+}
+
 void NqCanvas::HandleKeys()
 {
 	if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) return;
@@ -1117,6 +1333,9 @@ void NqCanvas::HandleKeys()
 	if (ImGui::IsKeyPressed(ImGuiKey_Home))							FrameAll();
 	if (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyCtrl)				FrameSelection();
 	if (ImGui::IsKeyPressed(ImGuiKey_F2))							m_WantRename = true;
+	// IsAnyItemActive on top of the WantTextInput gate above: a popup filter box
+	// (and the canvas button held down mid-drag) keeps Q to itself
+	if (ImGui::IsKeyPressed(ImGuiKey_Q) && !io.KeyCtrl && !io.KeyAlt && !ImGui::IsAnyItemActive()) ConnectNearest();
 	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A))				SelectAll();
 	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C))				CopySelection();
 	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V))				PasteClipboard();
@@ -1288,6 +1507,7 @@ void NqCanvas::DrawContextMenus()
 		if (ImGui::MenuItem("Copy", "Ctrl+C"))			CopySelection();
 		if (ImGui::MenuItem("Add on_enter action..."))	{ m_ChipDragSlot = "enter"; m_OpenAddAction = true; }
 		if (ImGui::MenuItem("Add on_exit action..."))	{ m_ChipDragSlot = "exit"; m_OpenAddAction = true; }
+		if (ImGui::MenuItem("Connect to nearest free pin", "Q", false, m_Doc->selection.size() == 1)) ConnectNearest();
 		if (ImGui::MenuItem("Disconnect outputs"))
 		{
 			xr_string id = m_CtxNode;
@@ -1394,6 +1614,7 @@ void NqCanvas::Draw(const ImVec2& size)
 	EnsureReachable();
 	BuildGeometry();
 	BuildLinks();
+	UpdateHot();
 
 	DrawGrid(dl);
 	DrawLinks(dl);
@@ -1406,11 +1627,11 @@ void NqCanvas::Draw(const ImVec2& size)
 		char lab[32]; xr_sprintf(lab, "%d%%", int(Zoom() * 100.f + 0.5f));
 		dl->AddText(ImVec2(m_Origin.x + 6.f, m_Origin.y + m_Size.y - 18.f), Col(200, 200, 200, 160), lab);
 	}
-	// why the last link drop was refused - a fading line, never a modal
-	if (!m_Refused.empty())
+	// what the last link gesture did, or why it did nothing - a fading line, never a modal
+	if (!m_Status.empty())
 	{
-		if (ImGui::GetTime() - m_RefusedAt > 2.5) m_Refused.clear();
-		else dl->AddText(ImVec2(m_Origin.x + 6.f, m_Origin.y + 6.f), Col(255, 190, 120, 230), m_Refused.c_str());
+		if (ImGui::GetTime() - m_StatusAt > 2.5) m_Status.clear();
+		else dl->AddText(ImVec2(m_Origin.x + 6.f, m_Origin.y + 6.f), Col(255, 190, 120, 230), m_Status.c_str());
 	}
 	dl->PopClipRect();
 

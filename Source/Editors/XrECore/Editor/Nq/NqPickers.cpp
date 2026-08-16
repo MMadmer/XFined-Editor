@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "NqPickers.h"
 #include "NqUtil.h"
 #include "NqDoc.h"
@@ -381,6 +381,60 @@ namespace
 			Add(NqPickers::tSpot, xr_string(kSpots[i]), xr_string(), xr_string("core"));
 	}
 
+	// Story ids of the objects the game actually placed live in the compiled spawn,
+	// not in the config sections: a `story_id` line there belongs to a RESPAWN
+	// TEMPLATE. That is why the picker used to offer esc_2_12_stalker_trader, which
+	// resolves to nothing at runtime, and hide esc_m_trader, which is what the
+	// game's own tasks target. The custom data rides inside all.spawn as plain
+	// text, so the block is read straight out of the bytes.
+	void BuildSpawnStories()
+	{
+		const int idx = EditorGameContent::Find("spawns\\all.spawn");
+		if (idx < 0) return;
+		u32 size = 0;
+		u8* bytes = EditorGameContent::ReadBytes(idx, size);
+		if (!bytes) return;
+
+		const char* kMark = "[story_object]";
+		const size_t mark_len = strlen(kMark);
+		const char* p = (const char*)bytes;
+		const char* end = p + size;
+		while (p + mark_len < end)
+		{
+			const char* at = (const char*)memchr(p, '[', end - p - mark_len);
+			if (!at) break;
+			if (0 != memcmp(at, kMark, mark_len)) { p = at + 1; continue; }
+
+			// the value is on one of the next few lines: normally "story_id = x",
+			// but at least one shipped object writes the bare id with no key
+			const char* q = at + mark_len;
+			const char* stop = (q + 256 < end) ? q + 256 : end;
+			while (q < stop)
+			{
+				const char* eol = q;
+				while (eol < stop && *eol != '\n' && *eol != '\r' && *eol) ++eol;
+				xr_string raw;
+				raw.assign(q, eol);
+				xr_string line = NqUtil::Trim(raw.c_str());
+				q = (eol < stop) ? eol + 1 : stop;
+				if (line.empty()) continue;
+				if (line[0] == '[') break;					// next section, nothing here
+				const size_t eq = line.find('=');
+				xr_string sid;
+				if (eq != xr_string::npos)
+				{
+					if (NqUtil::Trim(line.substr(0, eq)) != "story_id") break;
+					sid = NqUtil::Trim(line.substr(eq + 1));
+				}
+				else sid = line;
+				if (!sid.empty()) Add(NqPickers::tStory, sid, xr_string(), xr_string("spawn"));
+				break;
+			}
+			p = at + mark_len;
+		}
+		EditorGameContent::FreeBytes(bytes);
+	}
+
 	// [story_object] story_id = ... inside the project's spawn\custom_data\*.ltx
 	void BuildProjectStories()
 	{
@@ -426,7 +480,7 @@ namespace
 	// ---- disk cache ----------------------------------------------------------------
 	// bump the number on every change to what an entry stores, or caches written by
 	// an older editor come back with the fields it did not know how to fill
-	const char* kCacheFormat = "nqindex 2 ";
+	const char* kCacheFormat = "nqindex 3 ";
 
 	void CachePath(string_path& out)
 	{
@@ -533,6 +587,7 @@ namespace
 			LoadStringTable(st);
 			BuildProfiles(st, profiles);	// must precede the story ids that borrow from it
 			BuildFromSettings(st, profiles);
+			BuildSpawnStories();		// placed objects; the sections above are templates
 			BuildLevels(st);
 			BuildSmarts(st);
 			BuildCommunities(st);

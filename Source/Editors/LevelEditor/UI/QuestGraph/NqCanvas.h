@@ -61,6 +61,7 @@ private:
 		float	strip_h;			// chip strip height (0 for triggers)
 		int		enter_n, exit_n;	// chip counts
 		xr_vector<xr_string> pins;	// output pins in draw order
+		int		declared;			// pins[0..declared) come from the catalog, the rest only from the file
 	};
 	struct SLinkGeom
 	{
@@ -87,8 +88,10 @@ private:
 	ImVec2			m_MarqueeFrom;	// screen
 	bool			m_Linking;
 	xr_string		m_LinkFrom, m_LinkPin;
-	xr_string		m_Refused;		// why the last link drop was refused (drawn briefly)
-	double			m_RefusedAt;
+	xr_string		m_Status;		// last refusal / result of a link gesture (drawn briefly)
+	double			m_StatusAt;
+	int				m_HotNode;		// node whose pin the cursor is on (-1 none)
+	int				m_HotPin;		// output pin index, or -1 for the input pin
 	// pending "create node and connect" after dropping a link on empty space
 	bool			m_PendingLink;
 	ImVec2			m_MenuWorld;	// world position for node creation from menus
@@ -115,10 +118,20 @@ private:
 	const SNodeGeom* GeomOf			(LPCSTR id, int* index = 0) const;
 	ImVec2			InputPin		(const SNodeGeom& g) const;			// world
 	ImVec2			OutputPin		(const SNodeGeom& g, int pin) const;	// world
+	// DPI factor every raw pixel constant of the canvas is measured in
+	float			UiScale			() const;
+	// how far from a pin the mouse may be and still grab it (screen pixels)
+	float			PinGrab			() const;
+	bool			NearPin			(const ImVec2& screen, const ImVec2& c, float inward, float& d2) const;
 	int				HitNode			(const ImVec2& screen) const;			// index or -1
-	int				HitPin			(int node, const ImVec2& screen) const;	// output pin index or -1
+	// nearest node within the grab radius of its box (`except` skipped), or -1
+	int				HitNodeNear		(const ImVec2& screen, int except = -1) const;
+	// nearest output pin of one node / of every node; `d2` gets its distance
+	int				HitPin			(int node, const ImVec2& screen, float* d2 = 0) const;
+	bool			HitAnyPin		(const ImVec2& screen, int& node, int& pin) const;
 	bool			HitChip			(int node, const ImVec2& screen, xr_string& slot, int& index, bool& plus) const;
 	int				HitLink			(const ImVec2& screen) const;			// link index or -1
+	void			UpdateHot		();
 	void			DrawGrid		(ImDrawList* dl);
 	void			DrawLinks		(ImDrawList* dl);
 	void			DrawNode		(ImDrawList* dl, int index);
@@ -134,6 +147,12 @@ private:
 	const NqCatalog::SKind* PickKind(LPCSTR hint, u32 use_mask);
 	void			InsertNodes		(xr_vector<SNqNode>& in, const ImVec2& place, bool anchor);
 	void			CreateNode		(const NqCatalog::SKind& k, const ImVec2& world, bool connect_pending);
+	// the single gate every new edge passes: false + `why` when the validator
+	// would reject it on the spot (E007)
+	bool			CanLink			(LPCSTR from, LPCSTR to, xr_string& why) const;
+	// Q: wires the one selected node to the nearest free pin of another one
+	void			ConnectNearest	();
+	void			SetStatus		(LPCSTR text);
 	void			SelectOnly		(LPCSTR id);
 	bool			IsSelected		(LPCSTR id) const;
 	void			ToggleSelected	(LPCSTR id);
