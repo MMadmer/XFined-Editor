@@ -163,6 +163,18 @@ namespace
 		}
 	}
 
+	// document-scoped ids are ASCII identifiers, so folding the ASCII range is the
+	// whole job here; captions from the game go through NqPickers, which folds
+	// Cyrillic as well
+	bool ContainsNoCaseAscii(const xr_string& hay, LPCSTR needle)
+	{
+		if (!needle || !needle[0]) return true;
+		xr_string h = hay, n = needle;
+		for (u32 i = 0; i < h.size(); ++i) h[i] = char(tolower((u8)h[i]));
+		for (u32 i = 0; i < n.size(); ++i) n[i] = char(tolower((u8)n[i]));
+		return 0 != strstr(h.c_str(), n.c_str());
+	}
+
 	void SplitSlot(const xr_string& sel, xr_string& slot, int& index)
 	{
 		slot.clear(); index = -1;
@@ -915,13 +927,18 @@ bool NqInspector::DrawTyped(LPCSTR type, const NqCatalog::SParam* p, LPCSTR labe
 
 bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 {
-	bool picked = false;
-	if (!ImGui::BeginPopup(popup)) return false;
-	if (ImGui::IsWindowAppearing()) { m_Search[0] = 0; ImGui::SetKeyboardFocusHere(); }
-	ImGui::InputTextWithHint("##search", "search", m_Search, sizeof(m_Search));
-	ImGui::Separator();
-	xr_string t = type;
-	if (t == "task_id" || t == "var_name" || t == "ref_name" || t == "node_id" || t == "quest_id")
+	if (!ImGui::IsPopupOpen(popup)) return false;
+
+	// The rows are gathered BEFORE the window opens. A popup auto-sizes to its
+	// content, but the list lives in a child with an explicit size, so the width
+	// has to be measured here - otherwise "bar_visitors_cardan_tech_squad - Гро..."
+	// is all the author ever gets to read.
+	const xr_string t = type;
+	const bool doc_scoped = (t == "task_id" || t == "var_name" || t == "ref_name" || t == "node_id" || t == "quest_id");
+	xr_vector<xr_string> labels, values;
+	LPCSTR note = 0;
+
+	if (doc_scoped)
 	{
 		xr_vector<xr_string> ids;
 		const SNqQuest& q = m_Doc->quest;
@@ -932,30 +949,57 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 		if (t == "quest_id") { NqDocs::OtherQuestIds(m_Doc->path.c_str(), ids); ids.insert(ids.begin(), q.id); }
 		for (u32 i = 0; i < ids.size(); ++i)
 		{
-			if (m_Search[0] && !strstr(ids[i].c_str(), m_Search)) continue;
-			if (ImGui::Selectable(ids[i].c_str())) { out = ids[i]; picked = true; ImGui::CloseCurrentPopup(); }
+			if (m_Search[0] && !ContainsNoCaseAscii(ids[i], m_Search)) continue;
+			labels.push_back(ids[i]);
+			values.push_back(ids[i]);
 		}
+		if (labels.empty()) note = ids.empty() ? "nothing declared in this quest" : "nothing matches";
 	}
 	else
 	{
-		NqPickers::EType pt = NqPickers::TypeFromName(type);
-		if (pt == NqPickers::tCount) ImGui::TextDisabled("no index for %s", type);
-		else if (!NqPickers::Available()) ImGui::TextDisabled("link a game to get suggestions");
+		const NqPickers::EType pt = NqPickers::TypeFromName(type);
+		if (pt == NqPickers::tCount)			note = "no index for this parameter";
+		else if (!NqPickers::Available())		note = "link a game to get suggestions";
 		else
 		{
 			xr_vector<const NqPickers::SEntry*> found;
 			NqPickers::Search(pt, m_Search, 200, found);
-			ImGui::BeginChild("##list", ImVec2(360.f, 260.f));
 			for (u32 i = 0; i < found.size(); ++i)
 			{
 				xr_string label = found[i]->id;
 				if (!found[i]->name.empty()) label += "  -  " + found[i]->name;
-				if (ImGui::Selectable(label.c_str())) { out = found[i]->id; picked = true; ImGui::CloseCurrentPopup(); }
+				labels.push_back(label);
+				values.push_back(found[i]->id);
 			}
-			if (found.empty()) ImGui::TextDisabled("nothing matches");
-			ImGui::EndChild();
+			if (labels.empty()) note = "nothing matches";
 		}
 	}
+
+	const ImGuiStyle& st = ImGui::GetStyle();
+	const float em = ImGui::GetFrameHeight();
+	float w = ImGui::CalcTextSize("nothing declared in this quest").x;
+	for (u32 i = 0; i < labels.size(); ++i) w = _max(w, ImGui::CalcTextSize(labels[i].c_str()).x);
+	w += st.WindowPadding.x * 2.f + st.FramePadding.x * 2.f + st.ScrollbarSize;
+	// wide enough to be worth opening, capped so a stray long id cannot span the
+	// screen; anything past the cap stays reachable through the scrollbar
+	w = _min(_max(w, em * 16.f), em * 34.f);
+	ImGui::SetNextWindowSizeConstraints(ImVec2(w, 0.f), ImVec2(w, FLT_MAX));
+
+	bool picked = false;
+	if (!ImGui::BeginPopup(popup)) return false;
+	if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+	ImGui::SetNextItemWidth(-1.f);
+	ImGui::InputTextWithHint("##search", "search", m_Search, sizeof(m_Search));
+	ImGui::Separator();
+
+	const float rows = _min(labels.empty() ? 1.f : float(labels.size()), 14.f);
+	ImGui::BeginChild("##list", ImVec2(-1.f, ImGui::GetTextLineHeightWithSpacing() * rows),
+		false, ImGuiWindowFlags_HorizontalScrollbar);
+	for (u32 i = 0; i < labels.size(); ++i)
+		if (ImGui::Selectable(labels[i].c_str())) { out = values[i]; picked = true; ImGui::CloseCurrentPopup(); }
+	if (note) ImGui::TextDisabled("%s", note);
+	ImGui::EndChild();
+
 	ImGui::EndPopup();
 	return picked;
 }
@@ -966,7 +1010,9 @@ bool NqInspector::DrawPicked(LPCSTR label, LPCSTR type, xr_string& s)
 	ImGui::PushID(label);
 	ch |= InputStr(label, s, false, 0.f, ButtonRoom("..."));
 	ImGui::SameLine();
-	if (ImGui::SmallButton("...")) ImGui::OpenPopup("pick");
+	// the filter is cleared here, not on the appearing frame: the list is gathered
+	// before the popup opens, so a leftover query would decide its width
+	if (ImGui::SmallButton("...")) { m_Search[0] = 0; ImGui::OpenPopup("pick"); }
 	if (PickerPopup("pick", type, s)) ch = true;
 	ImGui::PopID();
 	return ch;

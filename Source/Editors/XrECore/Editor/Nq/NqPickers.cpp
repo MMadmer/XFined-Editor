@@ -584,13 +584,37 @@ NqPickers::EType NqPickers::TypeFromName(LPCSTR type_name)
 
 LPCSTR NqPickers::TypeName(EType t)	{ return (t >= 0 && t < tCount) ? kTypeNames[t] : ""; }
 
+// Captions are UTF-8 Russian, and _strnicmp folds ASCII only: it matches
+// "Сидорович" but not "сидорович", which reads as "the search is broken".
+// Cyrillic is two bytes, so it is folded by hand - А..Я -> а..я (А..П keep the
+// D0 lead, Р..Я cross into D1) and Ё -> ё.
+static void FoldNoCase(const xr_string& src, xr_string& out)
+{
+	out.clear();
+	out.reserve(src.size());
+	for (const u8* p = (const u8*)src.c_str(); *p; ++p)
+	{
+		const u8 c = *p;
+		if (c >= 'A' && c <= 'Z') { out += char(c + 0x20); continue; }
+		if (c == 0xD0 && p[1])
+		{
+			const u8 d = p[1];
+			if (d == 0x81)				{ out += char(0xD1); out += char(0x91); ++p; continue; }
+			if (d >= 0x90 && d <= 0x9F)	{ out += char(0xD0); out += char(d + 0x20); ++p; continue; }
+			if (d >= 0xA0 && d <= 0xAF)	{ out += char(0xD1); out += char(d - 0x20); ++p; continue; }
+		}
+		out += char(c);
+	}
+}
+
 static bool ContainsNoCase(const xr_string& hay, const xr_string& needle)
 {
 	if (needle.empty()) return true;
 	if (hay.size() < needle.size()) return false;
-	for (size_t i = 0; i + needle.size() <= hay.size(); ++i)
-		if (0 == _strnicmp(hay.c_str() + i, needle.c_str(), needle.size())) return true;
-	return false;
+	xr_string h, n;
+	FoldNoCase(hay, h);
+	FoldNoCase(needle, n);
+	return 0 != strstr(h.c_str(), n.c_str());
 }
 
 void NqPickers::Search(EType t, LPCSTR query, int limit, xr_vector<const SEntry*>& out)
@@ -604,7 +628,16 @@ void NqPickers::Search(EType t, LPCSTR query, int limit, xr_vector<const SEntry*
 		for (u32 i = 0; i < idx.size() && (int)out.size() < limit; ++i)
 		{
 			const SEntry& e = idx[i];
-			const bool prefix = q.empty() || 0 == _strnicmp(e.id.c_str(), q.c_str(), q.size());
+			// a caption prefix ranks with an id prefix, so typing "Сид" puts
+			// Сидорович at the top instead of after every substring hit
+			bool prefix = q.empty() || 0 == _strnicmp(e.id.c_str(), q.c_str(), q.size());
+			if (!prefix && !e.name.empty())
+			{
+				xr_string h, n;
+				FoldNoCase(e.name, h);
+				FoldNoCase(q, n);
+				prefix = h.size() >= n.size() && 0 == strncmp(h.c_str(), n.c_str(), n.size());
+			}
 			if (pass == 0 && !prefix) continue;
 			if (pass == 1 && (prefix || !(ContainsNoCase(e.id, q) || ContainsNoCase(e.name, q)))) continue;
 			out.push_back(&e);
