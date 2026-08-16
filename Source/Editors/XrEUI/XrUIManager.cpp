@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #if defined(USE_DX11)
 #include "imgui_impl_dx11.h"
 #else
@@ -181,9 +181,13 @@ void XrUIManager::OnDrawUI()
 {
 }
 
+void XrUIManager::BlockShortCuts() { m_BlockShortCutsFrame = ImGui::GetFrameCount(); }
+
 void XrUIManager::ApplyShortCut(DWORD Key)
 {
     if ((ImGui::GetIO().WantTextInput))return;
+    // the key arrives between frames, so the claim from the frame just drawn counts
+    if (m_BlockShortCutsFrame >= 0 && ImGui::GetFrameCount() - m_BlockShortCutsFrame <= 1) return;
 	bool IsFail = true;
 	if (Key >= 'A' && Key <= 'Z')
 	{

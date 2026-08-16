@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "NqCanvas.h"
 #include "../../../XrECore/Editor/Nq/NqLayout.h"
 #include "../../../XrECore/Editor/Nq/NqLua.h"
@@ -1328,21 +1328,31 @@ void NqCanvas::HandleKeys()
 	// of the tab being worked in - the inspector next to it has its own lists
 	if (!m_Hovered && !ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) return;
 	if (ImGui::GetIO().WantTextInput) return;		// a text field owns the keyboard
+	// the same keys are bound globally to the scene, and that layer runs from the
+	// window proc before this one: told nothing, it copies an empty scene selection
+	// and swallows the key-up on its way
+	if (UI) UI->BlockShortCuts();
 	ImGuiIO& io = ImGui::GetIO();
-	if (ImGui::IsKeyPressed(ImGuiKey_Delete))						DeleteSelection();
-	if (ImGui::IsKeyPressed(ImGuiKey_Home))							FrameAll();
-	if (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyCtrl)				FrameSelection();
-	if (ImGui::IsKeyPressed(ImGuiKey_F2))							m_WantRename = true;
+	// ImGui::IsKeyPressed defaults to repeat=true. These are one-shot commands, and
+	// on auto-repeat they run again every repeat tick - which is how holding Ctrl
+	// after a paste spawned nodes without end: the key-up of V never reached ImGui
+	// (the editor's global shortcut layer had eaten it), so V read as still down
+	// and every repeat while Ctrl was held pasted once more.
+	const bool once = false;
+	if (ImGui::IsKeyPressed(ImGuiKey_Delete, once))					DeleteSelection();
+	if (ImGui::IsKeyPressed(ImGuiKey_Home, once))					FrameAll();
+	if (ImGui::IsKeyPressed(ImGuiKey_F, once) && !io.KeyCtrl)		FrameSelection();
+	if (ImGui::IsKeyPressed(ImGuiKey_F2, once))						m_WantRename = true;
 	// IsAnyItemActive on top of the WantTextInput gate above: a popup filter box
 	// (and the canvas button held down mid-drag) keeps Q to itself
-	if (ImGui::IsKeyPressed(ImGuiKey_Q) && !io.KeyCtrl && !io.KeyAlt && !ImGui::IsAnyItemActive()) ConnectNearest();
-	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A))				SelectAll();
-	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C))				CopySelection();
-	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V))				PasteClipboard();
-	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D))				DuplicateSelection();
-	if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z)) m_Doc->Undo();
-	if (io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_Y) || (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z)))) m_Doc->Redo();
-	if (ImGui::IsKeyPressed(ImGuiKey_Escape)) { m_Linking = false; m_Marquee = false; }
+	if (ImGui::IsKeyPressed(ImGuiKey_Q, once) && !io.KeyCtrl && !io.KeyAlt && !ImGui::IsAnyItemActive()) ConnectNearest();
+	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, once))		SelectAll();
+	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, once))		CopySelection();
+	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, once))		PasteClipboard();
+	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, once))		DuplicateSelection();
+	if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, once)) m_Doc->Undo();
+	if (io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_Y, once) || (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, once)))) m_Doc->Redo();
+	if (ImGui::IsKeyPressed(ImGuiKey_Escape, once)) { m_Linking = false; m_Marquee = false; }
 }
 
 //------------------------------------------------------------------------------

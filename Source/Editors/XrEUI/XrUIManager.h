@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 enum TShiftState_
 {
 	ssNone = 0,
@@ -72,6 +72,11 @@ public:
 	// (first use only, so the user can move it afterwards). Windows created at
 	// runtime carry a generated name, so the default layout cannot name them.
 	void DockNextWindowWith(const char* next_to);
+	// A panel that binds the usual editing keys itself calls this while it owns the
+	// keyboard: the global bindings act on the scene, so without it Ctrl+C inside
+	// the quest graph also ran the scene's copy - and its key-up never reached ImGui,
+	// which left the key reading as held down.
+	void BlockShortCuts();
 protected:
 	virtual void OnDrawUI();
 
@@ -80,6 +85,7 @@ protected:
 	// nothing - each editor knows its own window names.
 	virtual void BuildDefaultDockLayout(unsigned int /*dockspace_id*/) {}
 private:
+	int m_BlockShortCutsFrame{-1};
 	unsigned int m_DockNodes[5]{};
 	unsigned int m_DockRoot{0};
 	bool m_ResetDockLayout{false};
