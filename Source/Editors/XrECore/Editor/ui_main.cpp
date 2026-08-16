@@ -647,10 +647,13 @@ bool TUI::Idle()
     do
     {
         ZeroMemory(&msg, sizeof(msg));
-        if (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
+        // Wide pump: TranslateMessage emits WM_CHAR in the character set of the
+        // call that fetched the keystroke, so an ANSI PeekMessage would squash
+        // the character through the system codepage before ImGui ever sees it.
+        if (::PeekMessageW(&msg, NULL, 0U, 0U, PM_REMOVE))
         {
             ::TranslateMessage(&msg);
-            ::DispatchMessage(&msg);
+            ::DispatchMessageW(&msg);
             if (msg.message == WM_QUIT)
             {
                 UI->Quit();

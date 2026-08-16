@@ -240,7 +240,10 @@ private:
 	virtual				void	   _BCL			AddSeqFrame(pureFrame* f, bool mt);
 	virtual				void	   _BCL			RemoveSeqFrame(pureFrame* f);
 private:
-	WNDCLASSEX m_WC;
+	// Explicitly the wide class: XrECore is built without UNICODE, so the bare
+	// WNDCLASSEX would register an ANSI window and every typed character would
+	// reach ImGui as a single codepage byte instead of a Unicode one.
+	WNDCLASSEXW m_WC;
 public:
 	void CreateWindow();
 	void DestryWindow();

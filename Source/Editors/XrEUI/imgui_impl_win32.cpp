@@ -691,8 +691,20 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARA
         return 0;
     case WM_CHAR:
         // You can also use ToAscii()+GetKeyboardState() to retrieve characters.
-        if (wParam > 0 && wParam < 0x10000)
-            io.AddInputCharacterUTF16((unsigned short)wParam);
+        // An ANSI window delivers one codepage byte per keystroke, not a UTF-16
+        // unit: taking wParam as a codepoint there turns Cyrillic into Latin-1
+        // lookalikes (cp1251 0xD2 'T' would arrive as U+00D2 'O-grave').
+        if (::IsWindowUnicode(hwnd))
+        {
+            if (wParam > 0 && wParam < 0x10000)
+                io.AddInputCharacterUTF16((unsigned short)wParam);
+        }
+        else
+        {
+            wchar_t wch = 0;
+            ::MultiByteToWideChar(CP_ACP, MB_PRECOMPOSED, (char*)&wParam, 1, &wch, 1);
+            io.AddInputCharacter(wch);
+        }
         return 0;
     case WM_SETCURSOR:
         if (LOWORD(lParam) == HTCLIENT && ImGui_ImplWin32_UpdateMouseCursor())
