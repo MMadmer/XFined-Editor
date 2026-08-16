@@ -381,13 +381,36 @@ namespace
 			Add(NqPickers::tSpot, xr_string(kSpots[i]), xr_string(), xr_string("core"));
 	}
 
+	// Caption of a spawn section: NPCs read through their character profile, items
+	// through inv_name. Anything else (restrictors, smarts, physical props) simply
+	// has no player-facing text and must stay bare rather than echo an id.
+	xr_string SectionCaption(const xr_string& sect, const TStrings& st, const TStrings& profiles)
+	{
+		if (!pSettings || sect.empty() || !pSettings->section_exist(sect.c_str())) return xr_string();
+		if (pSettings->line_exist(sect.c_str(), "character_profile"))
+		{
+			LPCSTR prof = pSettings->r_string(sect.c_str(), "character_profile");
+			if (prof && prof[0])
+			{
+				TStrings::const_iterator it = profiles.find(xr_string(prof));
+				if (it != profiles.end()) return it->second;
+			}
+		}
+		if (pSettings->line_exist(sect.c_str(), "inv_name"))
+		{
+			LPCSTR key = pSettings->r_string(sect.c_str(), "inv_name");
+			if (key && key[0]) return Caption(st, xr_string(key));
+		}
+		return xr_string();
+	}
+
 	// Story ids of the objects the game actually placed live in the compiled spawn,
 	// not in the config sections: a `story_id` line there belongs to a RESPAWN
 	// TEMPLATE. That is why the picker used to offer esc_2_12_stalker_trader, which
 	// resolves to nothing at runtime, and hide esc_m_trader, which is what the
 	// game's own tasks target. The custom data rides inside all.spawn as plain
 	// text, so the block is read straight out of the bytes.
-	void BuildSpawnStories()
+	void BuildSpawnStories(const TStrings& st, const TStrings& profiles)
 	{
 		const int idx = EditorGameContent::Find("spawns\\all.spawn");
 		if (idx < 0) return;
@@ -427,7 +450,46 @@ namespace
 					sid = NqUtil::Trim(line.substr(eq + 1));
 				}
 				else sid = line;
-				if (!sid.empty()) Add(NqPickers::tStory, sid, xr_string(), xr_string("spawn"));
+				if (!sid.empty())
+				{
+					// The packet just before the block names the object's spawn section
+					// (its logic cfg path carries it), and that section is what knows the
+					// NPC's profile - which is how esc_m_trader reads as its character
+					// instead of as an id. Only a section that actually has a caption is
+					// accepted, so a stray token cannot invent one.
+					xr_string name, from;
+					// the section shows up on both sides: the packet before the block, and
+					// the "[logic] cfg = scripts\<level>\<section>.ltx" line just after it
+					const char* back = (at - 512 > (const char*)bytes) ? at - 512 : (const char*)bytes;
+					const char* fwd = (at + 512 < end) ? at + 512 : end;
+					// candidates are ranked by how close they sit to the block, so the
+					// object's own section wins over whatever the neighbouring packet held
+					xr_vector<std::pair<size_t, xr_string> > tokens;
+					xr_string tok;
+					const char* tok_at = back;
+					for (const char* b = back; b <= fwd; ++b)
+					{
+						const char c = (b < fwd) ? *b : ' ';
+						const bool word = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+							|| (c >= '0' && c <= '9') || c == '_';
+						if (word) { if (tok.empty()) tok_at = b; tok += c; continue; }
+						if (tok.size() >= 4)
+						{
+							const size_t d = (tok_at < at) ? size_t(at - tok_at) : size_t(tok_at - at);
+							tokens.push_back(std::make_pair(d, tok));
+						}
+						tok.clear();
+					}
+					std::sort(tokens.begin(), tokens.end());
+					for (u32 t = 0; t < tokens.size() && name.empty(); ++t)
+					{
+						name = SectionCaption(tokens[t].second, st, profiles);
+						if (!name.empty()) from = tokens[t].second;
+					}
+					xr_string extra = "spawn";
+					if (!from.empty()) { extra += " "; extra += from; }
+					Add(NqPickers::tStory, sid, name, extra);
+				}
 				break;
 			}
 			p = at + mark_len;
@@ -480,7 +542,7 @@ namespace
 	// ---- disk cache ----------------------------------------------------------------
 	// bump the number on every change to what an entry stores, or caches written by
 	// an older editor come back with the fields it did not know how to fill
-	const char* kCacheFormat = "nqindex 3 ";
+	const char* kCacheFormat = "nqindex 6 ";
 
 	void CachePath(string_path& out)
 	{
@@ -586,8 +648,10 @@ namespace
 			TStrings st, profiles;
 			LoadStringTable(st);
 			BuildProfiles(st, profiles);	// must precede the story ids that borrow from it
+			// placed objects first: a template id looks identical in the list but
+			// resolves to nothing at runtime, so the entry that works is offered first
+			BuildSpawnStories(st, profiles);
 			BuildFromSettings(st, profiles);
-			BuildSpawnStories();		// placed objects; the sections above are templates
 			BuildLevels(st);
 			BuildSmarts(st);
 			BuildCommunities(st);
@@ -697,6 +761,14 @@ void NqPickers::Search(EType t, LPCSTR query, int limit, xr_vector<const SEntry*
 			if (pass == 1 && (prefix || !(ContainsNoCase(e.id, q) || ContainsNoCase(e.name, q)))) continue;
 			out.push_back(&e);
 		}
+
+	// A story id read out of the spawn belongs to an object the game placed; the
+	// same NPC also appears as the respawn template it was made from, and that one
+	// resolves to nothing at runtime. Both look alike in the list and carry the same
+	// caption, so the one that works is offered first.
+	if (t == tStory)
+		std::stable_partition(out.begin(), out.end(),
+			[](const SEntry* e) { return 0 == _strnicmp(e->extra.c_str(), "spawn", 5); });
 }
 
 void NqPickers::McpLookup(LPCSTR raw, xr_string& out)
