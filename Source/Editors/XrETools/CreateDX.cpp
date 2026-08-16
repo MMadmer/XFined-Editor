@@ -268,7 +268,7 @@ extern "C"{
 
 		// map each ordered triple to the queue of original faces carrying it
 		typedef u64							face_key;
-		typedef xr_map<face_key, xr_deque<DWORD> >	remap_map;
+		typedef xr_flat_hash_map<face_key, xr_deque<DWORD> >	remap_map;
 		remap_map	lookup;
 		for (UINT f=0; f<NumFaces; ++f)
 		{

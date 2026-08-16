@@ -22,13 +22,35 @@ private:
 		IC bool operator()(LPCSTR x, LPCSTR y) const
 		{	return xr_strcmp(x,y)<0;	}
 	};
+	struct str_hash
+	{
+		size_t operator()(LPCSTR value) const noexcept
+		{
+			size_t hash = sizeof(size_t) == 8 ? size_t{14695981039346656037ull} : size_t{2166136261u};
+			const size_t prime = sizeof(size_t) == 8 ? size_t{1099511628211ull} : size_t{16777619u};
+			while (*value)
+			{
+				hash ^= static_cast<u8>(*value++);
+				hash *= prime;
+			}
+			return hash;
+		}
+	};
+	struct str_equal
+	{
+		bool operator()(LPCSTR left, LPCSTR right) const noexcept
+		{
+			return xr_strcmp(left, right) == 0;
+		}
+	};
 	struct texture_detail	{
 		const char*			T;
 		R_constant_setup*	cs;
 	};
 public:
 	DEFINE_MAP_PRED(const char*,IBlender*,		map_Blender,	map_BlenderIt,		str_pred);
-	DEFINE_MAP_PRED(const char*,CTexture*,		map_Texture,	map_TextureIt,		str_pred);
+	using map_Texture = xr_flat_hash_map<const char*, CTexture*, str_hash, str_equal>;
+	using map_TextureIt = map_Texture::iterator;
 	DEFINE_MAP_PRED(const char*,CMatrix*,		map_Matrix,		map_MatrixIt,		str_pred);
 	DEFINE_MAP_PRED(const char*,CConstant*,		map_Constant,	map_ConstantIt,		str_pred);
 	DEFINE_MAP_PRED(const char*,CRT*,			map_RT,			map_RTIt,			str_pred);

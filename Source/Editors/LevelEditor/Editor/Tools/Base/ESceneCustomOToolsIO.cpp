@@ -30,9 +30,10 @@ bool ESceneCustomOTool::LoadSelection(IReader& F)
     int count					= 0;
 	F.r_chunk					(CHUNK_OBJECT_COUNT,&count);
 
-    SPBItem* pb 				= UI->ProgressStart(count,xr_string().sprintf("Loading %s(stream)...",ClassDesc()).c_str());
+    // Empty tools are common, and opening a console for them costs more than the load.
+    SPBItem* pb 				= count ? UI->ProgressStart(count,xr_string().sprintf("Loading %s(stream)...",ClassDesc()).c_str()) : nullptr;
     Scene->ReadObjectsStream	(F,CHUNK_OBJECTS, EScene::TAppendObject(this, &ESceneCustomOTool::OnLoadSelectionAppendObject),pb);
-    UI->ProgressEnd				(pb);
+    if (pb) UI->ProgressEnd	(pb);
 
     return true;
 }
@@ -62,7 +63,7 @@ bool ESceneCustomOTool::LoadLTX(CInifile& ini)
 
     u32 count			= ini.r_u32("main", "objects_count");
 
-	SPBItem* pb 		= UI->ProgressStart(count,xr_string().sprintf("Loading %s(ltx)...",ClassDesc()).c_str());
+	SPBItem* pb 		= count ? UI->ProgressStart(count,xr_string().sprintf("Loading %s(ltx)...",ClassDesc()).c_str()) : nullptr;
 
     u32 i				= 0;
     string128			buff;
@@ -78,10 +79,10 @@ bool ESceneCustomOTool::LoadLTX(CInifile& ini)
               if (!OnLoadAppendObject(obj))
                   xr_delete(obj);
           }
-          pb->Inc();
+          if (pb) pb->Inc();
       }
 
-	UI->ProgressEnd		(pb);
+	if (pb) UI->ProgressEnd(pb);
 
     return true;
 }
@@ -93,9 +94,9 @@ bool ESceneCustomOTool::LoadStream(IReader& F)
     int count					= 0;
 	F.r_chunk					(CHUNK_OBJECT_COUNT,&count);
 
-    SPBItem* pb 				= UI->ProgressStart(count,xr_string().sprintf("Loading %s...",ClassDesc()).c_str());
+    SPBItem* pb 				= count ? UI->ProgressStart(count,xr_string().sprintf("Loading %s...",ClassDesc()).c_str()) : nullptr;
     Scene->ReadObjectsStream	(F,CHUNK_OBJECTS, EScene::TAppendObject(this, &ESceneCustomOTool::OnLoadAppendObject),pb);
-    UI->ProgressEnd				(pb);
+    if (pb) UI->ProgressEnd	(pb);
 
     return true;
 }

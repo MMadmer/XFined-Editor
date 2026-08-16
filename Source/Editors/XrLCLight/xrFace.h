@@ -19,7 +19,7 @@ struct  DataVertex;
 typedef	Tvertex< DataVertex> Vertex;
 
 typedef std::pair<Vertex*, Vertex *>	PAIR_VV;
-typedef xr_map<Vertex*,Vertex*>			map_v2v;	// vertex to vertex translation
+typedef xr_flat_hash_map<Vertex*,Vertex*>	map_v2v;	// vertex to vertex translation
 typedef map_v2v::iterator				map_v2v_it;
 
 

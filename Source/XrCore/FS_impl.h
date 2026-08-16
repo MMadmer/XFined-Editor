@@ -246,7 +246,7 @@ IC	u32 IReaderBase<T>::find_chunk	(u32 ID, BOOL* bCompressed)
 
 struct IReaderBase_Test {
 
-	typedef xr_hash_map<u32, u32> id2pos_container;
+	typedef xr_flat_hash_map<u32, u32> id2pos_container;
 
 	id2pos_container			  id2pos;
 	u32							  last_pos;

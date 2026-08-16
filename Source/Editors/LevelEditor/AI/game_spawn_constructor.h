@@ -63,7 +63,7 @@ private:
 	ALife::_SPAWN_ID				m_spawn_id;
 	CThreadManager					m_thread_manager;
 	CSpawnHeader					m_spawn_header;
-	xr_map<ALife::_STORY_ID, ISE_ALifeDynamicObject*> m_story_objects;
+	xr_flat_hash_map<ALife::_STORY_ID, ISE_ALifeDynamicObject*> m_story_objects;
 	LEVEL_INFO_STORAGE				m_levels;
 	LEVEL_SPAWN_STORAGE				m_level_spawns;
 	LEVEL_CHANGER_STORAGE			m_level_changers;

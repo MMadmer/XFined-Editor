@@ -248,8 +248,9 @@ void ELibrary::RenameObject(LPCSTR nm0, LPCSTR nm1, EItemType type)
         // rename in cache
         EditObjPairIt it 	= m_EditObjects.find(nm0);
 	    if (it!=m_EditObjects.end()){
-            m_EditObjects[nm1]	= it->second;
+			CEditableObject* object = it->second;
             m_EditObjects.erase	(it);
+			m_EditObjects[nm1]	= object;
         }
 	}
 }
@@ -263,8 +264,9 @@ void ELibrary::UnloadEditObject(LPCSTR full_name)
         	ELog.DlgMsg(mtError,"Object '%s' still referenced.",it->first.c_str());
             THROW;
         }
+		CEditableObject* object = it->second;
     	m_EditObjects.erase(it);
-    	xr_delete		(it->second);
+		xr_delete		(object);
     }
 }
 //---------------------------------------------------------------------------

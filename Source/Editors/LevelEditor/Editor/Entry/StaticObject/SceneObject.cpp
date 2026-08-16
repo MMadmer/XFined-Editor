@@ -28,7 +28,7 @@ void CSceneObject::Construct(LPVOID data)
 
 CSceneObject::~CSceneObject()
 {
-    for (CSurface* i : m_Surfaces) { i->OnDeviceDestroy(); xr_delete(i); }
+    for (CSurface* i : m_Surfaces) { if (!i->IsVoid()) i->OnDeviceDestroy(); xr_delete(i); }
 	Lib.RemoveEditObject(m_pReference);
 	DropVisual();
 }
@@ -151,7 +151,9 @@ void CSceneObject::Render(int priority, bool strictB2F)
 #ifdef _LEVEL_EDITOR    
     Scene->SelectLightsForObject(this);
 #endif
-	m_pReference->Render(_Transform(), priority, strictB2F, &m_Surfaces);
+	// Default instances reuse the reference shaders; only edited surfaces own shader handles.
+	SurfaceVec* surfaces = m_Flags.test(flUseSurface) ? &m_Surfaces : nullptr;
+	m_pReference->Render(_Transform(), priority, strictB2F, surfaces);
     if (Selected()){
     	if (1==priority){
             if (false==strictB2F){
@@ -292,20 +294,19 @@ void CSceneObject::GetFullTransformToLocal( Fmatrix& m )
 
 CEditableObject* CSceneObject::UpdateReference()
 {
-    for (CSurface* i : m_Surfaces) { i->OnDeviceDestroy(); xr_delete(i); }
+    for (CSurface* i : m_Surfaces) { if (!i->IsVoid()) i->OnDeviceDestroy(); xr_delete(i); }
     m_Surfaces.clear();
 	Lib.RemoveEditObject(m_pReference);
 	m_pReference		= (m_ReferenceName.size())?Lib.CreateEditObject(*m_ReferenceName):0;
     UpdateTransform		();
     if (m_pReference)
     {
+        m_Surfaces.reserve(m_pReference->SurfaceCount());
         for (size_t i = 0; i < m_pReference->SurfaceCount(); i++)
         {
             CSurface* surf = xr_new< CSurface>();
             surf->CopyFrom(m_pReference->Surfaces()[i]);
             m_Surfaces.push_back(surf);
-            if(surf->IsVoid())
-                surf->OnDeviceCreate();
         }
     } 
     return m_pReference;
@@ -342,7 +343,7 @@ void CSceneObject::ReferenceChange(PropValue* sender)
 void CSceneObject::OnChangeShader(PropValue* sender)
 {
     OnChangeSurface(sender);
-    for (CSurface* i : m_Surfaces) { i->OnDeviceDestroy(); }
+    for (CSurface* i : m_Surfaces) { if (!i->IsVoid()) i->OnDeviceDestroy(); }
 }
 void CSceneObject::OnChangeSurface(PropValue* sender)
 {
@@ -493,17 +494,16 @@ bool CSceneObject::Validate(bool bMsg)
 
 void CSceneObject::ClearSurface()
 {
-    for (CSurface* i : m_Surfaces) { i->OnDeviceDestroy(); xr_delete(i); }
+    for (CSurface* i : m_Surfaces) { if (!i->IsVoid()) i->OnDeviceDestroy(); xr_delete(i); }
     m_Surfaces.clear_and_free();
     if (m_pReference)
     {
+        m_Surfaces.reserve(m_pReference->SurfaceCount());
         for (size_t i = 0; i < m_pReference->SurfaceCount(); i++)
         {
             CSurface* surf = xr_new< CSurface>();
             surf->CopyFrom(m_pReference->Surfaces()[i]);
             m_Surfaces.push_back(surf);
-            if (surf->IsVoid())
-                surf->OnDeviceCreate();
         }
     }
     m_Flags.set(flUseSurface, 0);

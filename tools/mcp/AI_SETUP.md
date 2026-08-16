@@ -11,6 +11,14 @@ The XFined Editor hosts a local automation endpoint whenever it is running:
 * alive from the very first frame — the project browser stage included
 * an MCP stdio bridge is bundled at `tools/mcp/xfined_mcp.py` (Python 3, stdlib only)
 
+Scene-load performance can be checked against the same endpoint without an MCP
+client. Keep the expected object count in the command so a faster incomplete
+load fails the benchmark instead of looking like an improvement:
+
+```powershell
+python tools/mcp/benchmark_scene_load.py l01_escape.level --warmup 1 --repeats 5 --expected-total 6002
+```
+
 ## Starting the editor on a project
 
 Launch it with the project already open and the picker skipped — otherwise an

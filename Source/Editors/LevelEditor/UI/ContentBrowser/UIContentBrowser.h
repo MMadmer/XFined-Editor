@@ -96,7 +96,8 @@ private:
 		ImTextureID					tex;
 		u32							last_used;
 	};
-	DEFINE_MAP(shared_str, SThumb, ThumbMap, ThumbMapIt);
+	using ThumbMap = xr_flat_hash_map<shared_str, SThumb>;
+	using ThumbMapIt = ThumbMap::iterator;
 	ThumbMap						m_Thumbs;
 	u32								m_Tick;
 

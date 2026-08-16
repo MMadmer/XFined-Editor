@@ -471,7 +471,11 @@ bool NqLua::NodeFromValue(const SNqValue& v, SNqNode& n, xr_vector<xr_string>& e
 	if (!id || !id->IsString())	{ ShapeErr(errs, "node without id"); return false; }
 	n.id = id->s;
 	n.kind = v.GetString("kind", "");
-	if (const SNqValue* o = v.Get("once"))	{ n.once = o->AsBool(false); n.once_set = true; }
+	if (const SNqValue* o = v.Get("once"))
+	{
+		if (!o->IsBool()) ShapeErr(errs, "node '%s': once must be true or false", n.id.c_str());
+		else { n.once = o->b; n.once_set = true; }
+	}
 	if (const SNqValue* p = v.Get("params"))
 	{
 		if (p->IsTable()) n.params = *p;
@@ -522,6 +526,7 @@ bool NqLua::NodeFromValue(const SNqValue& v, SNqNode& n, xr_vector<xr_string>& e
 		if (!out->IsTable()) ShapeErr(errs, "node '%s': out must be a table { pin = target | { targets } }", n.id.c_str());
 		else
 		{
+			if (!out->arr.empty()) ShapeErr(errs, "node '%s': out must use named pins", n.id.c_str());
 			// pins are read in the canonical key order the walker produced;
 			// the writer re-sorts by the catalog pin order anyway
 			for (u32 i = 0; i < out->keys.size(); ++i)
@@ -578,16 +583,21 @@ void NqLua::QuestFromValue(const SNqValue& v, SNqQuest& q, xr_vector<xr_string>&
 	{
 		if (!vars->IsTable()) ShapeErr(errs, "vars must be a table { name = default }");
 		else
+		{
+			if (!vars->arr.empty()) ShapeErr(errs, "vars must use named keys");
 			for (u32 i = 0; i < vars->keys.size(); ++i)
 			{
 				SNqVar var; var.name = vars->keys[i]; var.value = vars->vals[i];
 				q.vars.push_back(var);
 			}
+		}
 	}
 	if (const SNqValue* tasks = v.Get("tasks"))
 	{
 		if (!tasks->IsTable()) ShapeErr(errs, "tasks must be a table { id = { title = ..., ... } }");
 		else
+		{
+			if (!tasks->arr.empty()) ShapeErr(errs, "tasks must use named keys");
 			for (u32 i = 0; i < tasks->keys.size(); ++i)
 			{
 				SNqTask t;
@@ -595,6 +605,7 @@ void NqLua::QuestFromValue(const SNqValue& v, SNqQuest& q, xr_vector<xr_string>&
 				TaskFromValue(tasks->keys[i].c_str(), tasks->vals[i], t);
 				q.tasks.push_back(t);
 			}
+		}
 	}
 	if (const SNqValue* nodes = v.Get("nodes"))
 	{

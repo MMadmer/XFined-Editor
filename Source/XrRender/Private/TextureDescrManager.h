@@ -28,8 +28,8 @@ class CTextureDescrMngr
 		texture_spec*		m_spec;
         texture_desc            ():m_assoc(NULL),m_spec(NULL){}
 	};
-	DEFINE_MAP(shared_str, texture_desc,	map_TD,	map_TDIt);
-	DEFINE_MAP(shared_str, cl_dt_scaler*,	map_CS,	map_CSIt);
+	using map_TD = xr_flat_hash_map<shared_str, texture_desc>;
+	using map_CS = xr_flat_hash_map<shared_str, cl_dt_scaler*>;
 
 	map_TD									m_texture_details;
 	map_CS									m_detail_scalers;

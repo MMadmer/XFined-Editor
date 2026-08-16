@@ -9,7 +9,8 @@
 //----------------------------------------------------
 class CEditableObject;
 
-DEFINE_MAP_PRED(xr_string,CEditableObject*,EditObjMap,EditObjPairIt,astr_pred);
+using EditObjMap = xr_flat_hash_map<xr_string, CEditableObject*>;
+using EditObjPairIt = EditObjMap::iterator;
 //----------------------------------------------------
 class ECORE_API ELibrary//:	public pureDeviceCreate, public pureDeviceDestroy
 {

@@ -97,6 +97,16 @@ public:
 	}
 };
 
+template <>
+struct std::hash<shared_str>
+{
+    size_t operator()(const shared_str& value) const noexcept
+    {
+        const str_value* data = value._get();
+        return data ? data->dwCRC : std::hash<str_c>{}(nullptr);
+    }
+};
+
 // res_ptr == res_ptr
 // res_ptr != res_ptr
 // const res_ptr == ptr

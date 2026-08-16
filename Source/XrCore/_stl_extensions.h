@@ -5,6 +5,22 @@ using std::swap;
 
 #include "_type_traits.h"
 
+// XP-targeted modules expose the lock type without declaring the Vista lock APIs.
+#if defined(_MSC_VER) && defined(SRWLOCK_INIT) && _WIN32_WINNT < 0x0600
+#pragma push_macro("SRWLOCK_INIT")
+#undef SRWLOCK_INIT
+#define XR_PHMAP_RESTORE_SRWLOCK_INIT
+#endif
+
+#include <parallel_hashmap/phmap.h>
+
+#ifdef XR_PHMAP_RESTORE_SRWLOCK_INIT
+#pragma pop_macro("SRWLOCK_INIT")
+#undef XR_PHMAP_RESTORE_SRWLOCK_INIT
+#endif
+
+#include <string_view>
+
 #ifdef	__BORLANDC__
 #define M_NOSTDCONTAINERS_EXT
 #endif
@@ -134,6 +150,15 @@ public:
 	}
 };
 
+template <>
+struct std::hash<xr_string>
+{
+    size_t operator()(const xr_string& value) const noexcept
+    {
+        return std::hash<std::string_view>{}(std::string_view(value.data(), value.size()));
+    }
+};
+
 // vector
 template	<typename T, typename allocator = xalloc<T> >
 class xr_vector : public std::vector<T,allocator> {
@@ -236,6 +261,14 @@ template	<typename K, class V, class P=std::less<K> >	class	xr_multimap		: publi
 #else 
 	template	<typename K, class V, class _Traits=stdext::hash_compare<K, std::less<K> > >	class	xr_hash_map		: public stdext::hash_map<K,V,_Traits>	{ public: u32 size() const {return (u32)__super::size(); } };
 #endif // #ifdef STLPORT
+
+template <typename K, class V, class Hasher = phmap::Hash<K>, class Equal = std::equal_to<K>,
+    typename Allocator = xalloc<std::pair<const K, V>>>
+using xr_flat_hash_map = phmap::flat_hash_map<K, V, Hasher, Equal, Allocator>;
+
+template <typename K, class V, class Hasher = phmap::Hash<K>, class Equal = std::equal_to<K>,
+    typename Allocator = xalloc<std::pair<const K, V>>>
+using xr_node_hash_map = phmap::node_hash_map<K, V, Hasher, Equal, Allocator>;
 
 #endif
 
