@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Game data is cp1251 and must reach the engine byte for byte: line-ending
+# normalization would also invite an encoding guess on files git cannot decode.
+*.ltx -text

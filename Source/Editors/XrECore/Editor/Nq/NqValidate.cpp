@@ -544,15 +544,27 @@ namespace
 			const xr_vector<xr_string>* nx = n.Targets("next");
 			if (!nx) continue;
 			int phrases = 0, unconditional = 0;
+			bool to_actor = false;
 			for (u32 k = 0; k < nx->size(); ++k)
 			{
 				const SNqNode* tn = q.FindNode((*nx)[k].c_str());
 				if (!tn || !NqText::IsPhraseKind(tn->kind.c_str())) continue;
 				++phrases;
-				if (tn->cond.empty()) ++unconditional;
+				if (tn->kind == "dialog.actor_phrase") to_actor = true;
+				// the runtime counts `once` as a precondition too - a phrase that
+				// already fired is filtered exactly like a failed cond
+				if (tn->cond.empty() && !(tn->once_set && tn->once)) ++unconditional;
 			}
-			if (phrases > 0 && unconditional == 0)
-				WARN(c, "W011", n.id.c_str(), "out:next", "no unconditional continuation - the game adds an automatic reply when every phrase is filtered");
+			// The runtime injects a hidden leaf whenever the children are not ALL
+			// unconditional, and that leaf ends the talk without passing the topic:
+			// no on_exit, no `done`. Among NPC replies it sits last and one
+			// unconditional sibling always outranks it, so it is unreachable. In a
+			// player's option list every survivor is shown, so it becomes a real
+			// way out that silently skips whatever hangs off `done`.
+			if (phrases > 0 && (to_actor ? unconditional < phrases : unconditional == 0))
+				WARN(c, "W011", n.id.c_str(), "out:next", to_actor
+					? "conditional player options - the game adds a hidden way out that does not fire the topic's done pin"
+					: "no unconditional continuation - the game adds an automatic reply when every phrase is filtered");
 		}
 		// E010 (unreachable from a topic) / E011 (entered from the world)
 		for (u32 i = 0; i < q.nodes.size(); ++i)

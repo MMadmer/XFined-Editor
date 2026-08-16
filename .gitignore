@@ -27,7 +27,11 @@ gamedata_cs/
 gamedata/*.*
 gamedata/ai/
 gamedata/anims/
-gamedata/configs/
+# Everything under configs is local runtime data - except the bundled NQ catalog,
+# the fallback the editor reads when no game is linked. Git cannot re-include a
+# file whose parent directory is excluded, hence the /* form on the parent.
+gamedata/configs/*
+!gamedata/configs/nq/
 gamedata/levels/
 gamedata/meshes/
 gamedata/scripts/

@@ -317,7 +317,7 @@ return {
    kill (objective.kill; target=spawn simulation_boar@esc_smart_terrain_2_12 ref=boars)  done -> report
    …
    finish (flow.end; completed)
-   problems: none            -- иначе: "W011 sid_1: у не-листовой фразы нет безусловного продолжения — …"
+   problems: none            -- иначе: "W011 sid_1: безусловны не все ответы игрока — …"
    ```
    Outline можно запросить и без открытия вкладки (`xfined_quest_list` даёт сводку по
    всем квестам).
@@ -488,7 +488,7 @@ since   = 1                        ; версия каталога, в кото�
 | `dialog.npc_phrase` | `text` (+`node.cond` = precondition) | `next` | нет | фраза NPC |
 | `dialog.actor_phrase` | `text` (+`node.cond`) | `next` | нет | фраза игрока |
 | `objective.kill` | `target: {story}\|{ref}\|{spawn=spawn_spec}`, `by_actor: bool=false` | `done` | да | `npc_on_death_callback`/`monster_on_death_callback`/`squad_on_npc_death`/`squad_on_unregister` + опрос `alife():object(id)` для оффлайн-смертей; `spawn` создаёт цель при входе (`SIMBOARD:create_squad`, `sim_board.script:176`) и запоминает `ref` |
-| `objective.fetch` | `section: item_section`, `count: int=1` | `done` | да | опрос инвентаря актора (+`actor_on_item_take`) |
+| `objective.fetch` | `section: item_section`, `count: int=1` (штуки предметов: для патронов — коробки, а не патроны) | `done` | да | опрос инвентаря актора (+`actor_on_item_take`) |
 | `objective.reach` | `place`, `map_spot: bool=true`, `spot_text: text?` | `done` | да | `level.name()` + дистанция / `db.zone_by_name[...]:inside()`; для позиции создаётся якорь `space_restrictor` (`alife():create`) — под метку карты и цель задания, удаляется при выходе |
 | `wait.timer` | `duration` | `done` | да | игровое время через `game.get_game_time()`; реальное — остаток в секундах, декремент по тику |
 | `wait.when` | `timeout: duration?`; условия — `node.cond` | `done`, `timeout` | да | как `trigger.when`, но с входом |
@@ -507,8 +507,8 @@ since   = 1                        ; версия каталога, в кото�
 
 | kind | params | реализация (якорь) |
 |---|---|---|
-| `item.give` | `section`, `count=1` | в контексте диалога — `dialogs.relocate_item_section_to_actor(npc, actor, section, count)` (`dialogs.script:1976`, с UI «получено»); иначе `alife():create(section, actor pos, lvid, gvid, actor:id())`×count (патроны — `create_ammo`, `_g.script:1438`) + `news_manager.relocate_item(actor,"in",…)` (`news_manager.script:247`) |
-| `item.take` | `section`, `count=1` \| `"all"` | в диалоге — `dialogs.relocate_item_section_from_actor` (`:2058`); иначе итерация `db.actor:iterate_inventory` + `alife():release` |
+| `item.give` | `section`, `count=1` (штуки предметов: для патронов — коробки, а не патроны) | в контексте диалога — `dialogs.relocate_item_section_to_actor(npc, actor, section, count)` (`dialogs.script:1976`, с UI «получено»); иначе `alife():create(section, actor pos, lvid, gvid, actor:id())`×count (патроны — `create_ammo`, `_g.script:1438`) + `news_manager.relocate_item(actor,"in",…)` (`news_manager.script:247`) |
+| `item.take` | `section`, `count=1` \| `"all"` (те же единицы, что у `item.give`: штуки, для патронов — коробки) | в диалоге — `dialogs.relocate_item_section_from_actor` (`:2058`); иначе итерация `db.actor:iterate_inventory` + `alife():release` |
 | `item.spawn` | `section`, `place` \| `into: target_ref` (контейнер/NPC), `ref?` | `alife():create(section, pos, lvid, gvid[, parent_id])`; lvid/gvid для чужого уровня — `xms.graph_vertex` + `game_graph():vertex(gvid):level_vertex_id()` |
 | `money.give` / `money.take` | `amount` | `db.actor:give_money(±n)`; в диалоге `dialogs.relocate_money_to_actor/from_actor` (`:2025/:2031`) |
 | `info.give` / `info.disable` | `info` | `db.actor:give_info_portion/disable_info_portion` — неизвестный id **не** ассертит (`InfoPortion.cpp:28-36`) |
@@ -541,7 +541,7 @@ since   = 1                        ; версия каталога, в кото�
 | kind | params | реализация |
 |---|---|---|
 | `has_info` | `info` | `has_alife_info(info)` (`_g.script:540`, работает оффлайн) |
-| `has_item` | `section`, `count=1` | подсчёт по инвентарю актора |
+| `has_item` | `section`, `count=1` (штуки предметов: для патронов — коробки, а не патроны) | подсчёт по инвентарю актора |
 | `has_money` | `amount` | `db.actor:money()` |
 | `var` | `name`, `op: enum(eq\|ne\|lt\|le\|gt\|ge)=eq`, `value` | переменные квеста |
 | `node_done` | `node: string` | нода с `once` уже отработала (`done`) |
@@ -627,9 +627,19 @@ Lua-поверхность: `CPhraseDialog:AddPhrase`, `CPhrase:GetPhraseScript`
   движок сортирует по убыванию goodwill и берёт первый проходящий порог → выбирается
   **первая по порядку** фраза, чей `cond` истинен. Для актора тот же порядок = порядок
   показа в списке.
-- **Защита от ассерта**: если у не-листовой фразы нет ни одного безусловного
-  продолжения, рантайм добавляет скрытое безусловное продолжение-лист
-  («Пока.» для стороны актора / «…» для стороны NPC); редактор предупреждает (W011).
+- **Защита от ассерта**: рантайм добавляет скрытое безусловное продолжение-лист
+  («Пока.» для стороны актора / «…» для стороны NPC), если продолжения фразы
+  **не все** безусловны — одного безусловного соседа недостаточно
+  (`build_dialog`: `#kids > 0 and (uncond == 0 or uncond < #kids)`). Безусловная
+  фраза — без `cond` **и** без `once` (`is_uncond` = `#node.cond == 0 and not
+  node.once`): `once` работает как precondition. Лист висит на минимальном
+  goodwill, поэтому берётся только когда не прошёл ни один настоящий кандидат;
+  но если до него дошли — разговор закрывается, а тема **не** засчитывается:
+  ни `on_exit` темы, ни пина `done`, токен остаётся на теме. Среди реплик NPC до
+  листа не добраться (любой безусловный сосед его перекрывает), в списке ответов
+  игрока он — реальная выбираемая строка. W011 редактора повторяет этот расклад:
+  для ответов игрока — ровно условие рантайма, для реплик NPC — только когда
+  безусловных нет вовсе.
 - **Выход из диалога в граф**: ребро из фразы в не-диалоговую ноду = «когда фраза
   сказана, активировать цель» (через очередь). Фраза без диалоговых детей = лист →
   диалог закрывается; в этот момент тема считается пройденной: `on_exit` темы,
@@ -1109,7 +1119,7 @@ Python — записи в `TOOLS` + `CMD_MAP` (`tools/mcp/xfined_mcp.py`), та
 | E030 | `task`/`quest`/`ref`/`var`/`node` ссылка на несуществующее объявление |
 | E031 | `actor.teleport` на другой уровень |
 | E050 | синтаксическая ошибка кастомного Lua |
-| W011 | у не-листовой фразы нет безусловного продолжения (появится авто-ответ) |
+| W011 | продолжения не-листовой фразы: среди ответов игрока безусловны не все (появится скрытый выход мимо `done`), либо среди реплик NPC нет ни одной безусловной (появится авто-ответ). Безусловная = без `cond` и без `once` |
 | W012 | у `dialog.topic` нет ни одной фразы-продолжения |
 | W013 | тема с `once=false` без условий — будет предлагаться бесконечно |
 | W020 | недостижимая нода |
