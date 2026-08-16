@@ -175,6 +175,17 @@ namespace
 		return 0 != strstr(h.c_str(), n.c_str());
 	}
 
+	// The catalog states defaults as text, so the comparison is made in the type
+	// the widget actually produced rather than by re-printing the value.
+	bool EqualsDefault(const NqCatalog::SParam& p, const SNqValue& v)
+	{
+		if (!p.has_default || v.IsNil()) return false;
+		if (v.IsBool())		return p.def == (v.b ? "true" : "false");
+		if (v.IsNumber())	return !p.def.empty() && atof(p.def.c_str()) == v.n;
+		if (v.IsString())	return p.def == v.s;
+		return false;
+	}
+
 	void SplitSlot(const xr_string& sel, xr_string& slot, int& index)
 	{
 		slot.clear(); index = -1;
@@ -656,7 +667,14 @@ void NqInspector::DrawNodeSection()
 	if (!trig && k)
 	{
 		bool once = m_Node.once_set ? m_Node.once : k->once_default;
-		if (ImGui::Checkbox("once", &once)) { m_Node.once = once; m_Node.once_set = true; ch = true; }
+		// toggling back to what the kind already does drops the override, same as
+		// the reset button - otherwise it stays declared and the button stays lit
+		if (ImGui::Checkbox("once", &once))
+		{
+			m_Node.once = once;
+			m_Node.once_set = (once != k->once_default);
+			ch = true;
+		}
 		if (m_Node.once_set) { ImGui::SameLine(); if (ImGui::SmallButton("default##once")) { m_Node.once_set = false; m_Node.once = k->once_default; ch = true; } }
 	}
 
@@ -829,7 +847,12 @@ bool NqInspector::DrawParam(const NqCatalog::SParam& p, SNqValue& params, LPCSTR
 	}
 	if (ch)
 	{
-		if (v.IsNil()) params.Erase(p.name.c_str()); else params.Set(p.name.c_str(), v);
+		// Typing the catalog default back is the same statement as not writing the
+		// parameter at all, so it stops being written: otherwise the asset carries
+		// a redundant value and the "default" button - which means "there is an
+		// explicit value here" - never goes away.
+		if (v.IsNil() || EqualsDefault(p, v)) params.Erase(p.name.c_str());
+		else params.Set(p.name.c_str(), v);
 	}
 	return ch;
 }
