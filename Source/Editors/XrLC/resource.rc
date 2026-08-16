@@ -14,6 +14,15 @@
 #undef APSTUDIO_READONLY_SYMBOLS
 
 /////////////////////////////////////////////////////////////////////////////
+//
+// Icon
+//
+// XFined: the lowest ICON id is what the shell shows for the executable.
+#include "../Public/xfined_resource.h"
+IDI_XFINED_EDITOR       ICON                    "../../../assets/xfined-editor-xf-logo-icon.ico"
+
+
+/////////////////////////////////////////////////////////////////////////////
 // Russian resources
 
 #if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_RUS)

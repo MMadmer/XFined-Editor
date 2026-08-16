@@ -1107,12 +1107,18 @@ static void ImGui_ImplWin32_InitPlatformInterface()
     wcex.cbClsExtra = 0;
     wcex.cbWndExtra = 0;
     wcex.hInstance = ::GetModuleHandle(NULL);
-    wcex.hIcon = NULL;
+    // XFined: a panel torn off the dock becomes a real window with its own
+    // taskbar button (WS_EX_APPWINDOW), so it needs the application icon like
+    // the main window. Absent from the host exe -> NULL -> the system default,
+    // which is exactly the stock ImGui behaviour.
+    wcex.hIcon = (HICON)::LoadImage(wcex.hInstance, MAKEINTRESOURCE(1), IMAGE_ICON,
+        ::GetSystemMetrics(SM_CXICON), ::GetSystemMetrics(SM_CYICON), LR_SHARED);
     wcex.hCursor = NULL;
     wcex.hbrBackground = (HBRUSH)(COLOR_BACKGROUND + 1);
     wcex.lpszMenuName = NULL;
     wcex.lpszClassName = _T("ImGui Platform");
-    wcex.hIconSm = NULL;
+    wcex.hIconSm = (HICON)::LoadImage(wcex.hInstance, MAKEINTRESOURCE(1), IMAGE_ICON,
+        ::GetSystemMetrics(SM_CXSMICON), ::GetSystemMetrics(SM_CYSMICON), LR_SHARED);
     ::RegisterClassEx(&wcex);
 
     ImGui_ImplWin32_UpdateMonitors();

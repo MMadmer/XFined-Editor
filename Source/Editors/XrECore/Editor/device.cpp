@@ -1,5 +1,6 @@
 //---------------------------------------------------------------------------
 #include "stdafx.h"
+#include "../../Public/xfined_resource.h"
 #pragma hdrstop
 #include "gamefont.h"
 #include <sal.h>
@@ -743,8 +744,23 @@ void CEditorRenderDevice::CreateWindow()
 	}
 
 	m_WC = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, TEXT("XFined Editor"), NULL };
+	// The class icon is what the title bar, the taskbar button and Alt+Tab show.
+	// Both sizes are loaded from the executable's own resources so an editor tool
+	// without the icon resource simply keeps the system default instead of failing.
+	// LR_SHARED: these live for the process and must not be destroyed by hand.
+	const HINSTANCE self = m_WC.hInstance;
+	m_WC.hIcon = (HICON)::LoadImageA(self, MAKEINTRESOURCEA(IDI_XFINED_EDITOR), IMAGE_ICON,
+		::GetSystemMetrics(SM_CXICON), ::GetSystemMetrics(SM_CYICON), LR_SHARED);
+	m_WC.hIconSm = (HICON)::LoadImageA(self, MAKEINTRESOURCEA(IDI_XFINED_EDITOR), IMAGE_ICON,
+		::GetSystemMetrics(SM_CXSMICON), ::GetSystemMetrics(SM_CYSMICON), LR_SHARED);
 	::RegisterClassEx(&m_WC);
 	m_hWnd= ::CreateWindowA(m_WC.lpszClassName, TEXT("XFined Editor"), WS_OVERLAPPEDWINDOW, 100, 100, int(1280 * dpi_scale), int(800 * dpi_scale), NULL, NULL, m_WC.hInstance, NULL);
+
+	// A window created before the class icon exists (or by a tool that has none)
+	// keeps the default one, so set it on the window as well - this is also what
+	// the DWM reads for the thumbnail and the Alt+Tab entry.
+	if (m_WC.hIcon)		::SendMessageA(m_hWnd, WM_SETICON, ICON_BIG, (LPARAM)m_WC.hIcon);
+	if (m_WC.hIconSm)	::SendMessageA(m_hWnd, WM_SETICON, ICON_SMALL, (LPARAM)m_WC.hIconSm);
 
 	::UpdateWindow(m_hWnd);
 }

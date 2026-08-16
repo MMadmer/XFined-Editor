@@ -1,6 +1,7 @@
 //---------------------------------------------------------------------------
 
 #include "stdafx.h"
+#include "../../Public/xfined_resource.h"
 #pragma hdrstop
 
 #include "xr_input.h"
@@ -757,6 +758,22 @@ void TUI::OnDestroy()
     EDevice->ShutDown();    
 }
 
+// A console allocated by the editor is a window of this process like any other:
+// untouched it wears the stock console icon and an empty title in the taskbar.
+static void XFinedBrandConsole()
+{
+	::SetConsoleTitleA("XFined Editor");
+	const HWND con = ::GetConsoleWindow();
+	if (!con) return;
+	const HINSTANCE self = ::GetModuleHandle(NULL);
+	HICON big = (HICON)::LoadImageA(self, MAKEINTRESOURCEA(IDI_XFINED_EDITOR), IMAGE_ICON,
+		::GetSystemMetrics(SM_CXICON), ::GetSystemMetrics(SM_CYICON), LR_SHARED);
+	HICON small_ = (HICON)::LoadImageA(self, MAKEINTRESOURCEA(IDI_XFINED_EDITOR), IMAGE_ICON,
+		::GetSystemMetrics(SM_CXSMICON), ::GetSystemMetrics(SM_CYSMICON), LR_SHARED);
+	if (big)	::SendMessageA(con, WM_SETICON, ICON_BIG, (LPARAM)big);
+	if (small_)	::SendMessageA(con, WM_SETICON, ICON_SMALL, (LPARAM)small_);
+}
+
 SPBItem* TUI::ProgressStart		(float max_val, LPCSTR text)
 {
 	VERIFY(m_bReady);
@@ -768,6 +785,7 @@ SPBItem* TUI::ProgressStart		(float max_val, LPCSTR text)
     {
         AllocConsole();
         m_HConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        XFinedBrandConsole();
     }
 	return item;
 }
@@ -812,6 +830,7 @@ void TUI::ShowConsole()
 		AllocConsole();
 		m_HConsole = GetStdHandle(STD_OUTPUT_HANDLE);
 		SetConsoleTextAttribute(m_HConsole, 15);
+		XFinedBrandConsole();
 	}
 }
 
