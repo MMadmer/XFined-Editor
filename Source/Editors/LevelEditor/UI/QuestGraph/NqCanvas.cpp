@@ -160,6 +160,7 @@ NqCanvas::NqCanvas(NqDoc* doc) : m_Doc(doc)
 	m_StatusAt = 0.0;
 	m_HotNode = m_HotPin = -1;
 	m_ChipDragIndex = -1;
+	m_ChipDragging = false;
 	m_WantFrameAll = m_WantFrameSel = m_WantRename = m_WantFocusAction = m_OpenAddAction = false;
 	m_WantZoom = -1;
 	m_ReachRevision = u32(-1);
@@ -831,12 +832,23 @@ void NqCanvas::DrawChipStrip(ImDrawList* dl, int index, LPCSTR slot, const ImVec
 	int count = acts ? (int)acts->size() : 0;
 	ImFont* font = ImGui::GetFont();
 	float fs = kFontBase * z * 0.85f;
+	// while an action is in the air this strip says whether it would land here, and
+	// exactly between which two chips - a drag across nodes is otherwise a guess
+	const ImVec2 mouse = ImGui::GetIO().MousePos;
+	const bool drop_here = m_ChipDragging
+		&& mouse.y >= tl.y && mouse.y <= tl.y + h && mouse.x >= tl.x && mouse.x <= tl.x + w;
+	if (drop_here)
+		dl->AddRect(ImVec2(tl.x, tl.y), ImVec2(tl.x + w, tl.y + h), Col(120, 200, 255, 140), 3.f * z, 0, 1.5f * z);
+
 	for (int i = 0; i <= count; ++i)
 	{
 		ImVec2 a(x, tl.y + pad * 0.5f), b(x + chip, tl.y + h - pad * 0.5f);
 		bool plus = (i == count);
 		bool selected = !plus && m_Doc->sel_slot == prefix + NqUtil::Format("%d", i);
-		bool dragging = !plus && m_ChipDragIndex == i && m_ChipDragSlot == slot && m_ChipDragNode == n.id;
+		bool dragging = !plus && m_ChipDragging && m_ChipDragIndex == i && m_ChipDragSlot == slot && m_ChipDragNode == n.id;
+		if (drop_here && mouse.x >= a.x - pad && mouse.x <= b.x)
+			dl->AddRectFilled(ImVec2(a.x - pad * 0.5f, a.y), ImVec2(a.x - pad * 0.5f + _max(2.f, 2.f * z), b.y),
+				Col(120, 200, 255, 230));
 		ImU32 bg = plus ? Col(255, 255, 255, 28) : (selected ? Col(255, 210, 90, 220) : Col(255, 255, 255, 60));
 		if (dragging) bg = Col(120, 200, 255, 220);
 		dl->AddRectFilled(a, b, bg, 3.f * z);
@@ -1111,30 +1123,53 @@ void NqCanvas::HandleInput()
 	}
 	if (m_Dragging && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) EndDrag();
 
-	// chip drag (reorder inside a strip)
-	if (m_ChipDragIndex >= 0 && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+	// chip drag: reorder inside a strip, move between on_enter and on_exit, or hand
+	// the action to another node - one drop path for all three, because the strips
+	// are the same widget wherever they are drawn
+	if (m_ChipDragIndex >= 0 && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) m_ChipDragging = true;
+	if (m_ChipDragIndex >= 0 && ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !m_ChipDragging)
+	{
+		m_ChipDragIndex = -1; m_ChipDragNode.clear();		// a plain click, already selected on press
+	}
+	else if (m_ChipDragIndex >= 0 && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
 	{
 		int node = HitNode(mouse);
 		xr_string slot; int idx = 0; bool plus = false;
-		if (node >= 0 && m_Doc->quest.nodes[node].id == m_ChipDragNode && HitChip(node, mouse, slot, idx, plus) && slot == m_ChipDragSlot && !plus && idx != m_ChipDragIndex)
+		if (node >= 0 && HitChip(node, mouse, slot, idx, plus))
 		{
-			int from = m_ChipDragIndex, to = idx;
-			xr_string nid = m_ChipDragNode, s = slot;
-			m_Doc->Edit([&](SNqQuest& q)
+			const xr_string to_id = m_Doc->quest.nodes[node].id;
+			const xr_string from_id = m_ChipDragNode, from_slot = m_ChipDragSlot;
+			const int from = m_ChipDragIndex;
+			const bool same_strip = (to_id == from_id && slot == from_slot);
+			// dropping an action on its own place is not a move
+			if (!same_strip || (!plus && idx != from))
 			{
-				SNqNode* n = q.FindNode(nid.c_str());
-				if (!n) return;
-				xr_vector<SNqAction>& v = n->Slot(s.c_str());
-				if (from < (int)v.size() && to < (int)v.size())
+				int landed = 0;
+				m_Doc->Edit([&](SNqQuest& q)
 				{
-					SNqAction a = v[from];
-					v.erase(v.begin() + from);
-					v.insert(v.begin() + to, a);
-				}
-			});
-			m_Doc->sel_slot = s + ":" + NqUtil::Format("%d", to);
+					SNqNode* src = q.FindNode(from_id.c_str());
+					SNqNode* dst = q.FindNode(to_id.c_str());
+					if (!src || !dst) return;
+					xr_vector<SNqAction>& sv = src->Slot(from_slot.c_str());
+					if (from >= (int)sv.size()) return;
+					SNqAction a = sv[from];
+					sv.erase(sv.begin() + from);
+					// the same vector when the strip did not change, so the index is
+					// clamped against what is left after the erase
+					xr_vector<SNqAction>& dv = dst->Slot(slot.c_str());
+					int at = plus ? (int)dv.size() : idx;
+					if (at > (int)dv.size()) at = (int)dv.size();
+					if (at < 0) at = 0;
+					dv.insert(dv.begin() + at, a);
+					landed = at;
+				});
+				// follow the action so the inspector keeps showing what was dragged
+				m_Doc->selection.clear();
+				m_Doc->selection.push_back(to_id);
+				m_Doc->sel_slot = slot + ":" + NqUtil::Format("%d", landed);
+			}
 		}
-		m_ChipDragIndex = -1; m_ChipDragNode.clear();
+		m_ChipDragIndex = -1; m_ChipDragNode.clear(); m_ChipDragging = false;
 	}
 
 	if (m_Linking && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) EndLink();
@@ -1352,7 +1387,12 @@ void NqCanvas::HandleKeys()
 	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, once))		DuplicateSelection();
 	if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, once)) m_Doc->Undo();
 	if (io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_Y, once) || (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, once)))) m_Doc->Redo();
-	if (ImGui::IsKeyPressed(ImGuiKey_Escape, once)) { m_Linking = false; m_Marquee = false; }
+	if (ImGui::IsKeyPressed(ImGuiKey_Escape, once))
+	{
+		m_Linking = false; m_Marquee = false;
+		// drops the action back where it came from: the move only happens on release
+		m_ChipDragIndex = -1; m_ChipDragNode.clear(); m_ChipDragging = false;
+	}
 }
 
 //------------------------------------------------------------------------------
@@ -1630,6 +1670,29 @@ void NqCanvas::Draw(const ImVec2& size)
 	DrawLinks(dl);
 	DrawLinking(dl);
 	for (u32 i = 0; i < m_Geom.size(); ++i) DrawNode(dl, (int)i);
+
+	// the action being moved rides under the cursor: the strips only say where it
+	// would land, and a drag with nothing in hand reads as nothing happening
+	if (m_ChipDragging)
+	{
+		const float z = Zoom();
+		const float cw = kChipW * z, ch = NqLayout::kChipStrip * z - kChipPad * z;
+		const ImVec2 m = ImGui::GetIO().MousePos;
+		const ImVec2 a(m.x - cw * 0.5f, m.y - ch * 0.5f), b(a.x + cw, a.y + ch);
+		// red over anything that is not a strip: releasing there cancels the move,
+		// and the author should know that before letting go
+		xr_string over_slot; int over_idx = 0; bool over_plus = false;
+		const int over_node = HitNode(m);
+		const bool ok = over_node >= 0 && HitChip(over_node, m, over_slot, over_idx, over_plus);
+		dl->AddRectFilled(a, b, ok ? Col(120, 200, 255, 200) : Col(230, 110, 90, 200), 3.f * z);
+		dl->AddRect(a, b, Col(20, 20, 20, 180), 3.f * z);
+		char label[16];
+		xr_sprintf(label, "%d", m_ChipDragIndex + 1);
+		ImFont* font = ImGui::GetFont();
+		const float fs = kFontBase * z * 0.85f;
+		const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.f, label);
+		dl->AddText(font, fs, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), Col(20, 20, 20), label);
+	}
 	DrawMarquee(dl);
 
 	// zoom label

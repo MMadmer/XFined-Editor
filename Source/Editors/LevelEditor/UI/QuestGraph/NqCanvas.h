@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // NQ - the graph canvas of a quest document (docs/NQ_ARCHITECTURE.md par. 13.8).
 // Own ImDrawList implementation: infinite world, right-button pan, ten fixed zoom
@@ -101,6 +101,9 @@ private:
 	int				m_FilterSel;	// highlighted row of the filtered list (keyboard)
 	xr_string		m_ChipDragNode, m_ChipDragSlot;
 	int				m_ChipDragIndex;
+	// a press on a chip only nominates it; the move starts once the mouse has
+	// actually travelled (ImGui's own drag threshold), so a click stays a click
+	bool			m_ChipDragging;
 	bool			m_WantFrameAll, m_WantFrameSel, m_WantRename, m_WantFocusAction, m_OpenAddAction;
 	xr_string		m_WantFrameNode;
 	int				m_WantZoom;		// zoom asked for explicitly (-1 = none); applied after framing
