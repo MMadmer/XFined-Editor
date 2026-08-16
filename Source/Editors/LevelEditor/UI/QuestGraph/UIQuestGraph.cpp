@@ -190,14 +190,34 @@ void UIQuestGraphWindow::DrawProblems()
 	for (u32 i = 0; i < m_Doc->problems.size(); ++i)
 	{
 		const SNqProblem& p = m_Doc->problems[i];
+		ImGui::PushID((int)i);
 		ImGui::PushStyleColor(ImGuiCol_Text, p.IsError() ? ImVec4(1, 0.45f, 0.4f, 1) : ImVec4(1, 0.85f, 0.4f, 1));
-		bool clicked = ImGui::Selectable(p.Text().c_str());
+		const xr_string text = p.Text();
+		bool clicked = ImGui::Selectable(text.c_str());
 		ImGui::PopStyleColor();
 		if (clicked && !p.node_id.empty())
 		{
 			m_Canvas->RequestFrameNode(p.node_id.c_str());
 			m_Doc->sel_slot = p.slot.find("enter:") == 0 || p.slot.find("exit:") == 0 ? p.slot : "";
 		}
+		// a message names a node, a slot and a parameter - it is meant to be pasted
+		// into a report or a chat, and reading it off the screen by hand is silly
+		if (ImGui::BeginPopupContextItem("##nq_problem_ctx"))
+		{
+			if (ImGui::MenuItem("Copy")) ImGui::SetClipboardText(text.c_str());
+			if (ImGui::MenuItem("Copy all"))
+			{
+				xr_string all;
+				for (u32 k = 0; k < m_Doc->problems.size(); ++k)
+				{
+					all += m_Doc->problems[k].Text();
+					all += "\r\n";
+				}
+				ImGui::SetClipboardText(all.c_str());
+			}
+			ImGui::EndPopup();
+		}
+		ImGui::PopID();
 	}
 	if (m_Doc->problems.empty()) ImGui::TextDisabled("none");
 	ImGui::EndChild();

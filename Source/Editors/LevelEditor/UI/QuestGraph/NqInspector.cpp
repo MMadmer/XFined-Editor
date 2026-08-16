@@ -731,9 +731,18 @@ void NqInspector::DrawNodeSection()
 			if (!any) { ImGui::Separator(); any = true; }
 			// these sentences name a parameter and say what to do about it - cut
 			// them off at the panel edge and they stop being actionable
+			ImGui::PushID((int)i);
+			const xr_string ptext = m_Doc->problems[i].Text();
 			ImGui::PushStyleColor(ImGuiCol_Text, m_Doc->problems[i].IsError() ? ImVec4(1, 0.45f, 0.4f, 1) : ImVec4(1, 0.85f, 0.4f, 1));
-			ImGui::TextWrapped("%s", m_Doc->problems[i].Text().c_str());
+			ImGui::TextWrapped("%s", ptext.c_str());
 			ImGui::PopStyleColor();
+			// same right-click copy as the problems strip of the tab
+			if (ImGui::BeginPopupContextItem("##nq_prob_ctx"))
+			{
+				if (ImGui::MenuItem("Copy")) ImGui::SetClipboardText(ptext.c_str());
+				ImGui::EndPopup();
+			}
+			ImGui::PopID();
 		}
 
 	if (ch) m_NodeDirty = true;
