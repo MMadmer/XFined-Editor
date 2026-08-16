@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "NqInspector.h"
 #include "../../../XrECore/Editor/Nq/NqLua.h"
 #include "../../../XrECore/Editor/Nq/NqPickers.h"
@@ -134,6 +134,35 @@ namespace
 		return va.Equals(vb) && a.has_pos == b.has_pos;
 	}
 
+	// A variable is named from two shapes: typed structs at node level, and plain
+	// tables once a condition nests inside another one's params (any{of=...},
+	// cases). Renaming has to reach both or a rename silently orphans references.
+	void RenameVarInValue(SNqValue& v, LPCSTR from, LPCSTR to)
+	{
+		if (!v.IsTable()) return;
+		SNqValue* k = v.Get("kind");
+		if (k && k->IsString() && (k->s == "var" || k->s == "var.set" || k->s == "var.add"))
+		{
+			SNqValue* nm = v.Get("name");
+			if (nm && nm->IsString() && nm->s == from) *nm = SNqValue::String(to);
+		}
+		for (u32 i = 0; i < v.vals.size(); ++i) RenameVarInValue(v.vals[i], from, to);
+		for (u32 i = 0; i < v.arr.size(); ++i)  RenameVarInValue(v.arr[i], from, to);
+	}
+
+	void RenameVarInConds(xr_vector<SNqCond>& conds, LPCSTR from, LPCSTR to)
+	{
+		for (u32 i = 0; i < conds.size(); ++i)
+		{
+			if (conds[i].kind == "var")
+			{
+				SNqValue* nm = conds[i].params.Get("name");
+				if (nm && nm->IsString() && nm->s == from) *nm = SNqValue::String(to);
+			}
+			RenameVarInValue(conds[i].params, from, to);
+		}
+	}
+
 	void SplitSlot(const xr_string& sel, xr_string& slot, int& index)
 	{
 		slot.clear(); index = -1;
@@ -150,6 +179,10 @@ NqInspector::NqInspector(NqDoc* doc) : m_Doc(doc)
 	m_NodeDirty = m_QuestDirty = false;
 	m_FocusRename = m_FocusAction = false;
 	m_Search[0] = 0;
+	m_VarsFrac = 0.30f;
+	m_ParamsCtx = 0;
+	if (CLevelPreferences* prefs = dynamic_cast<CLevelPreferences*>(EPrefs))
+		m_VarsFrac = float(_max(_min(prefs->QuestVarsSplit, 800u), 100u)) / 1000.f;
 }
 
 //------------------------------------------------------------------------------
@@ -230,17 +263,27 @@ void NqInspector::Draw(bool focus_rename, bool focus_action)
 	SyncNode();
 	SyncQuest();
 
-	float avail = ImGui::GetContentRegionAvail().y;
-	float upper = avail * 0.6f;
 	xr_string slot; int index;
 	SplitSlot(m_Doc->sel_slot, slot, index);
-	bool has_action = !m_NodeId.empty() && !slot.empty();
-	if (!has_action) upper = avail;
+	const bool has_action = !m_NodeId.empty() && !slot.empty();
 
 	// tasks, conditions and per-language texts nest three levels deep, and the
 	// stock 21px indent is charged to the widgets too, not just to their labels -
 	// a third of a narrow panel would be spent on empty margin
 	ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, ImGui::GetStyle().IndentSpacing * 0.5f);
+
+	// The variables belong to the quest, not to whatever node happens to be
+	// selected, so they get a pane of their own under the node instead of hiding
+	// in the header that only shows when nothing is selected.
+	const ImGuiStyle& st = ImGui::GetStyle();
+	const float total	= ImGui::GetContentRegionAvail().y;
+	const float grab	= ImGui::GetFrameHeight() * 0.35f + st.ItemSpacing.y;
+	const float row		= ImGui::GetTextLineHeightWithSpacing();
+	const float vars_min = _min(row * 4.f, total * 0.25f);
+	const float props_min = _min(row * 6.f, total * 0.35f);
+	const float vars_h	= _max(vars_min, _min(m_VarsFrac * total, _max(total - grab - props_min, vars_min)));
+	const float props_h	= _max(row, total - grab - vars_h);
+	const float upper	= has_action ? props_h * 0.6f : props_h;
 
 	ImGui::BeginChild("nq_insp_top", ImVec2(0, upper), true);
 	if (m_NodeId.empty())	DrawQuestSection();
@@ -249,10 +292,16 @@ void NqInspector::Draw(bool focus_rename, bool focus_action)
 
 	if (has_action)
 	{
-		ImGui::BeginChild("nq_insp_bottom", ImVec2(0, 0), true);
+		ImGui::BeginChild("nq_insp_bottom", ImVec2(0, _max(row, props_h - upper - st.ItemSpacing.y)), true);
 		DrawActionSection();
 		ImGui::EndChild();
 	}
+
+	DrawHSplitter("##nq_vars_split", m_VarsFrac, total);
+
+	ImGui::BeginChild("nq_insp_vars", ImVec2(0, 0), true);
+	DrawVarsSection();
+	ImGui::EndChild();
 
 	ImGui::PopStyleVar();
 
@@ -277,34 +326,6 @@ void NqInspector::DrawQuestSection()
 	{
 		xr_vector<xr_string> acts = Items("auto", "manual");
 		ch |= ComboStr("activation", m_Quest.activation, acts);
-	}
-
-	if (ImGui::CollapsingHeader("Variables", ImGuiTreeNodeFlags_DefaultOpen))
-	{
-		// CollapsingHeader pushes no id scope, so without one of its own this
-		// list shares its ids with the Tasks list below (both PushID(i), both
-		// label the delete button "x") and only the first "x" drawn ever fires
-		ImGui::PushID("vars");
-		for (u32 i = 0; i < m_Quest.vars.size(); ++i)
-		{
-			ImGui::PushID((int)i);
-			// name gets a fixed share, the value takes the rest minus the delete
-			// button - both measured in frame heights so they survive DPI scaling
-			ImGui::SetNextItemWidth(ImGui::GetFrameHeight() * 6.f);
-			ch |= InputStr("##name", m_Quest.vars[i].name);
-			ImGui::SameLine();
-			ImGui::SetNextItemWidth(-ButtonRoom("x"));
-			ch |= DrawScalarValue("##val", m_Quest.vars[i].value);
-			ImGui::SameLine();
-			if (ImGui::SmallButton("x")) { m_Quest.vars.erase(m_Quest.vars.begin() + i); ch = true; ImGui::PopID(); break; }
-			ImGui::PopID();
-		}
-		if (ImGui::SmallButton("+ variable"))
-		{
-			SNqVar v; v.name = NqUtil::Format("var%d", int(m_Quest.vars.size() + 1)); v.value = SNqValue::Bool(false);
-			m_Quest.vars.push_back(v); ch = true;
-		}
-		ImGui::PopID();
 	}
 
 	if (ImGui::CollapsingHeader("Tasks", ImGuiTreeNodeFlags_DefaultOpen))
@@ -342,6 +363,227 @@ void NqInspector::DrawQuestSection()
 
 	ImGui::Separator();
 	ImGui::TextDisabled("%d node(s), %d error(s), %d warning(s)", int(m_Doc->quest.nodes.size()), m_Doc->ErrorCount(), m_Doc->WarningCount());
+}
+
+//------------------------------------------------------------------------------
+// variables
+//------------------------------------------------------------------------------
+void NqInspector::DrawHSplitter(LPCSTR id, float& frac, float total)
+{
+	const ImGuiStyle& st = ImGui::GetStyle();
+	const float grab = ImGui::GetFrameHeight() * 0.35f + st.ItemSpacing.y;
+	const ImVec2 top = ImGui::GetCursorScreenPos();
+	ImGui::InvisibleButton(id, ImVec2(-1.f, grab));
+	const bool active = ImGui::IsItemActive();
+	const bool hovered = ImGui::IsItemHovered();
+
+	if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) frac = 0.30f;
+	// the pane grows upwards, so dragging down takes height away from it
+	else if (active && total > 1.f) frac -= ImGui::GetIO().MouseDelta.y / total;
+	if (active || hovered)
+	{
+		ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+		if (active)
+		{
+			frac = _max(0.10f, _min(frac, 0.80f));
+			if (CLevelPreferences* prefs = dynamic_cast<CLevelPreferences*>(EPrefs))
+				prefs->QuestVarsSplit = u32(frac * 1000.f + 0.5f);
+		}
+	}
+
+	const ImU32 col = ImGui::GetColorU32(active		? ImGuiCol_SeparatorActive
+										: hovered	? ImGuiCol_SeparatorHovered
+													: ImGuiCol_Separator);
+	const float y = top.y + grab * 0.5f;
+	const float half = (active || hovered) ? grab * 0.5f : 1.f;
+	ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(top.x, y - half),
+		ImVec2(top.x + ImGui::GetItemRectSize().x, y + half), col);
+	if (hovered && !active) ImGui::SetTooltip("Drag to resize, double-click to reset");
+}
+
+LPCSTR NqInspector::TypeName(SNqValue::EType t)
+{
+	switch (t)
+	{
+	case SNqValue::tBool:	return "bool";
+	case SNqValue::tNumber:	return "number";
+	case SNqValue::tString:	return "string";
+	default:				return "?";
+	}
+}
+
+const SNqVar* NqInspector::FindVar(LPCSTR name) const
+{
+	if (!name || !name[0]) return 0;
+	for (u32 i = 0; i < m_Quest.vars.size(); ++i)
+		if (m_Quest.vars[i].name == name) return &m_Quest.vars[i];
+	return 0;
+}
+
+bool NqInspector::DrawTypedValue(LPCSTR label, SNqValue& v, SNqValue::EType as, float reserve)
+{
+	switch (as)
+	{
+	case SNqValue::tBool:
+	{
+		// a dropdown, not a string: "true" is the only spelling the runtime reads,
+		// and typing it by hand is how a condition silently stops matching
+		int cur = (v.IsBool() && v.b) ? 1 : 0;
+		static const char* items[] = { "false", "true" };
+		ImGui::SetNextItemWidth(-(LabelRoom(label) + reserve + ImGui::CalcTextSize("false").x
+			+ ImGui::GetFrameHeight() + ImGui::GetStyle().FramePadding.x * 2.f));
+		if (ImGui::Combo(label, &cur, items, 2)) { v = SNqValue::Bool(cur != 0); return true; }
+		return false;
+	}
+	case SNqValue::tNumber:
+	{
+		double d = v.IsNumber() ? v.n : 0.0;
+		float f = float(d);
+		const float steppers = (ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x) * 2.f;
+		ImGui::SetNextItemWidth(-(LabelRoom(label) + reserve + steppers));
+		// %g, not the stock %.3f: a counter reads as 0, not 0.000, and a value that
+		// really is fractional still shows its digits
+		if (ImGui::InputFloat(label, &f, 0.f, 0.f, "%g")) { v = SNqValue::Number(double(f)); return true; }
+		return false;
+	}
+	default:
+	{
+		xr_string s = v.IsString() ? v.s : "";
+		if (InputStr(label, s, false, 0.f, reserve)) { v = SNqValue::String(s); return true; }
+		return false;
+	}
+	}
+}
+
+bool NqInspector::DrawVarNameCombo(LPCSTR label, xr_string& name)
+{
+	// The list is the quest's own declarations, so an action cannot point at a
+	// variable that does not exist - which used to be a plain typed string.
+	xr_vector<xr_string> names;
+	for (u32 i = 0; i < m_Quest.vars.size(); ++i) names.push_back(m_Quest.vars[i].name);
+	// a name from an older asset that is no longer declared stays selectable, or
+	// switching nodes would quietly rewrite it
+	if (!name.empty() && !FindVar(name.c_str())) names.push_back(name);
+	if (names.empty())
+	{
+		ImGui::TextDisabled("no variables declared - add one in the Variables pane");
+		return false;
+	}
+	return ComboStr(label, name, names, "(unset)");
+}
+
+bool NqInspector::RenameVar(LPCSTR from, LPCSTR to)
+{
+	if (!from || !to || !to[0] || 0 == xr_strcmp(from, to)) return false;
+	if (FindVar(to)) return false;						// name already taken
+	bool touched = false;
+	for (u32 i = 0; i < m_Quest.vars.size(); ++i)
+		if (m_Quest.vars[i].name == from) { m_Quest.vars[i].name = to; touched = true; }
+	if (!touched) return false;
+
+	// every reference follows: the document is edited directly because the staged
+	// node copy only holds the node the author is looking at
+	xr_string old_name = from, new_name = to;
+	m_Doc->Edit([&](SNqQuest& q)
+	{
+		for (u32 i = 0; i < q.vars.size(); ++i)
+			if (q.vars[i].name == old_name) q.vars[i].name = new_name;
+		for (u32 n = 0; n < q.nodes.size(); ++n)
+		{
+			SNqNode& node = q.nodes[n];
+			for (int pass = 0; pass < 2; ++pass)
+			{
+				xr_vector<SNqAction>& v = node.Slot(pass == 0 ? "enter" : "exit");
+				for (u32 a = 0; a < v.size(); ++a)
+				{
+					if (v[a].kind == "var.set" || v[a].kind == "var.add")
+					{
+						SNqValue* nm = v[a].params.Get("name");
+						if (nm && nm->IsString() && nm->s == old_name) *nm = SNqValue::String(new_name);
+					}
+					// an action can carry a nested cond list of its own
+					RenameVarInValue(v[a].params, old_name.c_str(), new_name.c_str());
+				}
+			}
+			RenameVarInConds(node.cond, old_name.c_str(), new_name.c_str());
+		}
+	});
+	// the staged copy was filled before the rename; take the document's word for it
+	m_NodeRev = u32(-1);
+	return true;
+}
+
+void NqInspector::DrawVarsSection()
+{
+	ImGui::TextDisabled("Variables");
+	ImGui::SameLine();
+	ImGui::TextDisabled("  %d", int(m_Quest.vars.size()));
+	ImGui::Separator();
+
+	bool ch = false;
+	ImGui::PushID("qvars");
+	for (u32 i = 0; i < m_Quest.vars.size(); ++i)
+	{
+		SNqVar& var = m_Quest.vars[i];
+		ImGui::PushID((int)i);
+
+		// name: committed when the field is left, so a half-typed name does not
+		// rewrite every reference in the graph on the way through
+		char namebuf[64];
+		strncpy_s(namebuf, sizeof(namebuf), var.name.c_str(), _TRUNCATE);
+		ImGui::SetNextItemWidth(ImGui::GetFrameHeight() * 6.f);
+		if (ImGui::InputText("##name", namebuf, sizeof(namebuf), ImGuiInputTextFlags_EnterReturnsTrue)
+			|| ImGui::IsItemDeactivatedAfterEdit())
+		{
+			xr_string want = NqUtil::Trim(namebuf);
+			if (!want.empty() && want != var.name)
+			{
+				if (RenameVar(var.name.c_str(), want.c_str())) ch = true;
+				else Msg("! [nq] variable '%s' already exists", want.c_str());
+			}
+		}
+
+		ImGui::SameLine();
+		// type: the declared default is what gives a variable its type, so changing
+		// the type here is what converts the default
+		static const char* types[] = { "bool", "number", "string" };
+		int cur = var.value.IsBool() ? 0 : var.value.IsNumber() ? 1 : 2;
+		const int was = cur;
+		ImGui::SetNextItemWidth(ImGui::CalcTextSize("number").x + ImGui::GetFrameHeight()
+			+ ImGui::GetStyle().FramePadding.x * 2.f);
+		if (ImGui::Combo("##type", &cur, types, 3) && cur != was)
+		{
+			switch (cur)
+			{
+			case 0:  var.value = SNqValue::Bool(var.value.IsNumber() ? var.value.n != 0.0 : false); break;
+			case 1:  var.value = SNqValue::Number(var.value.IsBool() ? (var.value.b ? 1.0 : 0.0) : 0.0); break;
+			default: var.value = SNqValue::String(var.value.IsBool() ? (var.value.b ? "true" : "false")
+						: var.value.IsNumber() ? NqUtil::Format("%g", var.value.n).c_str() : ""); break;
+			}
+			ch = true;
+		}
+
+		ImGui::SameLine();
+		ch |= DrawTypedValue("##val", var.value, var.value.type, ButtonRoom("x"));
+		ImGui::SameLine();
+		if (ImGui::SmallButton("x")) { m_Quest.vars.erase(m_Quest.vars.begin() + i); ch = true; ImGui::PopID(); break; }
+		ImGui::PopID();
+	}
+
+	if (ImGui::SmallButton("+ variable"))
+	{
+		SNqVar v;
+		v.name = NqUtil::Format("var%d", int(m_Quest.vars.size() + 1));
+		v.value = SNqValue::Bool(false);
+		m_Quest.vars.push_back(v);
+		ch = true;
+	}
+	ImGui::PopID();
+
+	if (m_Quest.vars.empty())
+		ImGui::TextDisabled("the value declared here is both the default and the type");
+
+	if (ch) m_QuestDirty = true;
 }
 
 //------------------------------------------------------------------------------
@@ -563,7 +805,10 @@ bool NqInspector::DrawParam(const NqCatalog::SParam& p, SNqValue& params, LPCSTR
 	SNqValue v = slot ? *slot : SNqValue::Nil();
 	xr_string label = p.name;
 	if (p.required) label += " *";
+	SNqValue* keep = m_ParamsCtx;
+	m_ParamsCtx = &params;
 	bool ch = DrawTyped(p.type.c_str(), &p, label.c_str(), v);
+	m_ParamsCtx = keep;
 	if (ImGui::IsItemHovered())
 	{
 		xr_string tip = p.type;
@@ -628,7 +873,27 @@ bool NqInspector::DrawTyped(LPCSTR type, const NqCatalog::SParam* p, LPCSTR labe
 	if (t == "cases_cond")			return DrawCases(label, v, false);
 	if (t == "cases_weight")		return DrawCases(label, v, true);
 	if (t == "cond_list")			return DrawCondValue(label, v, 1);
-	if (t == "value")				return DrawScalarValue(label, v);
+	if (t == "var_name")
+	{
+		// a dropdown of what the quest actually declares, not a typed-in name
+		xr_string s = v.AsString("");
+		if (DrawVarNameCombo(label, s)) { v = s.empty() ? SNqValue::Nil() : SNqValue::String(s); return true; }
+		return false;
+	}
+	if (t == "value")
+	{
+		// `value` always sits next to the `name` it is assigned to or compared
+		// with, so the variable's declared type decides the widget: a bool gets a
+		// dropdown, a number a numeric field, and nobody types 5 into a string
+		if (m_ParamsCtx)
+		{
+			const SNqValue* nm = m_ParamsCtx->Get("name");
+			if (nm && nm->IsString())
+				if (const SNqVar* var = FindVar(nm->s.c_str()))
+					return DrawTypedValue(label, v, var->value.type);
+		}
+		return DrawScalarValue(label, v);
+	}
 	if (t == "count_or_all")
 	{
 		xr_string s = v.IsNumber() ? NqUtil::Format("%d", (int)v.n) : v.AsString("");

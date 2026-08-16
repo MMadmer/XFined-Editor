@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // NQ - the details panel of a quest document (docs/NQ_ARCHITECTURE.md par. 13.9):
 // upper section = the selected node (or the quest when nothing is selected),
@@ -31,6 +31,12 @@ private:
 	xr_string		m_LuaCheck;		// last syntax check result
 	bool			m_FocusRename, m_FocusAction;
 	char			m_Search[64];	// picker popup filter
+	// height of the variables pane as a fraction of the column, so the split
+	// survives a resized window; kept in the editor preferences between sessions
+	float			m_VarsFrac;
+	// the parameter table the current widget belongs to, so a `value` can ask what
+	// type the `name` beside it was declared with
+	SNqValue*		m_ParamsCtx;
 
 	void			SyncNode		();
 	void			CommitNode		();
@@ -40,6 +46,20 @@ private:
 	void			DrawQuestSection();
 	void			DrawNodeSection	();
 	void			DrawActionSection();
+	// the quest's variables, in their own pane under the node - they are read and
+	// written from anywhere in the graph, so they are not a property of a node
+	void			DrawVarsSection	();
+	void			DrawHSplitter	(LPCSTR id, float& frac, float total);
+
+	// ---- variables -----------------------------------------------------------
+	// A variable's type is the type of its declared default, so every value tied
+	// to it is edited with the widget that type deserves instead of a free string.
+	const SNqVar*	FindVar			(LPCSTR name) const;
+	static LPCSTR	TypeName		(SNqValue::EType t);
+	bool			DrawTypedValue	(LPCSTR label, SNqValue& v, SNqValue::EType as, float reserve = 0.f);
+	bool			DrawVarNameCombo(LPCSTR label, xr_string& name);
+	// renames a declared variable and every var.set/var.add/var reference to it
+	bool			RenameVar		(LPCSTR from, LPCSTR to);
 
 	// generic parameter editors; every one returns true when the value changed
 	bool			DrawParams		(const NqCatalog::SKind* k, SNqValue& params, LPCSTR id_prefix);

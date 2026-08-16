@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 
 void CLevelPreferences::Load(CInifile* I)
 {
@@ -26,6 +26,7 @@ void CLevelPreferences::Load(CInifile* I)
     }
     {
         QuestInspectorSplit = R_U32_SAFE("windows", "quest_inspector_split", 320);
+        QuestVarsSplit = R_U32_SAFE("windows", "quest_vars_split", 300);
     }
     {
         // an empty value reads back as a null pointer, not as "" - assigning that
@@ -55,6 +56,7 @@ void CLevelPreferences::Save(CInifile* I)
     I->w_bool("windows", "world_outliner", OpenWorldOutliner);
     I->w_u32("windows", "content_browser_tree_width", ContentBrowserTreeWidth);
     I->w_u32("windows", "quest_inspector_split", QuestInspectorSplit);
+    I->w_u32("windows", "quest_vars_split", QuestVarsSplit);
     // only write a real choice: a key with an empty value is what the reader
     // above chokes on, and "no key" already means "system default".
     // quoted on disk - the ini parser eats spaces in unquoted values, and

@@ -7,6 +7,13 @@
 // system.ltx does not include come through EditorGameContent), cached on disk
 // in <sdk>\_appdata_\nq_index_<hash>.txt keyed by the game-config fingerprint.
 // Story ids also come from the project's own spawn\custom_data\*.ltx.
+//
+// Captions come from the game's own string table (configs\text\<lang>\*.xml,
+// cp1251), reached the same way the game reaches them: items and quest objects
+// through inv_name, NPCs and their story ids through character_profile ->
+// <name>, levels and communities through their own id, smart terrains through
+// misc\smart_names.ltx. Ids the game gives no player-facing text (squads, info
+// portions, map spot types, most props) keep an empty name on purpose.
 
 class ECORE_API NqPickers
 {

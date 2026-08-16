@@ -34,7 +34,9 @@ namespace
 		if (id.empty()) return;
 		if (s_Known[t].count(id)) return;
 		s_Known[t].insert(id);
-		NqPickers::SEntry e; e.id = id; e.name = name; e.extra = extra;
+		NqPickers::SEntry e; e.id = id; e.extra = extra;
+		// the UI prints "id - name", so a caption repeating the id is pure noise
+		if (name != id) e.name = name;
 		s_Index[t].push_back(e);
 	}
 
@@ -118,7 +120,9 @@ namespace
 	}
 
 	// ---- builders ----------------------------------------------------------------
-	void BuildFromSettings(const TStrings& st)
+	// `profiles` maps a character profile id to its caption (see BuildProfiles), so
+	// a story id sitting on an NPC spawn section can borrow the NPC's name.
+	void BuildFromSettings(const TStrings& st, const TStrings& profiles)
 	{
 		if (!pSettings) return;
 		CInifile::Root& sects = pSettings->sections();
@@ -127,28 +131,62 @@ namespace
 			CInifile::Sect* S = *s;
 			if (!S) continue;
 			LPCSTR v = 0;
+			xr_string inv_caption;		// genuine item caption, reused by a story id here
 			if (S->line_exist("inv_name", &v))
 			{
 				xr_string key = v ? v : "";
-				xr_string name = Caption(st, key);
-				if (name.empty()) name = NqUtil::Cp1251ToUtf8(key.c_str());
+				inv_caption = Caption(st, key);
+				xr_string name = inv_caption.empty() ? NqUtil::Cp1251ToUtf8(key.c_str()) : inv_caption;
 				Add(NqPickers::tItem, xr_string(*S->Name), name, xr_string());
 			}
 			if (S->line_exist("class", &v) && v && 0 == _stricmp(v, "ON_OFF_S"))
 				Add(NqPickers::tSquad, xr_string(*S->Name), xr_string(), xr_string());
 			if (S->line_exist("story_id", &v) && v && v[0])
 			{
+				const xr_string sid = v;		// the lookups below reuse `v`
 				xr_string extra = "section ";
 				extra += *S->Name;
-				Add(NqPickers::tStory, xr_string(v), xr_string(), extra);
+				// a story id is attached to a spawn section: NPCs read through their
+				// character profile, items through inv_name. Squads and bare physical
+				// objects carry no player-facing text and stay uncaptioned.
+				xr_string name;
+				LPCSTR prof = 0;
+				if (S->line_exist("character_profile", &prof) && prof && prof[0])
+				{
+					TStrings::const_iterator it = profiles.find(xr_string(prof));
+					if (it != profiles.end()) name = it->second;
+				}
+				if (name.empty()) name = inv_caption;
+				// a squad whose roster is one named NPC reads as that NPC; a roster
+				// of generic templates ("npc = sim_default_stalker_0, ...") does not
+				if (name.empty() && S->line_exist("npc", &prof) && prof && prof[0] && !strchr(prof, ','))
+				{
+					const xr_string npc = NqUtil::Trim(prof);
+					if (pSettings->line_exist(npc.c_str(), "character_profile"))
+					{
+						LPCSTR np = pSettings->r_string(npc.c_str(), "character_profile");
+						TStrings::const_iterator it = (np && np[0]) ? profiles.find(xr_string(np)) : profiles.end();
+						if (it != profiles.end()) name = it->second;
+					}
+				}
+				Add(NqPickers::tStory, sid, name, extra);
 			}
 		}
 	}
 
-	void BuildLevels()
+	void BuildLevels(const TStrings& st)
 	{
 		xr_string text = ReadGameText("configs\\game_levels.ltx");
 		if (text.empty()) return;
+		// the displayed name lives in the string table under the level name itself
+		// (st_levels.xml keys on "l01_escape"); the ltx `caption` is a second key
+		auto resolve = [&st](const xr_string& lvl, const xr_string& key) -> xr_string
+		{
+			xr_string out = Caption(st, lvl);
+			if (out.empty() && !key.empty()) out = Caption(st, key);
+			if (out.empty()) out = NqUtil::Cp1251ToUtf8(key.c_str());
+			return out;
+		};
 		xr_string sect, name, caption;
 		size_t pos = 0;
 		while (pos < text.size())
@@ -162,7 +200,7 @@ namespace
 			if (line.empty()) continue;
 			if (line[0] == '[')
 			{
-				if (!name.empty() && sect != "levels") Add(NqPickers::tLevel, name, caption, sect);
+				if (!name.empty() && sect != "levels") Add(NqPickers::tLevel, name, resolve(name, caption), sect);
 				const size_t close = line.find(']');
 				sect = line.substr(1, close == xr_string::npos ? xr_string::npos : close - 1);
 				name.clear(); caption.clear();
@@ -173,13 +211,38 @@ namespace
 			xr_string k = NqUtil::Trim(line.substr(0, eq)), v = NqUtil::Trim(line.substr(eq + 1));
 			if (v.size() >= 2 && v[0] == '"' && v.back() == '"') v = v.substr(1, v.size() - 2);
 			if (k == "name")			name = v;
-			else if (k == "caption")	caption = NqUtil::Cp1251ToUtf8(v.c_str());
+			else if (k == "caption")	caption = v;
 		}
-		if (!name.empty() && sect != "levels") Add(NqPickers::tLevel, name, caption, sect);
+		if (!name.empty() && sect != "levels") Add(NqPickers::tLevel, name, resolve(name, caption), sect);
 	}
 
-	void BuildSmarts()
+	void BuildSmarts(const TStrings& st)
 	{
+		// misc\smart_names.ltx maps "<smart> = <string table id>" inside a section
+		// per level, exactly what smart_names.script reads. Only a few levels are
+		// covered; every other smart terrain legitimately has no display name.
+		TStrings keys;
+		{
+			xr_string names = ReadGameText("configs\\misc\\smart_names.ltx");
+			size_t pos = 0;
+			bool in_levels = false;
+			while (pos < names.size())
+			{
+				size_t eol = names.find('\n', pos);
+				if (eol == xr_string::npos) eol = names.size();
+				xr_string line = NqUtil::Trim(names.substr(pos, eol - pos));
+				pos = eol + 1;
+				const size_t sc = line.find(';');
+				if (sc != xr_string::npos) line = NqUtil::Trim(line.substr(0, sc));
+				if (line.empty()) continue;
+				if (line[0] == '[') { in_levels = (0 == _strnicmp(line.c_str(), "[levels]", 8)); continue; }
+				if (in_levels) continue;		// that section only lists level names
+				const size_t eq = line.find('=');
+				if (eq == xr_string::npos) continue;
+				const xr_string smart = NqUtil::Trim(line.substr(0, eq));
+				if (!smart.empty()) keys[smart] = NqUtil::Trim(line.substr(eq + 1));
+			}
+		}
 		xr_string text = ReadGameText("configs\\misc\\simulation.ltx");
 		size_t pos = 0;
 		while (pos < text.size())
@@ -191,11 +254,13 @@ namespace
 			if (line.empty() || line[0] != '[') continue;
 			const size_t close = line.find(']');
 			if (close == xr_string::npos) continue;
-			Add(NqPickers::tSmart, line.substr(1, close - 1), xr_string(), xr_string());
+			const xr_string id = line.substr(1, close - 1);
+			TStrings::const_iterator k = keys.find(id);
+			Add(NqPickers::tSmart, id, (k == keys.end()) ? xr_string() : Caption(st, k->second), xr_string());
 		}
 	}
 
-	void BuildCommunities()
+	void BuildCommunities(const TStrings& st)
 	{
 		xr_string text = ReadGameText("configs\\creatures\\game_relations.ltx");
 		size_t pos = 0;
@@ -218,7 +283,13 @@ namespace
 			NqUtil::Split(line.substr(eq + 1).c_str(), ',', parts);
 			// name, index, name, index, ...
 			for (u32 i = 0; i + 1 < parts.size(); i += 2)
-				Add(NqPickers::tCommunity, parts[i], xr_string(), sect);
+			{
+				// the faction picker labels a community in the plural
+				// (st_faction_stalker); the bare id is the singular PDA label
+				xr_string name = Caption(st, xr_string("st_faction_") + parts[i]);
+				if (name.empty()) name = Caption(st, parts[i]);
+				Add(NqPickers::tCommunity, parts[i], name, sect);
+			}
 		}
 	}
 
@@ -244,7 +315,10 @@ namespace
 		}
 	}
 
-	void BuildProfiles(const TStrings& st)
+	// `captions` collects profile id -> caption for the story-id pass. Only genuine
+	// string-table hits go in, so a generic profile whose <name> is a runtime
+	// placeholder (GENERATE_NAME_stalker) does not leak into story id captions.
+	void BuildProfiles(const TStrings& st, TStrings& captions)
 	{
 		if (!pSettings || !pSettings->section_exist("profiles") || !pSettings->line_exist("profiles", "specific_characters_files")) return;
 		xr_vector<xr_string> files;
@@ -270,7 +344,8 @@ namespace
 					{
 						xr_string key = NqUtil::Trim(text.substr(nm + 6, ne - nm - 6));
 						name = Caption(st, key);
-						if (name.empty()) name = NqUtil::Cp1251ToUtf8(key.c_str());
+						if (!name.empty() && !captions.count(ids[i].first)) captions[ids[i].first] = name;
+						else if (name.empty()) name = NqUtil::Cp1251ToUtf8(key.c_str());
 					}
 				}
 				Add(NqPickers::tProfile, ids[i].first, name, files[f]);
@@ -349,6 +424,10 @@ namespace
 	}
 
 	// ---- disk cache ----------------------------------------------------------------
+	// bump the number on every change to what an entry stores, or caches written by
+	// an older editor come back with the fields it did not know how to fill
+	const char* kCacheFormat = "nqindex 2 ";
+
 	void CachePath(string_path& out)
 	{
 		sprintf_s(out, "%s\\nq_index_%08x.txt", NqUtil::AppDataRoot(), NqUtil::Fnv1a(EditorGameConfigs::ActiveFingerprint()));
@@ -370,11 +449,12 @@ namespace
 		}
 		::CloseHandle(h);
 		if (text.empty()) return false;
-		// header line: "nqindex 1 <fingerprint>"
+		// header line: "nqindex <format> <fingerprint>" - the format number is bumped
+		// whenever the stored fields change, so an older cache is rebuilt, not read
 		size_t eol = text.find('\n');
 		if (eol == xr_string::npos) return false;
 		xr_string head = text.substr(0, eol);
-		xr_string want = "nqindex 1 ";
+		xr_string want = kCacheFormat;
 		want += EditorGameConfigs::ActiveFingerprint();
 		if (NqUtil::Trim(head) != want) return false;
 		int t = -1;
@@ -410,7 +490,7 @@ namespace
 	{
 		string_path path;
 		CachePath(path);
-		xr_string text = "nqindex 1 ";
+		xr_string text = kCacheFormat;
 		text += EditorGameConfigs::ActiveFingerprint();
 		text += "\n";
 		for (int t = 0; t < NqPickers::tCount; ++t)
@@ -449,13 +529,13 @@ namespace
 		s_Available = true;
 		if (!LoadCache())
 		{
-			TStrings st;
+			TStrings st, profiles;
 			LoadStringTable(st);
-			BuildFromSettings(st);
-			BuildLevels();
-			BuildSmarts();
-			BuildCommunities();
-			BuildProfiles(st);
+			BuildProfiles(st, profiles);	// must precede the story ids that borrow from it
+			BuildFromSettings(st, profiles);
+			BuildLevels(st);
+			BuildSmarts(st);
+			BuildCommunities(st);
 			BuildInfos();
 			BuildSpots();
 			for (int t = 0; t < NqPickers::tCount; ++t)
