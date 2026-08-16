@@ -10,19 +10,6 @@ namespace
 	// frame and written back on every change, so ImGui's own edit state and the
 	// staged copy never diverge. It grows with the value - a fixed buffer would
 	// silently truncate long texts and Lua bodies the moment they are edited.
-	bool InputStr(LPCSTR label, xr_string& s, bool multiline = false, float height = 0.f)
-	{
-		static xr_vector<char> buf;
-		const size_t need = s.size() + 4096;
-		if (buf.size() < need) buf.resize(need);
-		memcpy(&buf[0], s.c_str(), s.size() + 1);
-		bool changed = multiline
-			? ImGui::InputTextMultiline(label, &buf[0], buf.size(), ImVec2(-FLT_MIN, height > 0.f ? height : ImGui::GetTextLineHeight() * 4.f))
-			: ImGui::InputText(label, &buf[0], buf.size());
-		if (changed) s = &buf[0];
-		return changed;
-	}
-
 	// ImGui hides everything after "##" in a widget label, plain text does not -
 	// labels that carry an id suffix must be trimmed before they are printed
 	LPCSTR Shown(LPCSTR label, xr_string& tmp)
@@ -33,10 +20,87 @@ namespace
 		return tmp.c_str();
 	}
 
-	bool ComboStr(LPCSTR label, xr_string& cur, const xr_vector<xr_string>& items, LPCSTR empty_label = 0)
+	bool HiddenLabel(LPCSTR label) { return !label || (label[0] == '#' && label[1] == '#'); }
+
+	// ImGui's default item width is a flat 65% of the panel: a field stays the
+	// same size however wide the author drags the inspector, and whatever the row
+	// draws after it - the label itself, a "default" or "..." button - is pushed
+	// past the right edge and simply never appears. Sizing every field as
+	// "everything except what still has to fit" is what makes the panel react to
+	// its own width.
+	float LabelRoom(LPCSTR label)
+	{
+		if (HiddenLabel(label)) return 0.f;
+		xr_string tmp;
+		LPCSTR shown = Shown(label, tmp);
+		if (!shown[0]) return 0.f;
+		return ImGui::CalcTextSize(shown).x + ImGui::GetStyle().ItemInnerSpacing.x;
+	}
+
+	float ButtonRoom(LPCSTR text)
+	{
+		const ImGuiStyle& st = ImGui::GetStyle();
+		return ImGui::CalcTextSize(text).x + st.FramePadding.x * 2.f + st.ItemSpacing.x;
+	}
+
+	// a combo has to fit its widest entry plus the arrow square, otherwise the
+	// author reads "game_minu" and has to open the list to know what is selected.
+	// Hardcoded pixel widths cannot do this: the font is scaled by the monitor DPI.
+	float ComboRoom(const xr_vector<xr_string>& items, LPCSTR extra = 0)
+	{
+		float w = extra ? ImGui::CalcTextSize(extra).x : 0.f;
+		for (u32 i = 0; i < items.size(); ++i) w = _max(w, ImGui::CalcTextSize(items[i].c_str()).x);
+		return w + ImGui::GetFrameHeight() + ImGui::GetStyle().FramePadding.x * 2.f;
+	}
+
+	// a text box tall enough for what is in it: one-liners stay compact, a Lua
+	// body or a long briefing gets room, and past the cap it scrolls instead of
+	// pushing everything else out of the panel
+	float FitRows(const xr_string& s, int min_rows, int max_rows)
+	{
+		int rows = 1;
+		for (u32 i = 0; i < s.size(); ++i) if (s[i] == '\n') ++rows;
+		if (rows < min_rows) rows = min_rows;
+		if (rows > max_rows) rows = max_rows;
+		return ImGui::GetTextLineHeight() * float(rows) + ImGui::GetStyle().FramePadding.y * 2.f;
+	}
+
+	// reserve: pixels the caller still needs on the right of the field (a trailing
+	// button), on top of the label
+	bool InputStr(LPCSTR label, xr_string& s, bool multiline = false, float height = 0.f, float reserve = 0.f)
+	{
+		static xr_vector<char> buf;
+		const size_t need = s.size() + 4096;
+		if (buf.size() < need) buf.resize(need);
+		memcpy(&buf[0], s.c_str(), s.size() + 1);
+		bool changed;
+		if (multiline)
+		{
+			// a box that spans the panel leaves no room for a right-hand label, so
+			// ImGui draws it off the edge - print it above the box instead
+			xr_string tmp;
+			if (!HiddenLabel(label)) ImGui::TextDisabled("%s", Shown(label, tmp));
+			xr_string id = xr_string("##ml") + (label ? label : "");
+			changed = ImGui::InputTextMultiline(id.c_str(), &buf[0], buf.size(),
+				ImVec2(-1.f, height > 0.f ? height : FitRows(s, 4, 16)),
+				ImGuiInputTextFlags_AllowTabInput);
+		}
+		else
+		{
+			const float room = LabelRoom(label) + reserve;
+			if (room > 0.f) ImGui::SetNextItemWidth(-room);
+			changed = ImGui::InputText(label, &buf[0], buf.size());
+		}
+		if (changed) s = &buf[0];
+		return changed;
+	}
+
+	bool ComboStr(LPCSTR label, xr_string& cur, const xr_vector<xr_string>& items, LPCSTR empty_label = 0, float reserve = 0.f)
 	{
 		bool changed = false;
 		LPCSTR preview = cur.empty() ? (empty_label ? empty_label : "") : cur.c_str();
+		const float room = LabelRoom(label) + reserve;
+		if (room > 0.f) ImGui::SetNextItemWidth(-room);
 		if (ImGui::BeginCombo(label, preview))
 		{
 			if (empty_label && ImGui::Selectable(empty_label, cur.empty())) { cur.clear(); changed = true; }
@@ -173,6 +237,11 @@ void NqInspector::Draw(bool focus_rename, bool focus_action)
 	bool has_action = !m_NodeId.empty() && !slot.empty();
 	if (!has_action) upper = avail;
 
+	// tasks, conditions and per-language texts nest three levels deep, and the
+	// stock 21px indent is charged to the widgets too, not just to their labels -
+	// a third of a narrow panel would be spent on empty margin
+	ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, ImGui::GetStyle().IndentSpacing * 0.5f);
+
 	ImGui::BeginChild("nq_insp_top", ImVec2(0, upper), true);
 	if (m_NodeId.empty())	DrawQuestSection();
 	else					DrawNodeSection();
@@ -184,6 +253,8 @@ void NqInspector::Draw(bool focus_rename, bool focus_action)
 		DrawActionSection();
 		ImGui::EndChild();
 	}
+
+	ImGui::PopStyleVar();
 
 	// commit staged edits once the user lets go of the widget
 	if (!ImGui::IsAnyItemActive())
@@ -217,10 +288,12 @@ void NqInspector::DrawQuestSection()
 		for (u32 i = 0; i < m_Quest.vars.size(); ++i)
 		{
 			ImGui::PushID((int)i);
-			ImGui::SetNextItemWidth(120.f);
+			// name gets a fixed share, the value takes the rest minus the delete
+			// button - both measured in frame heights so they survive DPI scaling
+			ImGui::SetNextItemWidth(ImGui::GetFrameHeight() * 6.f);
 			ch |= InputStr("##name", m_Quest.vars[i].name);
 			ImGui::SameLine();
-			ImGui::SetNextItemWidth(-40.f);
+			ImGui::SetNextItemWidth(-ButtonRoom("x"));
 			ch |= DrawScalarValue("##val", m_Quest.vars[i].value);
 			ImGui::SameLine();
 			if (ImGui::SmallButton("x")) { m_Quest.vars.erase(m_Quest.vars.begin() + i); ch = true; ImGui::PopID(); break; }
@@ -384,7 +457,11 @@ void NqInspector::DrawNodeSection()
 		if (m_Doc->problems[i].node_id == m_NodeId)
 		{
 			if (!any) { ImGui::Separator(); any = true; }
-			ImGui::TextColored(m_Doc->problems[i].IsError() ? ImVec4(1, 0.45f, 0.4f, 1) : ImVec4(1, 0.85f, 0.4f, 1), "%s", m_Doc->problems[i].Text().c_str());
+			// these sentences name a parameter and say what to do about it - cut
+			// them off at the panel edge and they stop being actionable
+			ImGui::PushStyleColor(ImGuiCol_Text, m_Doc->problems[i].IsError() ? ImVec4(1, 0.45f, 0.4f, 1) : ImVec4(1, 0.85f, 0.4f, 1));
+			ImGui::TextWrapped("%s", m_Doc->problems[i].Text().c_str());
+			ImGui::PopStyleColor();
 		}
 
 	if (ch) m_NodeDirty = true;
@@ -404,7 +481,11 @@ void NqInspector::DrawActionSection()
 	if (index < 0 || index >= (int)v.size()) { ImGui::TextDisabled("no action selected"); m_Doc->sel_slot.clear(); return; }
 	SNqAction& a = v[index];
 	ImGui::TextDisabled("Action  %s #%d", slot.c_str(), index + 1);
-	ImGui::SameLine(ImGui::GetContentRegionAvail().x - 90.f);
+	// a flat 90px reservation is not enough for these three at any DPI, and what
+	// does not fit is drawn past the edge where it cannot be clicked
+	const float tools = ButtonRoom("up") + ButtonRoom("down") + ButtonRoom("remove");
+	const float row = ImGui::GetContentRegionAvail().x;
+	ImGui::SameLine(row > tools ? row - tools : 0.f);
 	bool ch = false;
 	if (ImGui::SmallButton("up") && index > 0)   { std::swap(v[index], v[index - 1]); m_Doc->sel_slot = slot + ":" + NqUtil::Format("%d", index - 1); ch = true; }
 	ImGui::SameLine();
@@ -515,6 +596,10 @@ bool NqInspector::DrawTyped(LPCSTR type, const NqCatalog::SParam* p, LPCSTR labe
 		bool is_int = t == "int";
 		double d = v.IsNumber() ? v.n : (p && p->has_default ? atof(p->def.c_str()) : 0.0);
 		bool ch = false;
+		// InputInt/InputFloat carry their own -/+ steppers, so the row must keep
+		// room for the label, the steppers and the reset button that follows
+		const float steppers = (ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x) * 2.f;
+		ImGui::SetNextItemWidth(-(LabelRoom(label) + steppers + (v.IsNil() ? 0.f : ButtonRoom("default"))));
 		if (is_int) { int i = (int)d; if (ImGui::InputInt(label, &i)) { d = i; ch = true; } }
 		else { float f = (float)d; if (ImGui::InputFloat(label, &f)) { d = f; ch = true; } }
 		if (ch)
@@ -614,8 +699,7 @@ bool NqInspector::DrawPicked(LPCSTR label, LPCSTR type, xr_string& s)
 {
 	bool ch = false;
 	ImGui::PushID(label);
-	ImGui::SetNextItemWidth(-60.f);
-	ch |= InputStr(label, s);
+	ch |= InputStr(label, s, false, 0.f, ButtonRoom("..."));
 	ImGui::SameLine();
 	if (ImGui::SmallButton("...")) ImGui::OpenPopup("pick");
 	if (PickerPopup("pick", type, s)) ch = true;
@@ -635,7 +719,7 @@ bool NqInspector::DrawText(LPCSTR label, SNqValue& v, bool multiline)
 		{
 			xr_string s = v.vals[i].AsString("");
 			ImGui::PushID((int)i);
-			if (InputStr(v.keys[i].c_str(), s, multiline, ImGui::GetTextLineHeight() * 3.f)) { v.vals[i] = SNqValue::String(s); ch = true; }
+			if (InputStr(v.keys[i].c_str(), s, multiline, FitRows(s, 3, 12))) { v.vals[i] = SNqValue::String(s); ch = true; }
 			ImGui::PopID();
 		}
 		if (!v.Has("eng") && ImGui::SmallButton("+ eng")) { v.Set("eng", SNqValue::String("")); ch = true; }
@@ -645,7 +729,7 @@ bool NqInspector::DrawText(LPCSTR label, SNqValue& v, bool multiline)
 	else
 	{
 		xr_string s = v.AsString("");
-		if (InputStr(label, s, multiline, ImGui::GetTextLineHeight() * 3.f)) { v = SNqValue::String(s); ch = true; }
+		if (InputStr(label, s, multiline, FitRows(s, 4, 16))) { v = SNqValue::String(s); ch = true; }
 		if (ImGui::SmallButton("per language")) { SNqValue t = SNqValue::Table(); t.Set("rus", SNqValue::String(s)); v = t; ch = true; }
 	}
 	ImGui::PopID();
@@ -659,11 +743,11 @@ bool NqInspector::DrawDuration(LPCSTR label, SNqValue& v)
 	double num = unit.empty() ? 0.0 : v.GetNumber(unit.c_str());
 	bool ch = false;
 	ImGui::PushID(label);
-	ImGui::SetNextItemWidth(90.f);
+	ImGui::SetNextItemWidth(ImGui::GetFrameHeight() * 5.f);
 	float f = (float)num;
 	if (ImGui::InputFloat("##n", &f)) { num = f; ch = true; }
 	ImGui::SameLine();
-	ImGui::SetNextItemWidth(120.f);
+	ImGui::SetNextItemWidth(ComboRoom(units));
 	xr_string u = unit.empty() ? "seconds" : unit;
 	if (ComboStr("##u", u, units)) { unit = u; ch = true; }
 	ImGui::SameLine();
@@ -691,7 +775,7 @@ bool NqInspector::DrawNpcRef(LPCSTR label, SNqValue& v, bool with_smart, bool wi
 	xr_string lt;
 	ImGui::TextUnformatted(Shown(label, lt));
 	ImGui::SameLine();
-	ImGui::SetNextItemWidth(110.f);
+	ImGui::SetNextItemWidth(ComboRoom(modes, "(unset)"));
 	xr_string m = mode;
 	if (ComboStr("##mode", m, modes, "(unset)"))
 	{
@@ -755,7 +839,7 @@ bool NqInspector::DrawPlace(LPCSTR label, SNqValue& v)
 	xr_string lt;
 	ImGui::TextUnformatted(Shown(label, lt));
 	ImGui::SameLine();
-	ImGui::SetNextItemWidth(110.f);
+	ImGui::SetNextItemWidth(ComboRoom(modes, "(unset)"));
 	xr_string m = mode;
 	if (ComboStr("##mode", m, modes, "(unset)"))
 	{
@@ -822,13 +906,13 @@ bool NqInspector::DrawCases(LPCSTR label, SNqValue& v, bool weights)
 		if (!c.IsTable()) c = SNqValue::Table();
 		ImGui::PushID((int)i);
 		xr_string name = c.GetString("name");
-		ImGui::SetNextItemWidth(120.f);
+		ImGui::SetNextItemWidth(ImGui::GetFrameHeight() * 6.f);
 		if (InputStr("##name", name)) { c.Set("name", SNqValue::String(name)); ch = true; }
 		ImGui::SameLine();
 		if (weights)
 		{
 			float w = (float)c.GetNumber("weight", 1.0);
-			ImGui::SetNextItemWidth(80.f);
+			ImGui::SetNextItemWidth(ImGui::GetFrameHeight() * 4.f);
 			if (ImGui::InputFloat("weight", &w)) { c.Set("weight", SNqValue::Number(w)); ch = true; }
 			ImGui::SameLine();
 		}
@@ -883,7 +967,7 @@ bool NqInspector::DrawCondList(xr_vector<SNqCond>& conds, LPCSTR id_prefix, int 
 		ImGui::PushID((int)i);
 		if (ImGui::Checkbox("not", &c.negate)) ch = true;
 		ImGui::SameLine();
-		ImGui::SetNextItemWidth(-30.f);
+		ImGui::SetNextItemWidth(-ButtonRoom("x"));
 		xr_string kind = c.kind;
 		if (DrawKindCombo("##kind", NqCatalog::useCond, kind) && kind != c.kind) { c.kind = kind; c.params = SNqValue::Table(); ch = true; }
 		ImGui::SameLine();
@@ -911,7 +995,7 @@ bool NqInspector::DrawLua(LPCSTR label, SNqValue& v)
 	bool ch = false;
 	ImGui::PushID(label);
 	xr_string code = v.AsString("");
-	if (InputStr(label, code, true, ImGui::GetTextLineHeight() * 10.f)) { v = SNqValue::String(code); ch = true; }
+	if (InputStr(label, code, true, FitRows(code, 10, 30))) { v = SNqValue::String(code); ch = true; }
 	if (ImGui::SmallButton("check syntax"))
 	{
 		NqLua::SError err;

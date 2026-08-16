@@ -95,6 +95,7 @@ private:
 	xr_string		m_CtxNode;		// node under the context menu
 	xr_string		m_CtxLinkFrom, m_CtxLinkPin, m_CtxLinkTo;
 	char			m_Filter[64];	// add-node menu filter
+	int				m_FilterSel;	// highlighted row of the filtered list (keyboard)
 	xr_string		m_ChipDragNode, m_ChipDragSlot;
 	int				m_ChipDragIndex;
 	bool			m_WantFrameAll, m_WantFrameSel, m_WantRename, m_WantFocusAction, m_OpenAddAction;
@@ -129,6 +130,8 @@ private:
 	void			OpenContextMenus();
 	void			DrawContextMenus();
 	void			DrawAddNodeMenu	(LPCSTR popup);
+	// filter box + list of the search popups; the chosen kind, or 0
+	const NqCatalog::SKind* PickKind(LPCSTR hint, u32 use_mask);
 	void			InsertNodes		(xr_vector<SNqNode>& in, const ImVec2& place, bool anchor);
 	void			CreateNode		(const NqCatalog::SKind& k, const ImVec2& world, bool connect_pending);
 	void			SelectOnly		(LPCSTR id);

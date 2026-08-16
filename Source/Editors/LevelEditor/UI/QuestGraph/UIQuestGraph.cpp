@@ -10,6 +10,32 @@ namespace
 {
 	xr_vector<UIQuestGraphWindow*> s_Windows;
 	xr_string s_LastProject;
+
+	// Canvas | inspector geometry in frame heights, not pixels: every style metric
+	// is baked with the monitor DPI once at init (XrUIManager::Initialize), so raw
+	// pixel minima would shrink to a sliver on a scaled display.
+	const float	s_CanvasMinEm		= 11.f;		// ~200 px at 100%
+	const float	s_InspectorMinEm	= 16.f;		// ~290 px at 100%
+	const float	s_GrabEm			= 0.35f;	// drag handle, plus one ItemSpacing
+	const u32	s_SplitDefault		= 320;		// permille of the body width
+
+	float SplitGrab()	{ return ImGui::GetFrameHeight() * s_GrabEm + ImGui::GetStyle().ItemSpacing.x; }
+
+	// the split lives in the editor preferences beside the content browser's tree
+	// width, so it survives a restart and not just a reopened tab
+	float LoadSplit()
+	{
+		u32 permille = s_SplitDefault;
+		// preferences may not exist yet when the first tab is constructed
+		if (CLevelPreferences* prefs = dynamic_cast<CLevelPreferences*>(EPrefs)) permille = prefs->QuestInspectorSplit;
+		return float(_max(_min(permille, 950u), 50u)) / 1000.f;
+	}
+
+	void SaveSplit(float frac)
+	{
+		if (CLevelPreferences* prefs = dynamic_cast<CLevelPreferences*>(EPrefs))
+			prefs->QuestInspectorSplit = u32(_max(_min(frac, 0.95f), 0.05f) * 1000.f + 0.5f);
+	}
 }
 
 //------------------------------------------------------------------------------
@@ -19,7 +45,7 @@ UIQuestGraphWindow::UIQuestGraphWindow(NqDoc* doc) : m_Doc(doc)
 {
 	m_Canvas = xr_new<NqCanvas>(doc);
 	m_Inspector = xr_new<NqInspector>(doc);
-	m_Split = 340.f;
+	m_SplitFrac = LoadSplit();
 	m_Focus = true;
 	m_AskClose = m_CloseNow = false;
 	m_ShowProblems = false;
@@ -74,6 +100,82 @@ void UIQuestGraphWindow::DrawToolbar()
 	if (!m_Message.empty()) { ImGui::SameLine(); ImGui::TextDisabled("| %s", m_Message.c_str()); }
 }
 
+float UIQuestGraphWindow::SplitWidth(float body_w) const
+{
+	// the inspector may take nearly the whole tab - its description and lua boxes
+	// are unusable narrow; the canvas only keeps a strip. A tab too narrow for
+	// both minima is split by the fraction instead, so neither pane vanishes.
+	const float em = ImGui::GetFrameHeight();
+	const float lo = _min(s_InspectorMinEm * em, body_w * 0.5f);
+	const float hi = _max(body_w - SplitGrab() - s_CanvasMinEm * em, lo);
+	return _max(lo, _min(m_SplitFrac * body_w, hi));
+}
+
+//------------------------------------------------------------------------------
+// canvas | inspector handle, same shape as UIContentBrowser::DrawSplitter. An
+// InvisibleButton is the whole handle: it takes the mouse capture, so the drag
+// keeps working while the cursor runs ahead of the pane, and it swallows the
+// click so neither child sees it. The grab area is wider than the drawn line -
+// a 1px target is unusable.
+//------------------------------------------------------------------------------
+void UIQuestGraphWindow::DrawSplitter(float body_w, float body_h)
+{
+	const float grab = SplitGrab();
+
+	ImGui::SameLine(0.f, 0.f);
+	const ImVec2 top = ImGui::GetCursorScreenPos();
+	ImGui::InvisibleButton("##nq_split", ImVec2(grab, body_h > 0.f ? body_h : 1.f));
+	const bool active	= ImGui::IsItemActive();
+	const bool hovered	= ImGui::IsItemHovered();
+
+	// double click puts it back: the way out when the bar was dragged against an
+	// edge and the pane it belongs to is no longer reachable
+	if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+	{
+		m_SplitFrac = float(s_SplitDefault) / 1000.f;
+		SaveSplit(m_SplitFrac);
+	}
+	else if (active)
+	{
+		m_SplitFrac = (SplitWidth(body_w) - ImGui::GetIO().MouseDelta.x) / body_w;
+		// re-clamped on the spot: a drag pushed past a minimum must not bank up
+		// invisible width, or coming back does nothing until the debt is paid off
+		m_SplitFrac = SplitWidth(body_w) / body_w;
+		SaveSplit(m_SplitFrac);
+	}
+	if (active || hovered)
+		ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+
+	// visible grip: separator tint at rest, the usual accent while dragged, and it
+	// widens to the whole grab area under the cursor - the bar was easy to miss
+	const ImU32 col = ImGui::GetColorU32(active	 ? ImGuiCol_SeparatorActive
+									   : hovered ? ImGuiCol_SeparatorHovered
+												 : ImGuiCol_Separator);
+	const float x = top.x + grab * 0.5f;
+	const float half = (active || hovered) ? grab * 0.5f : 1.f;
+	ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(x - half, top.y),
+											  ImVec2(x + half, top.y + ImGui::GetItemRectSize().y), col);
+	if (hovered && !active) ImGui::SetTooltip("Drag to resize, double-click to reset");
+
+	ImGui::SameLine(0.f, 0.f);
+}
+
+float UIQuestGraphWindow::ProblemListHeight() const
+{
+	// as tall as the rows need and no taller, the rest scrolls: an empty strip has
+	// no business eating a fixed slice of the canvas ("none" is still one row)
+	const int rows = _max(_min((int)m_Doc->problems.size(), 4), 1);
+	return rows * ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().WindowPadding.y * 2.f;
+}
+
+float UIQuestGraphWindow::ProblemsHeight() const
+{
+	const ImGuiStyle& st = ImGui::GetStyle();
+	float h = ImGui::GetFrameHeight() + st.ItemSpacing.y;		// the collapsing header
+	if (m_ShowProblems) h += ProblemListHeight() + st.ItemSpacing.y;
+	return h;
+}
+
 void UIQuestGraphWindow::DrawProblems()
 {
 	int e = m_Doc->ErrorCount(), w = m_Doc->WarningCount();
@@ -84,7 +186,7 @@ void UIQuestGraphWindow::DrawProblems()
 	ImGui::PopStyleColor();
 	m_ShowProblems = open;
 	if (!open) return;
-	ImGui::BeginChild("nq_problem_list", ImVec2(0, 96.f), true);
+	ImGui::BeginChild("nq_problem_list", ImVec2(0, ProblemListHeight()), true);
 	for (u32 i = 0; i < m_Doc->problems.size(); ++i)
 	{
 		const SNqProblem& p = m_Doc->problems[i];
@@ -147,22 +249,20 @@ void UIQuestGraphWindow::Draw()
 
 	// canvas | inspector split with a draggable bar
 	ImVec2 avail = ImGui::GetContentRegionAvail();
-	float problems_h = 26.f + (m_ShowProblems ? 100.f : 0.f);
-	float body_h = _max(avail.y - problems_h, 100.f);
-	float insp_w = _max(220.f, _min(m_Split, avail.x - 300.f));
-	float canvas_w = _max(200.f, avail.x - insp_w - 8.f);
+	float body_h = _max(avail.y - ProblemsHeight(), 100.f);
+	float body_w = _max(avail.x, 1.f);
+	float insp_w = SplitWidth(body_w);
+	float canvas_w = _max(body_w - insp_w - SplitGrab(), 1.f);
 
 	ImGui::BeginChild("nq_canvas_child", ImVec2(canvas_w, body_h), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 	m_Canvas->Draw(ImVec2(canvas_w, body_h));
 	ImGui::EndChild();
 
-	ImGui::SameLine();
-	ImGui::InvisibleButton("nq_splitter", ImVec2(8.f, body_h));
-	if (ImGui::IsItemActive()) m_Split -= ImGui::GetIO().MouseDelta.x;
-	if (ImGui::IsItemHovered() || ImGui::IsItemActive()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-	ImGui::SameLine();
+	DrawSplitter(body_w, body_h);
 
-	ImGui::BeginChild("nq_inspector_child", ImVec2(0, body_h), false);
+	// the inspector fills what is left of the line. It scrolls both ways: a field
+	// that does not fit must be reachable, not quietly clipped off the edge
+	ImGui::BeginChild("nq_inspector_child", ImVec2(0, body_h), false, ImGuiWindowFlags_HorizontalScrollbar);
 	m_Inspector->Draw(m_Canvas->TakeRenameRequest(), m_Canvas->TakeFocusAction());
 	ImGui::EndChild();
 

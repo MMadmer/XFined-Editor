@@ -17,6 +17,10 @@ namespace
 	const float kFontBase	= 14.f;		// world font size at zoom 1
 	const float kLinkTangent = 48.f;
 
+	const float kPickerRows	= 12.f;		// rows a search popup shows before it scrolls
+	const float kPickerMinW	= 320.f;
+	const float kPickerMaxW	= 640.f;
+
 	IC ImU32 Col(u8 r, u8 g, u8 b, u8 a = 255) { return IM_COL32(r, g, b, a); }
 
 	// family colour by kind prefix
@@ -67,6 +71,54 @@ namespace
 		float a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
 		return ImVec2(a * p0.x + b * p1.x + c * p2.x + d * p3.x, a * p0.y + b * p1.y + c * p2.y + d * p3.y);
 	}
+
+	// Case folding for the search popups. The editor holds UTF-8, so a byte-wise
+	// tolower() would fold Latin only and leave "Ждёт" unreachable from "ждёт" -
+	// which reads as "the search is broken". Cyrillic is folded by hand:
+	// U+0410..U+042F -> U+0430..U+044F and Ё (U+0401) -> ё (U+0451).
+	void Fold(LPCSTR s, xr_string& out)
+	{
+		out.clear();
+		if (!s) return;
+		for (const u8* p = (const u8*)s; *p; ++p)
+		{
+			const u8 c = *p;
+			if (c >= 'A' && c <= 'Z') { out += char(c + 0x20); continue; }
+			if (c == 0xD0 && p[1])
+			{
+				const u8 d = p[1];
+				// А..П stay in the D0 lead, Р..Я cross over into D1
+				if (d == 0x81)				{ out += char(0xD1); out += char(0x91); ++p; continue; }
+				if (d >= 0x90 && d <= 0x9F)	{ out += char(0xD0); out += char(d + 0x20); ++p; continue; }
+				if (d >= 0xA0 && d <= 0xAF)	{ out += char(0xD1); out += char(d - 0x20); ++p; continue; }
+			}
+			out += char(c);
+		}
+	}
+
+	// `needle` is already folded; `scratch` is the caller's buffer for the haystack
+	bool FilterHit(LPCSTR text, LPCSTR needle, xr_string& scratch)
+	{
+		Fold(text, scratch);
+		return 0 != strstr(scratch.c_str(), needle);
+	}
+
+	// A search popup is auto-sized by its filter box, and its list sits in a fixed
+	// child that cannot push the window open - so the width has to be asked for
+	// here, measured on the widest human title the popup can show.
+	void ConstrainPicker(LPCSTR popup, u32 use_mask)
+	{
+		if (!ImGui::IsPopupOpen(popup)) return;
+		xr_vector<const NqCatalog::SKind*> kinds;
+		NqCatalog::KindsFor(use_mask, kinds);
+		float w = 0.f;
+		for (u32 i = 0; i < kinds.size(); ++i)
+			w = _max(w, ImGui::CalcTextSize(kinds[i]->title.c_str()).x + ImGui::CalcTextSize(kinds[i]->id.c_str()).x);
+		const ImGuiStyle& st = ImGui::GetStyle();
+		w += st.WindowPadding.x * 2.f + st.ItemSpacing.x * 3.f + st.ScrollbarSize + ImGui::GetFontSize();
+		w = _min(_max(w, kPickerMinW), kPickerMaxW);
+		ImGui::SetNextWindowSizeConstraints(ImVec2(w, 0.f), ImVec2(FLT_MAX, FLT_MAX));
+	}
 }
 
 NqCanvas::NqCanvas(NqDoc* doc) : m_Doc(doc)
@@ -83,6 +135,7 @@ NqCanvas::NqCanvas(NqDoc* doc) : m_Doc(doc)
 	m_WantZoom = -1;
 	m_ReachRevision = u32(-1);
 	m_Filter[0] = 0;
+	m_FilterSel = 0;
 	if (m_Doc->zoom_idx < 0 || m_Doc->zoom_idx >= kZoomCount) m_Doc->zoom_idx = kZoomDefault;
 	// a freshly opened document frames itself once
 	m_WantFrameAll = (m_Doc->view_cx == 0.f && m_Doc->view_cy == 0.f);
@@ -1136,38 +1189,89 @@ void NqCanvas::CreateNode(const NqCatalog::SKind& k, const ImVec2& world, bool c
 	m_WantRename = false;
 }
 
-void NqCanvas::DrawAddNodeMenu(LPCSTR popup)
+// the body both search popups share: a full-width filter box over a scrolling
+// list of matches, driven from the keyboard alone
+const NqCatalog::SKind* NqCanvas::PickKind(LPCSTR hint, u32 use_mask)
 {
-	if (!ImGui::BeginPopup(popup)) { if (0 == strcmp(popup, "nq_add_node")) m_PendingLink = false; return; }
-	if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-	ImGui::InputTextWithHint("##nq_filter", "search kinds", m_Filter, sizeof(m_Filter));
+	const bool appearing = ImGui::IsWindowAppearing();
+	if (appearing) { m_FilterSel = 0; ImGui::SetKeyboardFocusHere(); }
+	ImGui::SetNextItemWidth(-1.f);
+	bool refilter = appearing;
+	if (ImGui::InputTextWithHint("##nq_filter", hint, m_Filter, sizeof(m_Filter))) { m_FilterSel = 0; refilter = true; }
 	ImGui::Separator();
-	xr_vector<const NqCatalog::SKind*> kinds;
-	NqCatalog::KindsFor(NqCatalog::useTrigger | NqCatalog::useMain, kinds);
-	xr_string flt = NqUtil::Trim(m_Filter);
-	xr_string cur_group;
-	bool any = false;
+
+	xr_vector<const NqCatalog::SKind*> kinds, shown;
+	NqCatalog::KindsFor(use_mask, kinds);
+	// the author types what the row shows, in any case and either alphabet
+	xr_string needle, scratch;
+	Fold(NqUtil::Trim(m_Filter).c_str(), needle);
+	xr_string last_group;
+	int groups = 0;
 	for (u32 i = 0; i < kinds.size(); ++i)
 	{
 		const NqCatalog::SKind& k = *kinds[i];
-		if (!flt.empty() && !strstr(k.id.c_str(), flt.c_str()) && !strstr(k.title.c_str(), flt.c_str())) continue;
+		if (!needle.empty() && !FilterHit(k.id.c_str(), needle.c_str(), scratch) && !FilterHit(k.title.c_str(), needle.c_str(), scratch)) continue;
+		if (k.group != last_group || shown.empty()) { ++groups; last_group = k.group; }
+		shown.push_back(kinds[i]);
+	}
+	if (shown.empty()) { m_FilterSel = 0; ImGui::TextDisabled("no kinds match"); return 0; }
+
+	// a single-line input leaves Up/Down/Enter alone, so the list answers them
+	// while the caret stays in the filter box - no mouse in the loop
+	int sel = m_FilterSel;
+	if (ImGui::IsKeyPressed(ImGuiKey_DownArrow))	++sel;
+	if (ImGui::IsKeyPressed(ImGuiKey_UpArrow))		--sel;
+	if (sel < 0) sel = (int)shown.size() - 1;
+	if (sel >= (int)shown.size()) sel = 0;
+	const bool follow = refilter || sel != m_FilterSel;
+	m_FilterSel = sel;
+
+	// not on the first frame: the Enter that opened the popup is still pressed
+	const NqCatalog::SKind* picked = 0;
+	if (!appearing && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter))) picked = shown[sel];
+
+	const float rows = _min(kPickerRows, float(shown.size()) + float(groups));
+	ImGui::BeginChild("##nq_list", ImVec2(0.f, rows * ImGui::GetTextLineHeightWithSpacing()), false);
+	xr_string cur_group;
+	for (u32 i = 0; i < shown.size(); ++i)
+	{
+		const NqCatalog::SKind& k = *shown[i];
 		if (k.group != cur_group)
 		{
-			if (any) ImGui::Separator();
+			if (i) ImGui::Separator();
 			ImGui::TextDisabled("%s", k.group.c_str());
 			cur_group = k.group;
 		}
-		any = true;
+		// the id only disambiguates the row, ImGui hides everything after "##"
 		xr_string label = k.title + "##" + k.id;
-		if (ImGui::MenuItem(label.c_str(), k.id.c_str()))
-		{
-			CreateNode(k, m_MenuWorld, m_PendingLink);
-			m_PendingLink = false;
-			ImGui::CloseCurrentPopup();
-		}
+		if (ImGui::Selectable(label.c_str(), (int)i == sel)) picked = shown[i];
 		if (ImGui::IsItemHovered() && !k.desc.empty()) ImGui::SetTooltip("%s", k.desc.c_str());
+		if (follow && (int)i == sel) ImGui::SetScrollHereY(0.5f);
+		// the technical id keeps its old place at the right edge, but only while
+		// the title leaves room for it
+		const float idw = ImGui::CalcTextSize(k.id.c_str()).x;
+		const float x = ImGui::GetContentRegionMax().x - idw;
+		if (x > ImGui::CalcTextSize(k.title.c_str()).x + ImGui::GetStyle().ItemSpacing.x * 2.f)
+		{
+			ImGui::SameLine(x);
+			ImGui::TextDisabled("%s", k.id.c_str());
+		}
 	}
-	if (!any) ImGui::TextDisabled("no kinds match");
+	ImGui::EndChild();
+	return picked;
+}
+
+void NqCanvas::DrawAddNodeMenu(LPCSTR popup)
+{
+	const u32 mask = NqCatalog::useTrigger | NqCatalog::useMain;
+	ConstrainPicker(popup, mask);
+	if (!ImGui::BeginPopup(popup)) { if (0 == strcmp(popup, "nq_add_node")) m_PendingLink = false; return; }
+	if (const NqCatalog::SKind* k = PickKind("search kinds", mask))
+	{
+		CreateNode(*k, m_MenuWorld, m_PendingLink);
+		m_PendingLink = false;
+		ImGui::CloseCurrentPopup();
+	}
 	ImGui::EndPopup();
 }
 
@@ -1194,38 +1298,24 @@ void NqCanvas::DrawContextMenus()
 		ImGui::EndPopup();
 	}
 
+	ConstrainPicker("nq_add_action", NqCatalog::useExtra);
 	if (ImGui::BeginPopup("nq_add_action"))
 	{
-		if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-		ImGui::InputTextWithHint("##nq_afilter", "search actions", m_Filter, sizeof(m_Filter));
-		ImGui::Separator();
-		xr_vector<const NqCatalog::SKind*> kinds;
-		NqCatalog::KindsFor(NqCatalog::useExtra, kinds);
-		xr_string flt = NqUtil::Trim(m_Filter);
-		xr_string cur_group;
-		for (u32 i = 0; i < kinds.size(); ++i)
+		if (const NqCatalog::SKind* k = PickKind("search actions", NqCatalog::useExtra))
 		{
-			const NqCatalog::SKind& k = *kinds[i];
-			if (!flt.empty() && !strstr(k.id.c_str(), flt.c_str()) && !strstr(k.title.c_str(), flt.c_str())) continue;
-			if (k.group != cur_group) { ImGui::TextDisabled("%s", k.group.c_str()); cur_group = k.group; }
-			xr_string label = k.title + "##" + k.id;
-			if (ImGui::MenuItem(label.c_str(), k.id.c_str()))
+			xr_string id = m_CtxNode, slot = m_ChipDragSlot, kind = k->id;
+			int index = -1;
+			m_Doc->Edit([&](SNqQuest& q)
 			{
-				xr_string id = m_CtxNode, slot = m_ChipDragSlot, kind = k.id;
-				int index = -1;
-				m_Doc->Edit([&](SNqQuest& q)
-				{
-					SNqNode* n = q.FindNode(id.c_str());
-					if (!n) return;
-					SNqAction a; a.kind = kind; a.params = SNqValue::Table();
-					xr_vector<SNqAction>& v = n->Slot(slot.c_str());
-					v.push_back(a);
-					index = (int)v.size() - 1;
-				});
-				if (index >= 0) { m_Doc->sel_slot = slot + ":" + NqUtil::Format("%d", index); m_WantFocusAction = true; }
-				ImGui::CloseCurrentPopup();
-			}
-			if (ImGui::IsItemHovered() && !k.desc.empty()) ImGui::SetTooltip("%s", k.desc.c_str());
+				SNqNode* n = q.FindNode(id.c_str());
+				if (!n) return;
+				SNqAction a; a.kind = kind; a.params = SNqValue::Table();
+				xr_vector<SNqAction>& v = n->Slot(slot.c_str());
+				v.push_back(a);
+				index = (int)v.size() - 1;
+			});
+			if (index >= 0) { m_Doc->sel_slot = slot + ":" + NqUtil::Format("%d", index); m_WantFocusAction = true; }
+			ImGui::CloseCurrentPopup();
 		}
 		ImGui::EndPopup();
 	}

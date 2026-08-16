@@ -17,6 +17,9 @@ public:
 	bool OpenWorldOutliner;
 	// content browser folder-tree width in pixels, dragged by its splitter
 	u32  ContentBrowserTreeWidth;
+	// quest graph inspector width, in permille of the tab body. A fraction and not
+	// pixels: the tab is resized and rescaled far oftener than the split is dragged
+	u32  QuestInspectorSplit;
 	// GPU the render device is created on, by adapter description; empty means
 	// the system default. Applied on the next start - D3D9 cannot move a live
 	// device to another adapter.

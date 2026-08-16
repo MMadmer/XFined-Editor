@@ -25,6 +25,9 @@ void CLevelPreferences::Load(CInifile* I)
         ContentBrowserTreeWidth = R_U32_SAFE("windows", "content_browser_tree_width", 220);
     }
     {
+        QuestInspectorSplit = R_U32_SAFE("windows", "quest_inspector_split", 320);
+    }
+    {
         // an empty value reads back as a null pointer, not as "" - assigning that
         // to a string is what made the editor die on startup.
         // r_string_wb, not r_string: adapter names contain spaces, and the ini
@@ -51,6 +54,7 @@ void CLevelPreferences::Save(CInifile* I)
     I->w_bool("windows", "content_browser", OpenContentBrowser);
     I->w_bool("windows", "world_outliner", OpenWorldOutliner);
     I->w_u32("windows", "content_browser_tree_width", ContentBrowserTreeWidth);
+    I->w_u32("windows", "quest_inspector_split", QuestInspectorSplit);
     // only write a real choice: a key with an empty value is what the reader
     // above chokes on, and "no key" already means "system default".
     // quoted on disk - the ini parser eats spaces in unquoted values, and

@@ -30,7 +30,9 @@ private:
 	NqDoc*			m_Doc;
 	NqCanvas*		m_Canvas;
 	NqInspector*	m_Inspector;
-	float			m_Split;			// inspector width in pixels
+	// inspector width as a fraction of the body, not pixels: the tab is resized
+	// and rescaled far more often than the split is dragged
+	float			m_SplitFrac;
 	bool			m_Focus;
 	bool			m_AskClose;			// modal "unsaved changes"
 	bool			m_CloseNow;
@@ -38,9 +40,15 @@ private:
 	xr_string		m_Message;			// last save/reload result
 
 	void			DrawToolbar			();
+	void			DrawSplitter		(float body_w, float body_h);
 	void			DrawProblems		();
 	void			DrawClosePrompt		();
 	void			Save				();
+	// inspector width in pixels for a body `body_w` wide, both panes kept usable
+	float			SplitWidth			(float body_w) const;
+	// vertical space the problems strip needs this frame (header + list)
+	float			ProblemsHeight		() const;
+	float			ProblemListHeight	() const;
 	xr_string		Title				() const;
 };
 
