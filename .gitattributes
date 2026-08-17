@@ -4,3 +4,6 @@
 # Game data is cp1251 and must reach the engine byte for byte: line-ending
 # normalization would also invite an encoding guess on files git cannot decode.
 *.ltx -text
+
+# Preserve the verified upstream LZO bytes, including its intentional EOF layout.
+Source/External/LZO/** -whitespace

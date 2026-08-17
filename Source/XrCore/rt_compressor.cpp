@@ -2,8 +2,7 @@
 #pragma hdrstop
 
 
-// #include "rt_lzo.h"
-#include "rt_lzo1x.h"
+#include <lzo/lzo1x.h>
 
 
 #define HEAP_ALLOC(var,size) \
@@ -28,20 +27,22 @@ u32		rtc_compress	(void *dst, u32 dst_len, const void* src, u32 src_len)
 	lzo_uint		out_size	= dst_len;
 	int r = lzo1x_1_compress	( 
 		(const lzo_byte *) src, (lzo_uint)	src_len, 
-		(lzo_byte *) dst,		(lzo_uintp) &out_size, 
+		(lzo_byte *) dst,		&out_size,
 		rtc_wrkmem);
-	VERIFY	(r==LZO_E_OK);
-	return	out_size;
+	R_ASSERT(r==LZO_E_OK);
+	R_ASSERT(out_size <= type_max(u32));
+	return	static_cast<u32>(out_size);
 }
 u32		rtc_decompress	(void *dst, u32 dst_len, const void* src, u32 src_len)
 {
 	lzo_uint		out_size	= dst_len;
 	int r = lzo1x_decompress	( 
 		(const lzo_byte *) src, (lzo_uint)	src_len,
-		(lzo_byte *) dst,		(lzo_uintp) &out_size,
+		(lzo_byte *) dst,		&out_size,
 		rtc_wrkmem);
-	VERIFY	(r==LZO_E_OK);
-	return	out_size;
+	R_ASSERT(r==LZO_E_OK);
+	R_ASSERT(out_size <= type_max(u32));
+	return	static_cast<u32>(out_size);
 }
 
 

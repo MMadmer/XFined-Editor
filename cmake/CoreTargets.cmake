@@ -9,7 +9,7 @@ xray_common(XrAPI PCH "${SRC}/XrAPI/stdafx.h")
 target_compile_definitions(XrAPI PRIVATE XRAPI_EXPORTS _WINDOWS _USRDLL)
 
 #-- XrCore ---------------------------------------------------------------------
-xray_glob(XRCORE_SRC "${SRC}/XrCore" EXCLUDE lzo1x_d3.cpp rt_lzo.cpp)
+xray_glob(XRCORE_SRC "${SRC}/XrCore")
 set(XRCORE_C
     "${SRC}/XrCore/ptmalloc3/malloc.c"
     "${SRC}/XrCore/ptmalloc3/sysdeps/win32/win32.c"
@@ -17,7 +17,10 @@ set(XRCORE_C
 add_library(XrCore SHARED ${XRCORE_SRC} ${XRCORE_C})
 xray_common(XrCore PCH "${SRC}/XrCore/stdafx.h")
 target_compile_definitions(XrCore PRIVATE XRCORE_EXPORTS _WINDOWS _USRDLL)
-target_link_libraries(XrCore PRIVATE XrAPI dxerr comdlg32)
+target_link_libraries(XrCore
+    PRIVATE XrAPI dxerr comdlg32 LZO
+)
+target_include_directories(XrCore PUBLIC "${LZO_ROOT}/include")
 xray_no_pch(${XRCORE_C} "${SRC}/XrCore/Model.cpp")
 
 #-- XrCDB ----------------------------------------------------------------------

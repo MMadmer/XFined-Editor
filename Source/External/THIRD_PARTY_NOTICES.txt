@@ -1,6 +1,26 @@
 XFined Editor third-party notices
 =================================
 
+LZO 2.10
+--------
+
+Copyright (C) 1996-2017 Markus Franz Xaver Johannes Oberhumer.
+
+XFined Editor statically links LZO under GNU GPL version 2 or, at your option,
+any later version. The unmodified corresponding source is vendored under
+Source/External/LZO, and the complete license is distributed beside the editor
+as LZO_LICENSE.txt.
+
+FreeType 2.14.3
+---------------
+
+Portions of this software are copyright © 2026 The FreeType Project
+(https://freetype.org). All rights reserved.
+
+XFined Editor uses FreeType under the FreeType Project License. The complete
+license and the upstream dual-license overview are distributed beside the
+editor as FREETYPE_LICENSE.txt and FREETYPE_LICENSE_OVERVIEW.txt.
+
 OpenAL Soft 1.25.2
 ------------------
 

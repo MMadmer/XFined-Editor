@@ -36,6 +36,7 @@ configure_file(
 )
 
 include(cmake/ExternalTargets.cmake)
+include(cmake/LzoTarget.cmake)
 include(cmake/CoreTargets.cmake)
 include(cmake/EditorTargets.cmake)
 include(cmake/GameTargets.cmake)

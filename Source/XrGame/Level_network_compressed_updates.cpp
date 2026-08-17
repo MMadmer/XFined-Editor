@@ -25,16 +25,25 @@ void CLevel::ProcessCompressedUpdate(NET_Packet& P, u8 const compress_type)
 		} else if (compress_type & eto_lzo_compression)
 		{
 			R_ASSERT(m_lzo_dictionary.data);
-			uncompressed_packet.B.count = sizeof(uncompressed_packet.B.data);
-			lzo_decompress_dict(
+			// LZO uses a 64-bit size type on Win64; never alias the packet's u32 counter.
+			lzo_uint uncompressed_size = sizeof(uncompressed_packet.B.data);
+			const int lzo_result = lzo_decompress_dict(
 				P.B.data + P.r_tell(),
 				next_size,
 				uncompressed_packet.B.data,
-				(lzo_uint*)&uncompressed_packet.B.count,
+				&uncompressed_size,
 				m_lzo_working_memory,
 				m_lzo_dictionary.data,
 				m_lzo_dictionary.size
 			);
+			if (lzo_result != LZO_E_OK || uncompressed_size > sizeof(uncompressed_packet.B.data))
+			{
+				Msg("! Invalid LZO update: error=%d, size=%llu", lzo_result,
+					static_cast<unsigned long long>(uncompressed_size));
+				Device->Statistic->netClientCompressor.End();
+				return;
+			}
+			uncompressed_packet.B.count = static_cast<u32>(uncompressed_size);
 		} else
 		{
 			NODEFAULT;

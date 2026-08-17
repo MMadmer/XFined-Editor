@@ -211,15 +211,19 @@ void server_updates_compressor::flush_accumulative_buffer()
 			);
 		} else
 		{
-			m_compress_buf.B.count = sizeof(m_compress_buf.B.data);
-			lzo_compress_dict(
+			// LZO uses a 64-bit size type on Win64; never alias the packet's u32 counter.
+			lzo_uint compressed_size = sizeof(m_compress_buf.B.data);
+			const int lzo_result = lzo_compress_dict(
 				m_acc_buff.B.data,
 				m_acc_buff.B.count,
 				m_compress_buf.B.data,
-				(lzo_uint*)&m_compress_buf.B.count,
+				&compressed_size,
 				m_lzo_working_memory,
 				m_lzo_dictionary.data, m_lzo_dictionary.size
 			);
+			R_ASSERT2(lzo_result == LZO_E_OK, "LZO update compression failed");
+			R_ASSERT2(compressed_size <= sizeof(m_compress_buf.B.data), "LZO update exceeded the packet buffer");
+			m_compress_buf.B.count = static_cast<u32>(compressed_size);
 		}
 		Device->Statistic->netServerCompressor.End();
 		//(sizeof(u16)*2 + 1) ::= w_begin(2) + compress_type(1) + zero_end(2)
