@@ -539,8 +539,17 @@ TOOLS = [
     {
         "name": "xfined_content_browser_selection",
         "description": "What the Content Browser is showing right now: whether it is open, the active source, "
-                       "the current folder and the list of selected assets.",
-        "inputSchema": {"type": "object", "properties": {}},
+                       "the current folder and the ordered selection. With action=select/toggle/range/clear it "
+                       "also applies normal file-manager selection semantics against the complete filtered view, "
+                       "including virtualized offscreen rows. select establishes the anchor; range extends from it. "
+                       "Names must match an entry in the current view exactly. Omit action (or use get) to only read.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["get", "select", "toggle", "range", "clear"]},
+                "name": {"type": "string", "description": "exact asset or folder path for select/toggle/range"},
+            },
+        },
     },
     {
         "name": "xfined_content_browser_copy",

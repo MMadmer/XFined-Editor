@@ -58,6 +58,9 @@ public:
 	static bool		RevealAsset			(LPCSTR name, int source, bool open_viewer, xr_string& err);
 	// MCP: what is selected right now, and in which source/folder
 	static void		GetSelection		(int& source, xr_string& folder, xr_vector<xr_string>& sel);
+	// MCP: apply file-manager selection semantics to an exact entry in the
+	// complete current view, including rows outside the virtualized viewport.
+	static bool		ModifySelection		(LPCSTR action, LPCSTR name, xr_string& err);
 	// MCP: copy items - or a whole folder, subfolders included - out of a
 	// read-only source into the project. Unlike the menu this never prompts;
 	// `overwrite` decides. `names` is a ';'-separated list and may be empty when
@@ -170,13 +173,24 @@ private:
 									SEntry(LPCSTR p, bool f) : path(p), folder(f) {}
 		bool operator==				(const SEntry& o) const { return folder == o.folder && path == o.path; }
 	};
+	struct SEntryHash
+	{
+		size_t operator()(const SEntry& entry) const noexcept
+		{
+			const size_t path_hash = std::hash<xr_string>{}(entry.path);
+			return path_hash ^ (entry.folder ? size_t(0x9e3779b9) : 0);
+		}
+	};
 
 	// UE-style multi-selection: click replaces, Ctrl toggles, Shift takes the
-	// range from the anchor. The range needs the order tiles were drawn in, so
-	// the grid records it and a shift-click is resolved after the loop.
+	// range from the anchor. m_ViewOrder is the complete filtered view, while
+	// m_DrawnOrder only holds the virtualized rows visible this frame.
 	xr_vector<SEntry>				m_Selection;
+	xr_flat_hash_map<SEntry, u8, SEntryHash> m_SelectionLookup;
 	SEntry							m_Anchor;
 	bool							m_HasAnchor;
+	xr_vector<SEntry>				m_ViewOrder;
+	bool							m_ViewDirty;
 	xr_vector<SEntry>				m_DrawnOrder;
 	// screen rect of each drawn tile, parallel to m_DrawnOrder - the rubber-band
 	// needs to know what it swept over
@@ -235,6 +249,8 @@ private:
 	SFolder*		EnsureFolder		(LPCSTR path);
 	void			DrawFolder			(SFolder& f);
 	void			DrawTiles			();
+	void			InvalidateView		();
+	void			RebuildView			();
 	void			CollectItems		(SFolder& f, xr_vector<int>& out, bool recursive);
 	SFolder*		FindFolder			(LPCSTR path);
 	ImTextureID		GetThumb			(LPCSTR name);
@@ -273,11 +289,14 @@ private:
 	// are browse-and-copy-out sources, never edited in place.
 	IC bool			IsReadOnlySource	() const { return m_Source != 0; }
 	// the linked game install specifically: it owns the copy machinery and the
-	// per-frame tile budget its size demands
+	// per-frame thumbnail decode budget its size demands
 	IC bool			IsGameSource		() const { return m_Source == 2; }
 
 	// selection - folders and assets go through exactly the same calls
 	bool			IsSelected			(LPCSTR path, bool folder) const;
+	void			AddToSelection		(const SEntry& entry);
+	void			RebuildSelectionLookup();
+	void			SelectAllViewEntries();
 	void			SelectEntry			(LPCSTR path, bool folder, bool additive, bool range);
 	void			ClearSelection		();
 	void			ApplyPendingRange	();

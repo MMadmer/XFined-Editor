@@ -164,10 +164,8 @@ static const SLibFile* LibFilesFor(u32 category, int& count)
 // keep at most this many live thumbnail textures
 static const u32 kThumbBudget = 512;
 // DARF only: a game install holds six figures of files, so one frame may
-// decode this many new thumbnails and draw this many tiles. Both limits are
-// progressive - the rest shows up on the following frames / after a search.
+// decode only this many new thumbnails. Tile submission is virtualized below.
 static const u32 kDarfThumbsPerFrame	= 16;
-static const int kDarfMaxTiles			= 2000;
 static const u32 kNavigationHistoryLimit = 64;
 
 static bool SameLocation(const UIContentBrowser::SLocation& lhs,
@@ -256,6 +254,7 @@ UIContentBrowser::UIContentBrowser()
 	m_ClipCut			= false;
 	m_HasAnchor			= false;
 	m_HasPendingRange	= false;
+	m_ViewDirty			= true;
 	m_ScrollToSelection	= false;
 	m_ConfirmDelete		= false;
 	m_RenameBuf[0]		= 0;
@@ -413,6 +412,7 @@ bool UIContentBrowser::ApplyLocation(SLocation location, bool record, xr_string&
 		m_ForwardHistory.clear();
 	}
 	m_CurFolder = location.folder;
+	InvalidateView();
 	ClearSelection();
 	m_Rename.clear();
 	m_RenameFocus = false;
@@ -747,6 +747,7 @@ void UIContentBrowser::DropCache()
 			((IDirect3DBaseTexture9*)it->second.tex)->Release();
 #endif
 	m_Thumbs.clear();
+	ClearVisualThumbnailQueue();
 }
 
 //------------------------------------------------------------------------------
@@ -827,6 +828,7 @@ void UIContentBrowser::EnsureListing()
 void UIContentBrowser::Refresh()
 {
 	m_NeedRefresh	= false;
+	InvalidateView	();
 	m_Items.clear	();
 	m_Dirs.clear	();
 	DropCache		();
@@ -1040,6 +1042,8 @@ void UIContentBrowser::CollectItems(SFolder& f, xr_vector<int>& out, bool recurs
 // are resolvable by name.
 void UIContentBrowser::RequestModelThumbnail(LPCSTR name)
 {
+	if (HasVisualThumbnailRequest(name)) return;
+
 	if (m_Source == 2)
 	{
 		const int idx = EditorGameContent::Find(name);
@@ -1158,18 +1162,29 @@ ImTextureID UIContentBrowser::GetThumb(LPCSTR name)
 	}
 	else
 	{
-		SChooseEvents* E = UIChooseForm::GetEvents(kCategories[m_Category].id);
-		if (E && E->on_get_texture) E->on_get_texture(name, tex);
-
-		// Roughly half of the shipped .object files have no baked .thm, so their
-		// tiles stayed blank. Render those instead of giving up.
-		if (!tex && kCategories[m_Category].id == smObject)
+		const bool object = kCategories[m_Category].id == smObject;
+		bool object_result = false;
+		if (object)
 		{
-			U32Vec	pixels;
-			bool	failed = false;
+			U32Vec pixels;
+			bool failed = false;
 			if (TakeVisualThumbnail(name, pixels, failed))
+			{
 				tex = failed ? 0 : static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(pixels));
-			else
+				object_result = true;
+			}
+			else if (HasVisualThumbnailRequest(name))
+				return 0;
+		}
+
+		if (!object_result)
+		{
+			SChooseEvents* E = UIChooseForm::GetEvents(kCategories[m_Category].id);
+			if (E && E->on_get_texture) E->on_get_texture(name, tex);
+
+			// Roughly half of the shipped .object files have no baked .thm, so their
+			// tiles stayed blank. Render those instead of giving up.
+			if (!tex && object)
 			{
 				QueueObjectThumbnail(name, name);
 				return 0;	// retry next frame, do not cache a miss
@@ -1519,21 +1534,47 @@ float UIContentBrowser::TileWidth() const
 	return m_TileSize + ImGui::GetStyle().FramePadding.x * 2.f;
 }
 
-void UIContentBrowser::DrawTiles()
+void UIContentBrowser::InvalidateView()
 {
-	// resolve the selected folder, falling back to root
+	m_ViewDirty = true;
+}
+
+void UIContentBrowser::RebuildView()
+{
+	if (!m_ViewDirty) return;
+	m_ViewDirty = false;
+	m_ViewOrder.clear();
+
 	SFolder* cur = FindFolder(m_CurFolder.c_str());
 	if (!cur) cur = &m_Root;
 
-	// rebuilt every frame: a Shift-range means "everything between these two in
-	// the order they are on screen", which only this pass knows. The rects go
-	// with it, for the rubber-band.
-	m_DrawnOrder.clear();
-	m_DrawnRects.clear();
+	if (!m_Filter.IsActive())
+	{
+		m_ViewOrder.reserve(cur->children.size() + cur->items.size());
+		for (u32 i = 0; i < cur->children.size(); ++i)
+			m_ViewOrder.push_back(SEntry(cur->children[i].path.c_str(), true));
+	}
 
 	xr_vector<int> ids;
-	// with an active search the whole subtree is scanned, otherwise just this folder
 	CollectItems(*cur, ids, m_Filter.IsActive());
+	if (m_ViewOrder.capacity() < m_ViewOrder.size() + ids.size())
+		m_ViewOrder.reserve(m_ViewOrder.size() + ids.size());
+	for (u32 i = 0; i < ids.size(); ++i)
+	{
+		LPCSTR full = m_Items[ids[i]].name.c_str();
+		if (!m_Filter.PassFilter(full)) continue;
+		m_ViewOrder.push_back(SEntry(full, false));
+	}
+}
+
+void UIContentBrowser::DrawTiles()
+{
+	RebuildView();
+
+	// Only visible rows have screen rectangles. Range selection and Ctrl+A use
+	// the cached complete view instead, so virtualization cannot change meaning.
+	m_DrawnOrder.clear();
+	m_DrawnRects.clear();
 
 	// How many tiles fit on a row. A tile is WIDER than m_TileSize: a button
 	// adds its frame padding on both sides, and the image tiles do the same, so
@@ -1546,6 +1587,24 @@ void UIContentBrowser::DrawTiles()
 	const float			avail	= ImGui::GetContentRegionAvail().x;
 	int per_row					= (int)((avail + space) / (tile_w + space));
 	if (per_row < 1) per_row = 1;
+	const float caption_h = _max(ImGui::GetFrameHeight(), ImGui::GetTextLineHeightWithSpacing() * 2.f);
+	const float row_h = tile_w + st.ItemSpacing.y + caption_h + st.ItemSpacing.y;
+
+	int reveal_index = -1;
+	if (m_ScrollToSelection)
+		for (int i = int(m_ViewOrder.size()) - 1; i >= 0; --i)
+			if (IsSelected(m_ViewOrder[i].path.c_str(), m_ViewOrder[i].folder))
+			{
+				reveal_index = i;
+				break;
+			}
+	if (reveal_index < 0 && !m_Rename.empty())
+		for (u32 i = 0; i < m_ViewOrder.size(); ++i)
+			if (m_ViewOrder[i].path == m_Rename)
+			{
+				reveal_index = int(i);
+				break;
+			}
 
 	// A new folder starts at its beginning. ImGui keeps the scroll offset per
 	// child window, so without this, entering a folder from a scrolled grid
@@ -1554,240 +1613,175 @@ void UIContentBrowser::DrawTiles()
 	if (m_ShownFolder != m_CurFolder)
 	{
 		m_ShownFolder = m_CurFolder;
-		if (!m_ScrollToSelection) ImGui::SetScrollY(0.f);
+		if (reveal_index < 0) ImGui::SetScrollY(0.f);
 	}
 
-	int drawn = 0, matched = 0;
-
-	// Folders come first, like Unreal: the grid is a view of the folder, so
-	// what is inside it - subfolders included - has to be reachable from here
-	// and not only from the tree. A search flattens the subtree, so folder
-	// tiles are pointless (and misleading) while the filter is active.
-	if (!m_Filter.IsActive())
+	auto draw_caption = [&](LPCSTR label, bool renaming)
 	{
-		if (!m_CurFolder.empty())
-		{
-			// step out: the parent path is everything before the last separator
-			ImGui::PushID("##cb_up");
-			ImGui::Button("..", ImVec2(tile_w, tile_w));
-			// double click, same as every other folder tile - a single click
-			// here navigated while clicking a folder did not, which is worse
-			// than either rule on its own
-			if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-			{
-				xr_string err;
-				GoUp(err);
-			}
-			if (ImGui::IsItemHovered()) ImGui::SetTooltip("up one folder (double click)");
-			ImGui::PopID();
-			drawn++;
-		}
-
-		for (u32 c = 0; c < cur->children.size(); ++c)
-		{
-			SFolder& sub = cur->children[c];
-			if (drawn % per_row) ImGui::SameLine();
-			drawn++;
-
-			const bool renaming	= !m_Rename.empty() && (m_Rename == sub.path);
-			const bool sel		= IsSelected(sub.path.c_str(), true);
-
-			ImGui::PushID(1000000 + (int)c);
-			ImGui::BeginGroup();
-
-			// A folder tile is a grid entry like any other: it joins the drawn
-			// order, so Shift-ranges and the rubber-band sweep over folders and
-			// assets together instead of pretending they are different worlds.
-			m_DrawnOrder.push_back(SEntry(sub.path.c_str(), true));
-			const u32 folder_slot = u32(m_DrawnRects.size());
-			m_DrawnRects.push_back(ImVec4(0, 0, 0, 0));
-
-			// folders read as folders through colour: there is no icon atlas here.
-			// Selected (or being renamed) is lit up.
-			ImGui::PushStyleColor(ImGuiCol_Button,
-				ThemeColor((sel || renaming) ? XFinedTheme::ColorToken::Accent
-					: XFinedTheme::ColorToken::Input));
-			ImGui::Button("[ ]", ImVec2(tile_w, tile_w));
-			ImGui::PopStyleColor();
-
-			m_DrawnRects[folder_slot] = ImVec4(ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
-											   ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
-
-			// One of the game's levels is a folder on disk, but it is a LEVEL to
-			// the author: double-clicking it opens the scene it was built from
-			// rather than showing them level.geom. The folder is still walkable
-			// from the tree, so nothing becomes unreachable.
-			string_path level_scene;
-			const bool as_level = IsGameLevelEntry(sub.path.c_str()) &&
-								  0 == strchr(sub.path.c_str() + 7, '\\') &&
-								  ResolveLevelFile(sub.path.c_str(), m_Source, level_scene);
-
-			// A single click SELECTS, a double click enters - exactly what an
-			// asset tile does, so a folder can be part of a selection at all.
-			if (ImGui::IsItemHovered())
-			{
-				const ImGuiIO& io = ImGui::GetIO();
-				if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-					SelectEntry(sub.path.c_str(), true, io.KeyCtrl, io.KeyShift);
-				if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-				{
-					if (as_level)	OpenAsset(sub.path.c_str());
-					else
-					{
-						xr_string err;
-						ApplyLocation(SLocation(m_Source, int(m_Category), sub.path.c_str()), true, err);
-					}
-				}
-				if (!renaming)
-					ImGui::SetTooltip(as_level ? "%s\nlevel - double click to open the scene it was built from"
-											   : "%s", sub.path.c_str());
-			}
-			DrawEntryContextMenu(sub.path.c_str(), true);
-
-			if (renaming)
-			{
-				ImGui::SetNextItemWidth(tile_w);
-				if (m_RenameFocus)
-				{
-					// one frame late on purpose: the widget has to exist before
-					// the keyboard can be handed to it
-					ImGui::SetKeyboardFocusHere();
-					m_RenameFocus = false;
-				}
-				// AutoSelectAll is the whole point - the name comes up fully
-				// selected, so the first keystroke replaces it
-				const bool done = ImGui::InputText("##cb_rename", m_RenameBuf, sizeof(m_RenameBuf),
-					ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
-				// Enter commits, and so does clicking away. Escape reverts the
-				// buffer itself, so the commit sees an unchanged name and stops.
-				if (done || ImGui::IsItemDeactivated()) CommitRename();
-			}
-			else
-			{
-				ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + tile_w);
-				ImGui::TextUnformatted(sub.name.c_str());
-				ImGui::PopTextWrapPos();
-			}
-			ImGui::EndGroup();
-			ImGui::PopID();
-		}
-	}
-
-	for (u32 k = 0; k < ids.size(); ++k)
-	{
-		SChooseItem& it	= m_Items[ids[k]];
-		LPCSTR full		= it.name.c_str();
-		if (!m_Filter.PassFilter(full)) continue;
-		++matched;
-		// a game install can match tens of thousands of files at once; drawing
-		// them all would stall the frame, so the rest waits for a tighter search.
-		// Only the game tree is that big - the SDK library draws in full.
-		if (IsGameSource() && drawn >= kDarfMaxTiles) continue;
-
-		LPCSTR leaf		= strrchr(full, '\\');
-		leaf			= leaf ? leaf + 1 : full;
-
-		if (drawn % per_row) ImGui::SameLine();
-		drawn++;
-
-		ImGui::PushID(ids[k]);
-		ImGui::BeginGroup();
-
-		// the grid order is what a Shift-range means by "everything between"
-		m_DrawnOrder.push_back(SEntry(full, false));
-		const u32 tile_slot = u32(m_DrawnRects.size());
-		m_DrawnRects.push_back(ImVec4(0, 0, 0, 0));	// filled right after the widget
-
-		ImTextureID tex		= GetThumb(full);
-		const bool sel		= IsSelected(full, false);
-		const bool renaming	= !m_Rename.empty() && (m_Rename == full);
-
-		bool clicked;
-		if (tex)	clicked = ImGui::ImageButton("##Thumbnail", tex, ImVec2(m_TileSize, m_TileSize));
-		else		clicked = ImGui::Button(leaf, ImVec2(tile_w, tile_w));
-
-		{
-			const ImVec2 ra = ImGui::GetItemRectMin();
-			const ImVec2 rb = ImGui::GetItemRectMax();
-			m_DrawnRects[tile_slot] = ImVec4(ra.x, ra.y, rb.x, rb.y);
-		}
-
-		// Selection has to be visible ON the thumbnail: tinting ImGuiCol_Button
-		// only colours the few pixels of frame the image does not cover, which
-		// is why selecting looked like nothing happened. Unreal draws a wash
-		// plus a bright border over the tile - same here, on the foreground
-		// draw list so it lands above the image.
-		if (sel)
-		{
-			const ImVec2	a	= ImGui::GetItemRectMin();
-			const ImVec2	b	= ImGui::GetItemRectMax();
-			ImDrawList*		dl	= ImGui::GetWindowDrawList();
-			const ImVec4	hl	= ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive);
-			dl->AddRectFilled(a, b, ImGui::GetColorU32(ImVec4(hl.x, hl.y, hl.z, 0.35f)), 3.f);
-			dl->AddRect      (a, b, ImGui::GetColorU32(ImVec4(0.30f, 0.65f, 1.00f, 1.f)), 3.f, 0, 2.5f);
-		}
-
-		if (clicked)
-		{
-			const ImGuiIO& io = ImGui::GetIO();
-			SelectEntry(full, false, io.KeyCtrl, io.KeyShift);
-		}
-
-		// Drag source for every source, not just the SDK library: dropping a
-		// game or project asset on the viewport has to work the same way.
-		// Dragging an unselected tile selects it first, as Unreal does, so the
-		// payload always matches what is highlighted.
-		if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
-		{
-			if (!IsSelected(full, false)) SelectEntry(full, false, false, false);
-			m_Dragged = full;
-			ImGui::SetDragDropPayload(CB_DND_PAYLOAD, full, xr_strlen(full) + 1);
-			if (tex) ImGui::Image(tex, ImVec2(48, 48));
-			ImGui::TextUnformatted(leaf);
-			if (m_Selection.size() > 1)
-				ImGui::Text("and %d more", int(m_Selection.size()) - 1);
-			ImGui::EndDragDropSource();
-		}
-
-		if (ImGui::IsItemHovered())
-		{
-			ImGui::SetTooltip("%s", full);
-			// Unreal semantics: a double click OPENS the asset, it never places
-			// it. Putting something on the level is drag&drop onto the viewport
-			// and nothing else - a stray double click must not edit the scene.
-			if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-			{
-				SelectEntry(full, false, false, false);
-				OpenAsset(full);
-			}
-		}
-
-		// Right-click surface. Drawn last so the popup contents never become the
-		// "last item" the hover check above reads.
-		DrawEntryContextMenu(full, false);
-
-		// caption under the tile, clipped to tile width - or the name box, which
-		// an asset gets exactly like a folder does
 		if (renaming)
 		{
 			ImGui::SetNextItemWidth(tile_w);
-			if (m_RenameFocus)	{ ImGui::SetKeyboardFocusHere(); m_RenameFocus = false; }
+			if (m_RenameFocus)
+			{
+				ImGui::SetKeyboardFocusHere();
+				m_RenameFocus = false;
+			}
 			const bool done = ImGui::InputText("##cb_rename", m_RenameBuf, sizeof(m_RenameBuf),
 				ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
 			if (done || ImGui::IsItemDeactivated()) CommitRename();
-		}
-		else
-		{
-			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + tile_w);
-			ImGui::TextUnformatted(leaf);
-			ImGui::PopTextWrapPos();
+			const float remainder = caption_h - ImGui::GetFrameHeight() - st.ItemSpacing.y;
+			if (remainder > 0.f) ImGui::Dummy(ImVec2(tile_w, remainder));
+			return;
 		}
 
-		ImGui::EndGroup();
-		ImGui::PopID();
+		const ImVec2 p = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(ImVec2(tile_w, caption_h));
+		const ImVec4 clip(p.x, p.y, p.x + tile_w, p.y + caption_h);
+		ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(), ImGui::GetFontSize(), p,
+			ImGui::GetColorU32(ImGuiCol_Text), label, 0, tile_w, &clip);
+	};
+
+	const int up_slots = (!m_Filter.IsActive() && !m_CurFolder.empty()) ? 1 : 0;
+	const int total_slots = up_slots + int(m_ViewOrder.size());
+	const int row_count = (total_slots + per_row - 1) / per_row;
+
+	ImGuiListClipper clipper;
+	clipper.Begin(row_count, row_h);
+	if (reveal_index >= 0)
+	{
+		const int reveal_row = (up_slots + reveal_index) / per_row;
+		clipper.IncludeItemsByIndex(reveal_row, reveal_row + 1);
 	}
+	while (clipper.Step())
+		for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
+		{
+			const float row_x = ImGui::GetCursorPosX();
+			const float row_y = ImGui::GetCursorPosY();
+			const int first_slot = row * per_row;
+			const int last_slot = _min(first_slot + per_row, total_slots);
+			for (int slot = first_slot; slot < last_slot; ++slot)
+			{
+				if (slot > first_slot) ImGui::SameLine(0.f, space);
+				if (up_slots && slot == 0)
+				{
+					ImGui::PushID("##cb_up");
+					ImGui::BeginGroup();
+					ImGui::Button("..", ImVec2(tile_w, tile_w));
+					if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+					{
+						xr_string err;
+						GoUp(err);
+					}
+					if (ImGui::IsItemHovered()) ImGui::SetTooltip("up one folder (double click)");
+					draw_caption("Parent folder", false);
+					ImGui::EndGroup();
+					ImGui::PopID();
+					continue;
+				}
 
-	// Shift-click needed the whole grid order, so it is resolved here
+				const int view_index = slot - up_slots;
+				const SEntry& entry = m_ViewOrder[view_index];
+				LPCSTR full = entry.path.c_str();
+				LPCSTR leaf = strrchr(full, '\\');
+				leaf = leaf ? leaf + 1 : full;
+				const bool sel = IsSelected(full, entry.folder);
+				const bool renaming = !m_Rename.empty() && m_Rename == full;
+
+				ImGui::PushID(view_index);
+				ImGui::BeginGroup();
+				m_DrawnOrder.push_back(entry);
+				const u32 rect_slot = u32(m_DrawnRects.size());
+				m_DrawnRects.push_back(ImVec4(0, 0, 0, 0));
+
+				if (entry.folder)
+				{
+					ImGui::PushStyleColor(ImGuiCol_Button,
+						ThemeColor((sel || renaming) ? XFinedTheme::ColorToken::Accent
+							: XFinedTheme::ColorToken::Input));
+					ImGui::Button("[ ]", ImVec2(tile_w, tile_w));
+					ImGui::PopStyleColor();
+					m_DrawnRects[rect_slot] = ImVec4(ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+						ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+
+					string_path level_scene;
+					const bool as_level = IsGameLevelEntry(full) && 0 == strchr(full + 7, '\\') &&
+						ResolveLevelFile(full, m_Source, level_scene);
+					if (ImGui::IsItemHovered())
+					{
+						const ImGuiIO& io = ImGui::GetIO();
+						if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+							!ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+							SelectEntry(full, true, io.KeyCtrl, io.KeyShift);
+						if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+						{
+							if (as_level) OpenAsset(full);
+							else
+							{
+								xr_string err;
+								ApplyLocation(SLocation(m_Source, int(m_Category), full), true, err);
+							}
+						}
+						if (!renaming)
+							ImGui::SetTooltip(as_level ? "%s\nlevel - double click to open the scene it was built from"
+								: "%s", full);
+					}
+					DrawEntryContextMenu(full, true);
+					draw_caption(leaf, renaming);
+				}
+				else
+				{
+					ImTextureID tex = GetThumb(full);
+					const bool clicked = tex ?
+						ImGui::ImageButton("##Thumbnail", tex, ImVec2(m_TileSize, m_TileSize)) :
+						ImGui::Button(leaf, ImVec2(tile_w, tile_w));
+					const ImVec2 ra = ImGui::GetItemRectMin();
+					const ImVec2 rb = ImGui::GetItemRectMax();
+					m_DrawnRects[rect_slot] = ImVec4(ra.x, ra.y, rb.x, rb.y);
+
+					if (sel)
+					{
+						ImDrawList* dl = ImGui::GetWindowDrawList();
+						const ImVec4 hl = ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive);
+						dl->AddRectFilled(ra, rb, ImGui::GetColorU32(ImVec4(hl.x, hl.y, hl.z, 0.35f)), 3.f);
+						dl->AddRect(ra, rb, ImGui::GetColorU32(ImVec4(0.30f, 0.65f, 1.00f, 1.f)), 3.f, 0, 2.5f);
+					}
+					if (clicked)
+					{
+						const ImGuiIO& io = ImGui::GetIO();
+						SelectEntry(full, false, io.KeyCtrl, io.KeyShift);
+					}
+					if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+					{
+						if (!IsSelected(full, false)) SelectEntry(full, false, false, false);
+						m_Dragged = full;
+						ImGui::SetDragDropPayload(CB_DND_PAYLOAD, full, xr_strlen(full) + 1);
+						if (tex) ImGui::Image(tex, ImVec2(48, 48));
+						ImGui::TextUnformatted(leaf);
+						if (m_Selection.size() > 1)
+							ImGui::Text("and %d more", int(m_Selection.size()) - 1);
+						ImGui::EndDragDropSource();
+					}
+					if (ImGui::IsItemHovered())
+					{
+						ImGui::SetTooltip("%s", full);
+						if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+						{
+							SelectEntry(full, false, false, false);
+							OpenAsset(full);
+						}
+					}
+					DrawEntryContextMenu(full, false);
+					draw_caption(leaf, renaming);
+				}
+
+				ImGui::EndGroup();
+				ImGui::PopID();
+			}
+			ImGui::SetCursorPos(ImVec2(row_x, row_y + row_h - st.ItemSpacing.y));
+			ImGui::Dummy(ImVec2(0.f, 0.f));
+		}
+
+	// Shift-click needed the complete cached grid order, so it is resolved here.
 	ApplyPendingRange();
 
 	// A reveal brings the grid to what it selected: the LAST selected tile in
@@ -1817,12 +1811,8 @@ void UIContentBrowser::DrawTiles()
 
 	UpdateMarquee();
 
-	if (!drawn) ImGui::TextDisabled(m_Filter.IsActive() ? "nothing matches the search" : "empty folder");
-	else if (matched > drawn)
-	{
-		ImGui::Dummy(ImVec2(0, 4));
-		ImGui::TextDisabled("... and %d more - narrow the search", matched - drawn);
-	}
+	if (!total_slots)
+		ImGui::TextDisabled(m_Filter.IsActive() ? "nothing matches the search" : "empty folder");
 }
 
 //------------------------------------------------------------------------------
@@ -2014,8 +2004,9 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 			}
 			Form->RememberNavigation(origin);
 			Form->m_Filter.Clear();
-			Form->m_Selection.clear();
-			Form->m_Selection.push_back(SEntry(Form->m_CurFolder.c_str(), true));
+			Form->InvalidateView();
+			Form->ClearSelection();
+			Form->AddToSelection(SEntry(Form->m_CurFolder.c_str(), true));
 			Form->m_Anchor		= Form->m_Selection.back();
 			Form->m_HasAnchor	= true;
 			Form->m_ScrollToSelection = true;
@@ -2055,6 +2046,7 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 			Form->m_CurFolder = sweep_location.folder;
 			Form->Refresh();
 			Form->m_Selection = sweep_selection;
+			Form->RebuildSelectionLookup();
 			Form->m_Anchor = sweep_anchor;
 			Form->m_PendingRange = sweep_pending_range;
 			Form->m_HasAnchor = sweep_has_anchor;
@@ -2082,9 +2074,10 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 	}
 	Form->RememberNavigation(origin);
 	Form->m_Filter.Clear();
+	Form->InvalidateView();
 
-	Form->m_Selection.clear();
-	Form->m_Selection.push_back(SEntry(found_name.c_str(), false));
+	Form->ClearSelection();
+	Form->AddToSelection(SEntry(found_name.c_str(), false));
 	Form->m_Anchor		= Form->m_Selection.back();
 	Form->m_HasAnchor	= true;
 	// selecting it is only half a reveal - the next frame brings it into view
@@ -2110,6 +2103,73 @@ void UIContentBrowser::GetSelection(int& source, xr_string& folder, xr_vector<xr
 		if (Form->m_Selection[i].folder) s += "\\";
 		sel.push_back(s);
 	}
+}
+
+bool UIContentBrowser::ModifySelection(LPCSTR action, LPCSTR name, xr_string& err)
+{
+	err = "";
+	if (!action || !action[0])	{ err = "action must be select, toggle, range or clear"; return false; }
+	Show();
+	if (!Form)					{ err = "content browser unavailable"; return false; }
+
+	if (0 == _stricmp(action, "clear"))
+	{
+		Form->ClearSelection();
+		Form->m_ScrollToSelection = false;
+		return true;
+	}
+
+	const bool select = 0 == _stricmp(action, "select");
+	const bool toggle = 0 == _stricmp(action, "toggle");
+	const bool range = 0 == _stricmp(action, "range");
+	if (!select && !toggle && !range)
+	{
+		err = "action must be select, toggle, range or clear";
+		return false;
+	}
+	if (!name || !name[0])	{ err = "this action requires 'name'"; return false; }
+
+	char norm[512];
+	strncpy_s(norm, sizeof(norm), name, _TRUNCATE);
+	for (char* p = norm; *p; ++p) if ('/' == *p) *p = '\\';
+	char* write = norm;
+	for (const char* read = norm; *read; ++read)
+		if (!(*read == '\\' && write > norm && write[-1] == '\\')) *write++ = *read;
+	*write = 0;
+	if (const size_t len = xr_strlen(norm); len && '\\' == norm[len - 1]) norm[len - 1] = 0;
+	if (!norm[0])				{ err = "name resolves to an empty path"; return false; }
+
+	Form->EnsureListing();
+	Form->RebuildView();
+	const SEntry* entry = 0;
+	for (u32 i = 0; i < Form->m_ViewOrder.size(); ++i)
+		if (0 == _stricmp(Form->m_ViewOrder[i].path.c_str(), norm))
+		{
+			if (entry)			{ err = "entry is ambiguous in the current view"; return false; }
+			entry = &Form->m_ViewOrder[i];
+		}
+	if (!entry)				{ err = "entry is not in the complete current view"; return false; }
+
+	if (range)
+	{
+		if (!Form->m_HasAnchor)	{ err = "range requires a selected anchor"; return false; }
+		bool anchor_in_view = false;
+		for (u32 i = 0; i < Form->m_ViewOrder.size(); ++i)
+			if (Form->m_ViewOrder[i] == Form->m_Anchor)
+			{
+				anchor_in_view = true;
+				break;
+			}
+		if (!anchor_in_view)		{ err = "selection anchor is not in the complete current view"; return false; }
+		Form->SelectEntry(entry->path.c_str(), entry->folder, false, true);
+		Form->ApplyPendingRange();
+		Form->m_ScrollToSelection = true;
+		return true;
+	}
+
+	Form->SelectEntry(entry->path.c_str(), entry->folder, toggle, false);
+	Form->m_ScrollToSelection = select || Form->IsSelected(entry->path.c_str(), entry->folder);
+	return true;
 }
 
 bool UIContentBrowser::McpCopyToProject(LPCSTR names, LPCSTR folder, LPCSTR dst,
@@ -2183,7 +2243,7 @@ bool UIContentBrowser::McpCopyToProject(LPCSTR names, LPCSTR folder, LPCSTR dst,
 
 	// With one, go through the browser's own clipboard and paste, so a scripted
 	// copy and a menu copy cannot drift apart.
-	Form->m_Selection.clear();
+	Form->ClearSelection();
 	if (folder && folder[0])
 	{
 		// the FOLDER goes on the clipboard, not the items under it - that is what
@@ -2191,11 +2251,11 @@ bool UIContentBrowser::McpCopyToProject(LPCSTR names, LPCSTR folder, LPCSTR dst,
 		string_path norm;
 		xr_strcpy	(norm, sizeof(norm), folder);
 		for (char* p = norm; *p; ++p) if ('/' == *p) *p = '\\';
-		Form->m_Selection.push_back(SEntry(norm, true));
+		Form->AddToSelection(SEntry(norm, true));
 	}
 	else
 		for (u32 i = 0; i < list.size(); ++i)
-			Form->m_Selection.push_back(SEntry(list[i].c_str(), false));
+			Form->AddToSelection(SEntry(list[i].c_str(), false));
 	Form->ClipboardCopy(false);
 	Form->ClearSelection();
 
@@ -2213,14 +2273,40 @@ bool UIContentBrowser::McpCopyToProject(LPCSTR names, LPCSTR folder, LPCSTR dst,
 bool UIContentBrowser::IsSelected(LPCSTR path, bool folder) const
 {
 	const SEntry e(path, folder);
+	return m_SelectionLookup.find(e) != m_SelectionLookup.end();
+}
+
+void UIContentBrowser::AddToSelection(const SEntry& entry)
+{
+	if (m_SelectionLookup.emplace(entry, u8(1)).second)
+		m_Selection.push_back(entry);
+}
+
+void UIContentBrowser::RebuildSelectionLookup()
+{
+	m_SelectionLookup.clear();
+	m_SelectionLookup.reserve(m_Selection.size());
 	for (u32 i = 0; i < m_Selection.size(); ++i)
-		if (m_Selection[i] == e)	return true;
-	return false;
+		m_SelectionLookup.emplace(m_Selection[i], u8(1));
+}
+
+void UIContentBrowser::SelectAllViewEntries()
+{
+	RebuildView();
+	m_Selection.clear();
+	m_SelectionLookup.clear();
+	m_Selection.reserve(m_ViewOrder.size());
+	m_SelectionLookup.reserve(m_ViewOrder.size());
+	for (u32 i = 0; i < m_ViewOrder.size(); ++i)
+		AddToSelection(m_ViewOrder[i]);
+	m_HasAnchor = !m_Selection.empty();
+	if (m_HasAnchor) m_Anchor = m_Selection.back();
 }
 
 void UIContentBrowser::ClearSelection()
 {
 	m_Selection.clear();
+	m_SelectionLookup.clear();
 	m_HasAnchor			= false;
 	m_HasPendingRange	= false;
 }
@@ -2231,7 +2317,7 @@ void UIContentBrowser::SelectEntry(LPCSTR path, bool folder, bool additive, bool
 
 	if (range && m_HasAnchor)
 	{
-		// resolved after the grid, where the drawn order is known
+		// Resolved after the click against the cached complete view order.
 		m_PendingRange		= e;
 		m_HasPendingRange	= true;
 		return;
@@ -2239,26 +2325,30 @@ void UIContentBrowser::SelectEntry(LPCSTR path, bool folder, bool additive, bool
 
 	if (additive)
 	{
-		for (u32 i = 0; i < m_Selection.size(); ++i)
-			if (m_Selection[i] == e)
-			{
-				m_Selection.erase(m_Selection.begin() + i);
-				// the anchor must stay on something that is still selected
-				if (m_Anchor == e)
+		if (m_SelectionLookup.erase(e))
+		{
+			for (u32 i = 0; i < m_Selection.size(); ++i)
+				if (m_Selection[i] == e)
 				{
-					m_HasAnchor = !m_Selection.empty();
-					if (m_HasAnchor) m_Anchor = m_Selection.back();
+					m_Selection.erase(m_Selection.begin() + i);
+					break;
 				}
-				return;
+			// the anchor must stay on something that is still selected
+			if (m_Anchor == e)
+			{
+				m_HasAnchor = !m_Selection.empty();
+				if (m_HasAnchor) m_Anchor = m_Selection.back();
 			}
-		m_Selection.push_back(e);
+			return;
+		}
+		AddToSelection(e);
 		m_Anchor	= e;
 		m_HasAnchor	= true;
 		return;
 	}
 
-	m_Selection.clear();
-	m_Selection.push_back(e);
+	ClearSelection();
+	AddToSelection(e);
 	m_Anchor	= e;
 	m_HasAnchor	= true;
 }
@@ -2296,6 +2386,7 @@ void UIContentBrowser::UpdateMarquee()
 	if (dragged)
 	{
 		m_Selection = m_MarqueeBase;
+		RebuildSelectionLookup();
 		for (u32 i = 0; i < m_DrawnRects.size() && i < m_DrawnOrder.size(); ++i)
 		{
 			const ImVec4& r = m_DrawnRects[i];
@@ -2303,9 +2394,10 @@ void UIContentBrowser::UpdateMarquee()
 			// this list too - the band does not care what a tile holds.
 			if (r.z < a.x || r.x > b.x || r.w < a.y || r.y > b.y)	continue;
 			if (!IsSelected(m_DrawnOrder[i].path.c_str(), m_DrawnOrder[i].folder))
-				m_Selection.push_back(m_DrawnOrder[i]);
+				AddToSelection(m_DrawnOrder[i]);
 		}
-		if (!m_Selection.empty()) { m_Anchor = m_Selection.back(); m_HasAnchor = true; }
+		m_HasAnchor = !m_Selection.empty();
+		if (m_HasAnchor) m_Anchor = m_Selection.back();
 
 		ImDrawList* dl = ImGui::GetWindowDrawList();
 		dl->AddRectFilled(a, b, ImGui::GetColorU32(ImVec4(0.30f, 0.65f, 1.00f, 0.20f)));
@@ -2324,18 +2416,19 @@ void UIContentBrowser::ApplyPendingRange()
 	if (!m_HasPendingRange)	return;
 
 	int from = -1, to = -1;
-	for (u32 i = 0; i < m_DrawnOrder.size(); ++i)
+	for (u32 i = 0; i < m_ViewOrder.size(); ++i)
 	{
-		if (m_DrawnOrder[i] == m_Anchor)		from = int(i);
-		if (m_DrawnOrder[i] == m_PendingRange)	to	 = int(i);
+		if (m_ViewOrder[i] == m_Anchor)		from = int(i);
+		if (m_ViewOrder[i] == m_PendingRange)	to	 = int(i);
 	}
 	m_HasPendingRange = false;
 	if (from < 0 || to < 0)	return;
 	if (from > to)			std::swap(from, to);
 
 	m_Selection.clear();
+	m_SelectionLookup.clear();
 	for (int i = from; i <= to; ++i)
-		m_Selection.push_back(m_DrawnOrder[i]);
+		AddToSelection(m_ViewOrder[i]);
 	// the anchor stays put so dragging the range back and forth works
 }
 
@@ -2674,12 +2767,7 @@ void UIContentBrowser::HandleShortcuts()
 	if (ImGui::IsKeyPressed(ImGuiKey_X, false))	ClipboardCopy(true);
 	if (ImGui::IsKeyPressed(ImGuiKey_V, false))	ClipboardPaste();
 	if (ImGui::IsKeyPressed(ImGuiKey_A, false))
-	{
-		m_Selection.clear();
-		for (u32 i = 0; i < m_DrawnOrder.size(); ++i)
-			m_Selection.push_back(m_DrawnOrder[i]);
-		if (!m_Selection.empty()) { m_Anchor = m_Selection.back(); m_HasAnchor = true; }
-	}
+		SelectAllViewEntries();
 }
 
 void UIContentBrowser::DrawGridContextMenu()
@@ -2713,13 +2801,7 @@ void UIContentBrowser::DrawGridContextMenu()
 
 	ImGui::Separator();
 	if (ImGui::MenuItem("Select all", "Ctrl+A"))
-	{
-		// everything on screen, folders included - one selection, one meaning
-		m_Selection.clear();
-		for (u32 i = 0; i < m_DrawnOrder.size(); ++i)
-			m_Selection.push_back(m_DrawnOrder[i]);
-		if (!m_Selection.empty()) { m_Anchor = m_Selection.back(); m_HasAnchor = true; }
-	}
+		SelectAllViewEntries();
 	if (ImGui::MenuItem("Clear selection", "", false, !m_Selection.empty()))
 		ClearSelection();
 	if (ImGui::MenuItem("Refresh")) m_NeedRefresh = true;
@@ -3228,7 +3310,7 @@ void UIContentBrowser::Draw()
 	}
 	if (ImGui::Button("Refresh")) m_NeedRefresh = true;
 	ImGui::SameLine();
-	m_Filter.Draw("##filter", 180);
+	if (m_Filter.Draw("##filter", 180)) InvalidateView();
 	ImGui::SameLine();
 	ImGui::SetNextItemWidth(120);
 	ImGui::SliderFloat("##tile", &m_TileSize, 48.f, 192.f, "%.0f");
@@ -3285,7 +3367,7 @@ void UIContentBrowser::Draw()
 	m_ScrollToSelection = false;
 
 	// Panel-wide, so the tree answers Del and Ctrl+C exactly like the grid.
-	// Runs after both panes: Ctrl+A needs the drawn order the grid just built.
+	// Runs after both panes: Ctrl+A needs the complete view cache from the grid.
 	HandleShortcuts();
 
 	// destructive work is always one confirmation away

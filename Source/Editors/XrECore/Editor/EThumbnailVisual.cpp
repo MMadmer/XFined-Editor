@@ -944,15 +944,10 @@ namespace
 		SThumbRequest() : source(tsVisualName), done(false), failed(false) {}
 	};
 
-	static xr_vector<SThumbRequest>	s_Requests;
-	static u32						s_QueuedBytes = 0;
-
-	static SThumbRequest* FindRequest(LPCSTR key)
-	{
-		for (u32 i = 0; i < s_Requests.size(); ++i)
-			if (s_Requests[i].key == key) return &s_Requests[i];
-		return 0;
-	}
+	using TRequestMap = xr_flat_hash_map<xr_string, SThumbRequest>;
+	static TRequestMap			s_Requests;
+	static xr_deque<xr_string>	s_PendingRequests;
+	static u32					s_QueuedBytes = 0;
 
 	// true when the block may be queued; the caller drops the request otherwise
 	// and the tile falls back to a plain name button, exactly like a failed
@@ -970,82 +965,89 @@ namespace
 	}
 }
 
+ECORE_API bool HasVisualThumbnailRequest(LPCSTR key)
+{
+	return key && key[0] && s_Requests.find(key) != s_Requests.end();
+}
+
 ECORE_API void QueueVisualThumbnail(LPCSTR key, LPCSTR visual_name)
 {
 	if (!key||!key[0]||!visual_name||!visual_name[0])	return;
-	if (FindRequest(key))								return;
-	s_Requests.push_back(SThumbRequest());
-	SThumbRequest& r = s_Requests.back();
+	if (HasVisualThumbnailRequest(key))					return;
+	SThumbRequest& r = s_Requests[key];
 	r.key		= key;
 	r.name		= visual_name;
 	r.source	= tsVisualName;
+	s_PendingRequests.push_back(key);
 }
 
 ECORE_API void QueueObjectThumbnail(LPCSTR key, LPCSTR object_name)
 {
 	if (!key||!key[0]||!object_name||!object_name[0])	return;
-	if (FindRequest(key))								return;
-	s_Requests.push_back(SThumbRequest());
-	SThumbRequest& r = s_Requests.back();
+	if (HasVisualThumbnailRequest(key))					return;
+	SThumbRequest& r = s_Requests[key];
 	r.key		= key;
 	r.name		= object_name;
 	r.source	= tsEditableObject;
+	s_PendingRequests.push_back(key);
 }
 
 ECORE_API void QueueVisualThumbnailFromMemory(LPCSTR key, const void* data, u32 size)
 {
 	if (!key||!key[0]||!data||(0==size))	return;
-	if (FindRequest(key))					return;
+	if (HasVisualThumbnailRequest(key))		return;
 	if (!AcceptQueuedBytes(key,size))		return;
-	s_Requests.push_back(SThumbRequest());
-	SThumbRequest& r = s_Requests.back();
+	SThumbRequest& r = s_Requests[key];
 	r.key		= key;
 	r.name		= key;		// logging only
 	r.source	= tsVisualBytes;
 	r.bytes.assign((const u8*)data,(const u8*)data+size);
+	s_PendingRequests.push_back(key);
 }
 
 ECORE_API void QueueObjectThumbnailFromMemory(LPCSTR key, const void* data, u32 size)
 {
 	if (!key||!key[0]||!data||(0==size))	return;
-	if (FindRequest(key))					return;
+	if (HasVisualThumbnailRequest(key))		return;
 	if (!AcceptQueuedBytes(key,size))		return;
-	s_Requests.push_back(SThumbRequest());
-	SThumbRequest& r = s_Requests.back();
+	SThumbRequest& r = s_Requests[key];
 	r.key		= key;
 	r.name		= key;		// logging only
 	r.source	= tsEditableObjectBytes;
 	r.bytes.assign((const u8*)data,(const u8*)data+size);
+	s_PendingRequests.push_back(key);
 }
 
 ECORE_API bool TakeVisualThumbnail(LPCSTR key, U32Vec& out, bool& failed)
 {
 	out.clear();
 	failed = false;
-	for (u32 i = 0; i < s_Requests.size(); ++i)
-	{
-		if (s_Requests[i].key != key)	continue;
-		if (!s_Requests[i].done)		return false;	// still waiting its turn
-		out		= s_Requests[i].pixels;
-		failed	= s_Requests[i].failed;
-		// a request taken before it was drawn still holds its budget
-		if (const u32 held = u32(s_Requests[i].bytes.size()))
-			s_QueuedBytes = (s_QueuedBytes>held) ? (s_QueuedBytes-held) : 0;
-		s_Requests.erase(s_Requests.begin()+i);
-		return true;
-	}
-	return false;
+	if (!key || !key[0]) return false;
+	const TRequestMap::iterator it = s_Requests.find(key);
+	if (it == s_Requests.end() || !it->second.done) return false;
+
+	out.swap(it->second.pixels);
+	failed	= it->second.failed;
+	// A completed request normally released its source block in Flush. Keep the
+	// accounting defensive so a future early-completion path cannot leak budget.
+	if (const u32 held = u32(it->second.bytes.size()))
+		s_QueuedBytes = (s_QueuedBytes>held) ? (s_QueuedBytes-held) : 0;
+	s_Requests.erase(it);
+	return true;
 }
 
 ECORE_API void FlushVisualThumbnailQueue(u32 max_requests)
 {
-	if (s_Requests.empty()||!IsDeviceUsable())	return;
+	if (s_PendingRequests.empty()||!IsDeviceUsable())	return;
 
 	u32 done = 0;
-	for (u32 i = 0; i < s_Requests.size() && done < max_requests; ++i)
+	while (!s_PendingRequests.empty() && done < max_requests)
 	{
-		SThumbRequest& r = s_Requests[i];
-		if (r.done)	continue;
+		const xr_string key = s_PendingRequests.front();
+		s_PendingRequests.pop_front();
+		const TRequestMap::iterator it = s_Requests.find(key);
+		if (it == s_Requests.end()) continue;
+		SThumbRequest& r = it->second;
 
 		// One bad model must not take the editor down with it: the render path
 		// can throw, and here there is no frame in flight to corrupt.
@@ -1091,5 +1093,7 @@ ECORE_API void FlushVisualThumbnailQueue(u32 max_requests)
 ECORE_API void ClearVisualThumbnailQueue()
 {
 	s_Requests.clear();
+	s_PendingRequests.clear();
+	s_QueuedBytes = 0;
 }
 //------------------------------------------------------------------------------

@@ -2218,6 +2218,21 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
 
     if (0 == xr_strcmp(cmd, "content_browser_selection"))
     {
+		char action[32] = {}, name[512] = {};
+		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
+		XFinedMCP::GetArg(raw, "name", name, sizeof(name));
+		if (action[0] && 0 != _stricmp(action, "get"))
+		{
+			xr_string err;
+			if (!UIContentBrowser::ModifySelection(action, name, err))
+			{
+				out = "{\"ok\":false,\"error\":\"";
+				out += JsonEscapePath(err.c_str());
+				out += "\"}";
+				return true;
+			}
+		}
+
         int src = -1;
         xr_string folder;
         xr_vector<xr_string> sel;

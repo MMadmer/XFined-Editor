@@ -88,6 +88,11 @@ ECORE_API void QueueVisualThumbnailFromMemory(LPCSTR key, const void* data, u32 
 // itself, since nothing under the project root is in the editor FS.
 ECORE_API void QueueObjectThumbnailFromMemory(LPCSTR key, const void* data, u32 size);
 
+// True while a key is queued or its completed result is waiting to be taken.
+// Callers that need to read source bytes can use this to avoid doing the same
+// disk/archive I/O again on every UI frame.
+ECORE_API bool HasVisualThumbnailRequest(LPCSTR key);
+
 // Result poll. Returns true once the request finished and fills `out`; the
 // entry is consumed. `failed` tells a finished-but-unrenderable request apart
 // from one that is still waiting, so callers can stop asking.
