@@ -313,8 +313,10 @@ bool Execute(u32 command_index, u32 subcommand_index)
 	SESubCommand* subcommand = command->sub_commands[subcommand_index];
 	if (!subcommand)
 		return false;
-	ExecCommand(command->idx, subcommand->p0, subcommand->p1);
-	return true;
+	const bool executed = ExecCommand(command->idx, subcommand->p0, subcommand->p1);
+	if (command->idx == COMMAND_EXIT && executed)
+		ExecCommand(COMMAND_QUIT);
+	return executed;
 }
 
 bool Execute(LPCSTR id)

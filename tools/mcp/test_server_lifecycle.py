@@ -3,7 +3,8 @@
 
 For the timeout case, launch the editor with
 XFINED_MCP_REQUEST_TIMEOUT_MS=250 and pass --timeout-scene <scene.level>.
-Use --shutdown only when it is safe for this script to close the editor.
+Use --shutdown or --shutdown-via-palette only when it is safe for this script
+to close the editor.
 """
 
 from __future__ import annotations
@@ -210,14 +211,26 @@ def process_exited(pid: int, timeout: float) -> bool:
         kernel32.CloseHandle(handle)
 
 
-def test_shutdown(host: str, port: int, timeout: float, idle_count: int, pid: int | None) -> None:
+def test_shutdown(
+    host: str,
+    port: int,
+    timeout: float,
+    idle_count: int,
+    pid: int | None,
+    via_palette: bool,
+) -> None:
     idle_clients = [connect(host, port, timeout) for _ in range(idle_count)]
     for client in idle_clients:
         client.sendall(b'{"cmd":"pin')
 
     try:
         with connect(host, port, timeout) as quitter:
-            quitter.sendall(b'{"cmd":"exec_command","name":"COMMAND_QUIT"}\n')
+            request = (
+                b'{"cmd":"command_palette","action":"execute","id":"COMMAND_EXIT"}\n'
+                if via_palette
+                else b'{"cmd":"exec_command","name":"COMMAND_QUIT"}\n'
+            )
+            quitter.sendall(request)
             try:
                 receive_line(quitter, timeout)
             except (ConnectionError, OSError, TimeoutError):
@@ -251,6 +264,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-scene")
     parser.add_argument("--recovery-timeout", type=float, default=30.0)
     parser.add_argument("--shutdown", action="store_true")
+    parser.add_argument("--shutdown-via-palette", action="store_true")
     parser.add_argument("--shutdown-idle-clients", type=int, default=8)
     parser.add_argument("--pid", type=int)
     return parser.parse_args()
@@ -266,8 +280,15 @@ def main() -> int:
         test_overflow(args.host, args.port, args.timeout)
     if args.timeout_scene:
         test_timeout(args.host, args.port, args.timeout, args.timeout_scene, args.recovery_timeout)
-    if args.shutdown:
-        test_shutdown(args.host, args.port, args.timeout, args.shutdown_idle_clients, args.pid)
+    if args.shutdown or args.shutdown_via_palette:
+        test_shutdown(
+            args.host,
+            args.port,
+            args.timeout,
+            args.shutdown_idle_clients,
+            args.pid,
+            args.shutdown_via_palette,
+        )
     print("XFined MCP lifecycle stress passed")
     return 0
 
