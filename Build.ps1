@@ -20,6 +20,12 @@ $ErrorActionPreference = 'Stop'
 $root   = $PSScriptRoot
 $preset = if ($Debug) { 'debug' } else { 'release' }
 
+# Keep /showIncludes machine-readable so Ninja records PCH header dependencies.
+$env:VSLANG = '1033'
+& chcp.com 65001 | Out-Null
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+
 function Fail([string]$msg) { Write-Host "`nBUILD SETUP ERROR: $msg" -ForegroundColor Red; exit 1 }
 
 # --- locate Visual Studio (2022+) with C++ tools --------------------------------
@@ -47,7 +53,14 @@ if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
 }
 
 $bin = Join-Path $root "Intermediate\cmake-$preset"
-if ($Clean -and (Test-Path $bin)) { Remove-Item -Recurse -Force $bin }
+if ($Clean -and (Test-Path $bin)) {
+    $resolvedRoot = [IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+    $resolvedBin = [IO.Path]::GetFullPath($bin)
+    if (-not $resolvedBin.StartsWith($resolvedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        Fail "Refusing to clean a build directory outside the repository: $resolvedBin"
+    }
+    Remove-Item -LiteralPath $resolvedBin -Recurse -Force
+}
 
 & $cmake --preset $preset -S $root
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
