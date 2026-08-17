@@ -89,6 +89,28 @@ xr_vector<UIContentBrowser::SLocation> UIContentBrowser::s_Favorites;
 xr_string UIContentBrowser::s_FavoriteProject;
 xr_string UIContentBrowser::s_FavoriteGameRoot;
 
+struct UIContentBrowser::SDirectoryWatcher
+{
+	HANDLE			directory;
+	HANDLE			event;
+	OVERLAPPED		io;
+	xr_vector<u8>		buffer;
+	xr_string			root;
+	int				source;
+	ULONGLONG			retry_after;
+	ULONGLONG			last_change;
+	bool				armed;
+	bool				refresh_pending;
+
+	SDirectoryWatcher()
+		: directory(INVALID_HANDLE_VALUE), event(0), source(-1), retry_after(0),
+		  last_change(0), armed(false), refresh_pending(false)
+	{
+		ZeroMemory(&io, sizeof(io));
+		buffer.resize(64 * 1024);
+	}
+};
+
 // filled in by the preview window when it is compiled into the build
 static UIContentBrowser::TShowVisual	s_ShowVisual	= 0;
 static UIContentBrowser::TShowVisualMem	s_ShowVisualMem	= 0;
@@ -242,6 +264,7 @@ static ImVec4 ThemeColor(XFinedTheme::ColorToken token, float alpha = 1.0f)
 
 UIContentBrowser::UIContentBrowser()
 {
+	m_Watcher		= xr_new<SDirectoryWatcher>();
 	m_Category		= 0;
 	// the project's own content is what someone opening the editor is working
 	// on; the shared library is a place you go to fetch from
@@ -274,6 +297,8 @@ UIContentBrowser::UIContentBrowser()
 
 UIContentBrowser::~UIContentBrowser()
 {
+	StopWatcher();
+	xr_delete(m_Watcher);
 	DropCache();
 }
 
@@ -291,6 +316,7 @@ void UIContentBrowser::Close()
 void UIContentBrowser::Update()
 {
 	if (!Form) return;
+	Form->UpdateWatcher();
 	Form->Draw();
 	if (Form->IsClosed()) Close();
 }
@@ -790,6 +816,199 @@ static void ScanContentDir(const char* base, const char* rel, ChooseItemVec& out
 	::FindClose(h);
 }
 
+void UIContentBrowser::CloseWatcherHandles()
+{
+	if (!m_Watcher) return;
+	SDirectoryWatcher& watcher = *m_Watcher;
+	if (watcher.directory != INVALID_HANDLE_VALUE)
+	{
+		if (watcher.armed)
+		{
+			::CancelIoEx(watcher.directory, &watcher.io);
+			DWORD ignored = 0;
+			::GetOverlappedResult(watcher.directory, &watcher.io, &ignored, TRUE);
+		}
+		::CloseHandle(watcher.directory);
+	}
+	if (watcher.event) ::CloseHandle(watcher.event);
+	watcher.directory = INVALID_HANDLE_VALUE;
+	watcher.event = 0;
+	watcher.armed = false;
+	ZeroMemory(&watcher.io, sizeof(watcher.io));
+}
+
+void UIContentBrowser::StopWatcher()
+{
+	if (!m_Watcher) return;
+	CloseWatcherHandles();
+	m_Watcher->root.clear();
+	m_Watcher->source = -1;
+	m_Watcher->retry_after = 0;
+	m_Watcher->last_change = 0;
+	m_Watcher->refresh_pending = false;
+}
+
+bool UIContentBrowser::ArmWatcher()
+{
+	if (!m_Watcher) return false;
+	SDirectoryWatcher& watcher = *m_Watcher;
+	if (watcher.directory == INVALID_HANDLE_VALUE || !watcher.event) return false;
+
+	::ResetEvent(watcher.event);
+	ZeroMemory(&watcher.io, sizeof(watcher.io));
+	watcher.io.hEvent = watcher.event;
+	watcher.armed = !!::ReadDirectoryChangesW(
+		watcher.directory, watcher.buffer.data(), DWORD(watcher.buffer.size()), TRUE,
+		FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+		FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE,
+		0, &watcher.io, 0);
+	return watcher.armed;
+}
+
+bool UIContentBrowser::WatchPathIsRelevant(LPCSTR relative_path) const
+{
+	if (!m_Watcher || !relative_path || !relative_path[0]) return true;
+
+	char first[MAX_PATH];
+	LPCSTR separator = strpbrk(relative_path, "\\/");
+	const size_t length = separator ? size_t(separator - relative_path) : xr_strlen(relative_path);
+	if (!length || length >= sizeof(first)) return true;
+	CopyMemory(first, relative_path, length);
+	first[length] = 0;
+
+	if (m_Watcher->source == 0)
+		return !EditorProject::IsEditorOnlyEntry(first);
+	if (m_Watcher->source == 2)
+		return 0 == _stricmp(first, "database") || 0 == _stricmp(first, "gamedata");
+	return false;
+}
+
+void UIContentBrowser::UpdateWatcher()
+{
+	if (!m_Watcher) return;
+	SDirectoryWatcher& watcher = *m_Watcher;
+
+	LPCSTR desired_root = "";
+	if (m_Source == 0 && EditorProject::Active())
+		desired_root = EditorProject::Root();
+	else if (m_Source == 2 && EditorProject::Active() && EditorProject::GameLinked())
+		desired_root = EditorProject::GameRoot();
+
+	if (watcher.source != m_Source || 0 != _stricmp(watcher.root.c_str(), desired_root))
+	{
+		StopWatcher();
+		watcher.source = m_Source;
+		watcher.root = desired_root;
+	}
+	if (watcher.root.empty()) return;
+
+	const ULONGLONG now = ::GetTickCount64();
+	if (watcher.directory == INVALID_HANDLE_VALUE)
+	{
+		if (now < watcher.retry_after) return;
+		watcher.directory = ::CreateFileA(watcher.root.c_str(), FILE_LIST_DIRECTORY,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0, OPEN_EXISTING,
+			FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, 0);
+		watcher.event = ::CreateEventA(0, TRUE, FALSE, 0);
+		if (watcher.directory == INVALID_HANDLE_VALUE || !watcher.event || !ArmWatcher())
+		{
+			CloseWatcherHandles();
+			watcher.retry_after = now + 2000;
+			return;
+		}
+	}
+
+	const DWORD wait = ::WaitForSingleObject(watcher.event, 0);
+	if (wait == WAIT_OBJECT_0)
+	{
+		DWORD bytes = 0;
+		bool relevant = false;
+		const bool completed = !!::GetOverlappedResult(watcher.directory, &watcher.io, &bytes, FALSE);
+		watcher.armed = false;
+		if (!completed || !bytes)
+		{
+			// Buffer overflow and watcher failures both require one conservative rescan.
+			relevant = true;
+		}
+		else
+		{
+			DWORD offset = 0;
+			while (offset < bytes)
+			{
+				const DWORD header_size = FIELD_OFFSET(FILE_NOTIFY_INFORMATION, FileName);
+				if (bytes - offset < header_size)
+				{
+					relevant = true;
+					break;
+				}
+				const FILE_NOTIFY_INFORMATION* info =
+					reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(watcher.buffer.data() + offset);
+				if ((info->FileNameLength % sizeof(wchar_t)) ||
+					info->FileNameLength > bytes - offset - header_size)
+				{
+					relevant = true;
+					break;
+				}
+
+				const int wide_count = int(info->FileNameLength / sizeof(wchar_t));
+				int first_count = 0;
+				while (first_count < wide_count && info->FileName[first_count] != L'\\' &&
+					info->FileName[first_count] != L'/')
+				{
+					++first_count;
+				}
+				char relative[MAX_PATH];
+				const int converted = first_count > 0 && first_count < int(sizeof(relative))
+					? ::WideCharToMultiByte(CP_ACP, 0, info->FileName, first_count,
+						relative, int(sizeof(relative)) - 1, 0, 0)
+					: 0;
+				if (converted > 0)
+				{
+					relative[converted] = 0;
+					relevant = relevant || WatchPathIsRelevant(relative);
+				}
+				else
+					relevant = true;
+
+				if (!info->NextEntryOffset) break;
+				if (info->NextEntryOffset < header_size || info->NextEntryOffset > bytes - offset)
+				{
+					relevant = true;
+					break;
+				}
+				offset += info->NextEntryOffset;
+			}
+		}
+
+		if (!completed || !ArmWatcher())
+		{
+			CloseWatcherHandles();
+			watcher.retry_after = now + 2000;
+		}
+		if (relevant)
+		{
+			watcher.last_change = now;
+			watcher.refresh_pending = true;
+		}
+	}
+	else if (wait == WAIT_FAILED)
+	{
+		CloseWatcherHandles();
+		watcher.retry_after = now + 2000;
+		watcher.last_change = now;
+		watcher.refresh_pending = true;
+	}
+
+	// Only refresh after the writer goes quiet, so long exports cannot remount in flight.
+	if (watcher.refresh_pending && now - watcher.last_change >= 300)
+	{
+		if (watcher.source == 2) EditorGameContent::Unmount();
+		m_NeedRefresh = true;
+		watcher.refresh_pending = false;
+		watcher.last_change = 0;
+	}
+}
+
 void UIContentBrowser::EnsureListing()
 {
 	SyncFavoriteScopes();
@@ -948,6 +1167,58 @@ void UIContentBrowser::Refresh()
 	{
 		m_CurFolder.clear();
 		ClearSelection();
+	}
+	PruneSelection();
+	if (m_Watcher && m_Watcher->refresh_pending)
+	{
+		m_Watcher->refresh_pending = false;
+		m_Watcher->last_change = 0;
+	}
+}
+
+void UIContentBrowser::PruneSelection()
+{
+	xr_flat_hash_map<SEntry, u8, SEntryHash> available;
+	available.reserve(m_Items.size() + m_Dirs.size() + 1);
+	for (u32 i = 0; i < m_Items.size(); ++i)
+		available.emplace(SEntry(m_Items[i].name.c_str(), false), u8(1));
+
+	xr_vector<SFolder*> stack;
+	stack.push_back(&m_Root);
+	while (!stack.empty())
+	{
+		SFolder* folder = stack.back();
+		stack.pop_back();
+		for (u32 i = 0; i < folder->children.size(); ++i)
+		{
+			SFolder& child = folder->children[i];
+			available.emplace(SEntry(child.path.c_str(), true), u8(1));
+			stack.push_back(&child);
+		}
+	}
+
+	for (u32 i = 0; i < m_Selection.size();)
+	{
+		if (available.find(m_Selection[i]) == available.end())
+			m_Selection.erase(m_Selection.begin() + i);
+		else
+			++i;
+	}
+	RebuildSelectionLookup();
+	if (m_HasAnchor && m_SelectionLookup.find(m_Anchor) == m_SelectionLookup.end())
+	{
+		m_HasAnchor = !m_Selection.empty();
+		if (m_HasAnchor) m_Anchor = m_Selection.back();
+	}
+	if (m_HasPendingRange && available.find(m_PendingRange) == available.end())
+		m_HasPendingRange = false;
+	if (m_Selection.empty()) m_ScrollToSelection = false;
+	if (!m_Rename.empty() &&
+		available.find(SEntry(m_Rename.c_str(), false)) == available.end() &&
+		available.find(SEntry(m_Rename.c_str(), true)) == available.end())
+	{
+		m_Rename.clear();
+		m_RenameFocus = false;
 	}
 }
 

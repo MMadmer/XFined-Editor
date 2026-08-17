@@ -235,11 +235,20 @@ private:
 	// the game tree dwarfs the SDK one: cap how much work one frame may do
 	u32								m_ThumbsThisFrame;
 
+	struct SDirectoryWatcher;
+	SDirectoryWatcher*				m_Watcher;
+
 	void			Refresh				();
 	// Refresh(), plus the project check that has to precede it: the panel can
 	// be drawn (and listed empty) before -project has opened anything, and
 	// nothing invalidated that listing afterwards.
 	void			EnsureListing		();
+	void			UpdateWatcher		();
+	void			CloseWatcherHandles	();
+	void			StopWatcher			();
+	bool			ArmWatcher			();
+	bool			WatchPathIsRelevant	(LPCSTR relative_path) const;
+	void			PruneSelection		();
 	static void		SyncFavoriteScopes	();
 	// Project and game roots that the current listing state was validated against.
 	xr_string						m_ListedProject;
