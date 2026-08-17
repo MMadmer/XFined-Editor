@@ -69,6 +69,33 @@ public:
 										 int source, int category,
 										 bool overwrite, int& files, xr_string& err);
 
+	struct SLocation
+	{
+		int							source;
+		int							category;
+		xr_string					folder;
+
+		SLocation() : source(0), category(0) {}
+		SLocation(int src, int cat, LPCSTR path)
+			: source(src), category(cat), folder(path ? path : "") {}
+	};
+
+	// History is returned oldest-to-newest; the last entry is the next one used.
+	// Source/category -1 keep the current value; folders are source-relative.
+	static void		GetHistory			(SLocation& current, xr_vector<SLocation>& back,
+										 xr_vector<SLocation>& forward);
+	static bool		NavigateToFolder	(int source, int category, LPCSTR folder, xr_string& err);
+	static bool		NavigateBack		(xr_string& err);
+	static bool		NavigateForward		(xr_string& err);
+	static bool		NavigateUp			(xr_string& err);
+	static bool		NavigateHome		(xr_string& err);
+
+	// Favorites live for the editor process and are never written to a project.
+	static void		GetFavorites		(xr_vector<SLocation>& out);
+	static bool		AddFavorite		(SLocation location, xr_string& err);
+	static bool		RemoveFavorite		(int index, xr_string& err);
+	static bool		NavigateFavorite	(int index, xr_string& err);
+
 	// asset categories, shared with the MCP asset commands
 	static int		CategoryCount		();
 	static LPCSTR	CategoryName		(int index);		// caption, e.g. "Objects"
@@ -88,6 +115,9 @@ private:
 	};
 
 	static UIContentBrowser*		Form;
+	static xr_vector<SLocation>	s_Favorites;
+	static xr_string				s_FavoriteProject;
+	static xr_string				s_FavoriteGameRoot;
 
 	// thumbnail cache — the choose-event adapters allocate a fresh D3D texture
 	// per call, far too costly for a grid, so results are kept keyed by name
@@ -108,6 +138,8 @@ private:
 	xr_vector<xr_string>			m_Dirs;
 	SFolder							m_Root;
 	xr_string						m_CurFolder;
+	xr_vector<SLocation>			m_BackHistory;
+	xr_vector<SLocation>			m_ForwardHistory;
 	// what the grid drew last frame, so entering a folder can start at its top
 	xr_string						m_ShownFolder;
 	u32								m_Category;
@@ -194,8 +226,10 @@ private:
 	// be drawn (and listed empty) before -project has opened anything, and
 	// nothing invalidated that listing afterwards.
 	void			EnsureListing		();
-	// project the listing was built for; "" when none was open
+	static void		SyncFavoriteScopes	();
+	// Project and game roots that the current listing state was validated against.
 	xr_string						m_ListedProject;
+	xr_string						m_ListedGameRoot;
 	void			BuildTree			();
 	// creates the folder chain for `path` and returns its node
 	SFolder*		EnsureFolder		(LPCSTR path);
@@ -219,6 +253,19 @@ private:
 	static bool		ResolveLevelFile	(LPCSTR name, int source, string_path& out);
 	void			DropCache			();
 	void			SwitchSource		(int src);
+	SLocation		CurrentLocation		() const;
+	bool			ApplyLocation		(SLocation location, bool record, xr_string& err);
+	bool			GoBack				(xr_string& err);
+	bool			GoForward			(xr_string& err);
+	bool			GoUp				(xr_string& err);
+	bool			GoHome				(xr_string& err);
+	void			PushHistory			(xr_vector<SLocation>& history, const SLocation& location);
+	void			RememberNavigation	(const SLocation& origin);
+	int				FindFavorite			(const SLocation& location) const;
+	bool			ValidateFavorite		(SLocation& location, xr_string& err);
+	void			DrawNavigationBar	();
+	void			DrawBreadcrumbs		();
+	void			DrawFavoritesPopup	();
 	// vertical splitter between the folder tree and the tile grid
 	void			DrawSplitter		(float height);
 	// The project's own Content is the only writable root. Editor Content is a

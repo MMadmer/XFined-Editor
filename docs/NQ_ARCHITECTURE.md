@@ -9,8 +9,9 @@
 `D:\Games\Dead Air\DeadAir-x64` (движок); распакованные скрипты игры —
 `D:\Games\Dead Air\_analysis\original\scripts` (только чтение, это эталон).
 
-Статус: **дизайн, реализация не начата.** До первого релиза редактора формат
-можно менять свободно (правило из `CLAUDE.md`), после релиза §2 замораживается.
+Статус: **реализовано, покрыто runtime regression-тестами и editor MCP build
+gate.** До первого релиза редактора формат можно менять свободно (правило из
+`CLAUDE.md`), после релиза §2 замораживается.
 
 ---
 
@@ -717,12 +718,15 @@ Lua-поверхность: `CPhraseDialog:AddPhrase`, `CPhrase:GetPhraseScript`
   t:set_type(task.additional|task.storyline); t:set_title(text); t:set_description(text);
   t:set_priority(0); t:set_icon_name(icon or "ui_pda2_mtask_overlay");
   [t:set_map_location(spot); t:set_map_object_id(id); level.map_add_object_spot(id, blink, "")];
-  db.actor:give_task(t, 0, true, 0); news_manager.send_task(db.actor, "new", t)`.
+  db.actor:give_task(t, 0, true, 0)`.
   `tid = "nq.<module>.<quest>.<task>"`. Никаких complete/fail-функторов: состояние
-  меняет только рантайм.
-- `task.complete/fail`: `db.actor:set_task_state(task.completed|task.fail, tid)` +
-  `news_manager.send_task(db.actor, "complete"|"fail", t)`. `task_manager.task_callback`
-  для чужого id молча выходит (`task_manager.script:184-187`) — конфликта нет.
+  меняет только рантайм. Движковый actor callback уже отправляет новость `new`.
+- `task.complete`: `db.actor:set_task_state(task.completed, tid)`; движковый actor
+  callback уже отправляет `complete`, поэтому ручной вызов создал бы дубль.
+- `task.fail`: `db.actor:set_task_state(task.fail, tid)` +
+  `news_manager.send_task(db.actor, "fail", t)`. Binder намеренно не отправляет
+  failure, а `task_manager.task_callback` для динамического NQ id молча выходит
+  (`task_manager.script:184-187`), поэтому только failure остаётся ручным.
 - `task.set_target`: `t:remove_map_locations(false); t:change_map_location(spot, id)`;
   цель `target_ref` резолвится в объект (`ref`/`story`/`smart` — у смарта есть id;
   для `place{pos}` — якорь-рестриктор). Цель на другом уровне остаётся меткой на карте
@@ -1124,6 +1128,7 @@ Python — записи в `TOOLS` + `CMD_MAP` (`tools/mcp/xfined_mcp.py`), та
 | W013 | тема с `once=false` без условий — будет предлагаться бесконечно |
 | W020 | недостижимая нода |
 | W021 | ожидающая нода без исходящих рёбер (квест зависнет здесь) |
+| W022 | одна цель дважды указана на одном пине; повторное ребро игнорируется |
 | W030 | `ref` используется до ноды, которая его создаёт (не по всем путям) |
 | W031 | `spawn.squad` без `hold` — отряд может уйти в симуляцию |
 | W040 | символ вне cp1251 в тексте |

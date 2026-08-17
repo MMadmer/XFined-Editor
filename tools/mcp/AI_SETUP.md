@@ -121,6 +121,12 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_content_mkdir` | create a folder (with missing parents) inside the project |
 | `xfined_list_commands` | the editor's own command registry: every action the menus and shortcuts can perform, as `{id, name, menu, presets}` — the editor's full control surface, and commands added in future builds appear here automatically |
 | `xfined_exec_command` | execute ANY registry command — the same dispatch menus and shortcuts use. Address by `id`, `COMMAND_*` `name` or menu path; `p1s`/`p2s` pass strings, `p1i`/`p2i` integers. Prefer a dedicated tool when one exists; this is the escape hatch for everything else |
+| `xfined_theme` | read (`action=get`), persist (`action=set`, `preset=xfined-purple` or `graphite`) or reset the live editor theme; omitting `action` reads it |
+| `xfined_command_palette` | query the ranked Ctrl+Shift+P catalog, open/close the palette, inspect its state, or execute an exact returned command/subcommand pair |
+| `xfined_viewport_navigation` | read/control the viewport orientation widget: six canonical axis views, perspective reset, and frame all/selection |
+| `xfined_progress` | read active nested editor tasks with percentage/detail/elapsed time, or request cooperative cancellation for tasks that yield UI frames; blocking legacy jobs keep live feedback in the progress console |
+| `xfined_property_inspector` | search/filter the selection or world property tree, expand/collapse all, and open/close the corresponding panel |
+| `xfined_content_browser_navigation` | inspect or drive Content Browser Back/Forward/Up/Home, source/category/folder breadcrumbs and process-session Favorites |
 | `xfined_undo` | undo the last scene operation |
 | `xfined_redo` | redo the last undone scene operation |
 | `xfined_quest_catalog` | the quest kind catalog (NQ, see below): every trigger / main action / extra action / condition kind with `group`, `title`, `desc`, `use`, `params` (name, type, required, default, min/max, enum), `pins`, `wait`/`once`, `event`; plus catalog `version` and `source` (`game` = read from the linked install, `bundled` = the editor's fallback copy). Read it before writing a quest |
@@ -187,8 +193,9 @@ One JSON object per line in, one per line out:
 ```
 
 Errors come back as `{"ok":false,"error":"..."}`. Requests execute on the
-editor's main thread; a busy editor answers within 15 s or returns a timeout
-error. One client connection at a time.
+editor's main thread; a busy editor can take up to three minutes before the
+endpoint returns a timeout. The server accepts up to 16 concurrent clients and
+queues at most 64 main-thread requests; each request buffer is capped at 1 MiB.
 
 ## Prompt block for the agent
 

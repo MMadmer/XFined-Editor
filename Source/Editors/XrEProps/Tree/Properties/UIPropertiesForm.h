@@ -10,6 +10,12 @@ public:
 	PropItem* FindItem(const char* path);
 	PropItem* FindItemOfName(shared_str name);
 	void ClearProperties();
+	void SetFilter(LPCSTR filter);
+	LPCSTR GetFilter() const { return m_Filter; }
+	void ExpandAll();
+	void CollapseAll();
+	u32 VisiblePropertyCount() const { return m_VisiblePropertyCount; }
+	u32 PropertyCount() const { return m_PropertyCount; }
 	IC void SetReadOnly(bool enable) { m_Flags.set(plReadOnly, enable); }
 	IC bool IsModified() { return m_bModified;}
 	IC bool Empty() { return m_Items.size() == 0; }
@@ -40,6 +46,16 @@ private:
 	bool m_bModified;
 	void Modified() { m_bModified = true; if (!OnModifiedEvent.empty()) OnModifiedEvent(); }
 private:
+	void RefreshFilter();
+	bool IsFiltering() const { return m_Filter[0] != 0; }
+	bool RestoreExpansion(LPCSTR path, bool fallback) const;
+	void RememberExpansion(LPCSTR path, bool expanded);
+	char m_Filter[256];
+	u32 m_VisiblePropertyCount;
+	u32 m_PropertyCount;
+	bool m_ExpandByDefault;
+	xr_flat_hash_map<xr_string, bool> m_ExpansionState;
+
 	UIPropertiesItem m_Root;
 
 /*	virtual void DrawNode(Node* pNode);

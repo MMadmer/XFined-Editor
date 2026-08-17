@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "..\..\..\XrECore\Editor\UI_ViewportNavigation.h"
 
 // file: SceneChunks.h
 #define CURRENT_FILE_VERSION    	0x00000005
@@ -801,6 +802,7 @@ bool EScene::LoadLTX(LPCSTR map_name, bool bUndo)
         pos					= ini.r_fvector3("camera","pos");
         hpb					= ini.r_fvector3("camera","hpb");
         EDevice->m_Camera.Set(hpb,pos);
+		ViewportNavigation::ResetState();
         EDevice->m_Camera.SetStyle(EDevice->m_Camera.GetStyle());
 		EDevice->m_Camera.SetStyle(EDevice->m_Camera.GetStyle());
 
@@ -969,6 +971,7 @@ bool EScene::Load(LPCSTR map_name, bool bUndo)
 	        F->r_fvector3	(hpb);
     	    F->r_fvector3	(pos);
             EDevice->m_Camera.Set(hpb,pos);
+			ViewportNavigation::ResetState();
 			EDevice->m_Camera.SetStyle(EDevice->m_Camera.GetStyle());
         }
 

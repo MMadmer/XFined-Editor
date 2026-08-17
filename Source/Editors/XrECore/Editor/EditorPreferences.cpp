@@ -11,6 +11,7 @@ CCustomPreferences* EPrefs=0;
 CCustomPreferences::CCustomPreferences()
 {
     bOpen = false;
+	ui_theme_preset = u32(XFinedTheme::Default());
 	// view
     view_np				= 0.1f;
     view_fp				= 1500.f;
@@ -54,6 +55,7 @@ CCustomPreferences::~CCustomPreferences()
 
 void CCustomPreferences::ApplyValues()
 {
+	SetThemePreset(ui_theme_preset, false);
 
     EDevice->m_Camera.SetViewport(view_np, view_fp, rad2deg(view_fov));
     Tools->SetFog	(fog_color,fog_fogness);
@@ -73,6 +75,21 @@ void  CCustomPreferences::OnClose	()
 {
 	ApplyValues	();	
 }
+//---------------------------------------------------------------------------
+
+void CCustomPreferences::OnThemeChanged(PropValue*)
+{
+	SetThemePreset(ui_theme_preset, false);
+}
+
+void CCustomPreferences::SetThemePreset(u32 preset, bool persist)
+{
+	ui_theme_preset = XFinedTheme::IsValid(preset) ? preset : u32(XFinedTheme::Default());
+	XFinedTheme::Apply(XFinedTheme::Preset(ui_theme_preset));
+	if (persist)
+		Save();
+}
+
 //---------------------------------------------------------------------------
 
 
@@ -121,6 +138,14 @@ void CCustomPreferences::OnKeyboardCommonFileClick(ButtonValue* B, bool& bModif,
 
 void CCustomPreferences::FillProp(PropItemVec& props)
 {
+	static xr_token theme_presets[] = {
+		{ "XFined Purple", int(XFinedTheme::Preset::XFinedPurple) },
+		{ "Graphite", int(XFinedTheme::Preset::Graphite) },
+		{ nullptr, 0 },
+	};
+	Token32Value* theme = PHelper().CreateToken32(props, "Appearance\\Theme", &ui_theme_preset, theme_presets);
+	theme->OnChangeEvent.bind(this, &CCustomPreferences::OnThemeChanged);
+
     PHelper().CreateFlag32	(props,"Objects\\Library\\Discard Instance",	&object_flags, 	epoDiscardInstance);
     PHelper().CreateFlag32	(props,"Objects\\Skeleton\\Draw Joints",		&object_flags, 	epoDrawJoints);
     PHelper().CreateFlag32	(props,"Objects\\Skeleton\\Draw Bone Axis",		&object_flags, 	epoDrawBoneAxis);
@@ -200,6 +225,10 @@ void CCustomPreferences::Edit()
 extern bool bAllowLogCommands;
 void CCustomPreferences::Load(CInifile* I)
 {
+	ui_theme_preset		= R_U32_SAFE	("editor_prefs", "ui_theme_preset", u32(XFinedTheme::Default()));
+	if (!XFinedTheme::IsValid(ui_theme_preset))
+		ui_theme_preset = u32(XFinedTheme::Default());
+
     psDeviceFlags.flags		= R_U32_SAFE	("editor_prefs","device_flags",	psDeviceFlags.flags);
     psSoundFlags.flags		= R_U32_SAFE	("editor_prefs","sound_flags",	psSoundFlags.flags)
 
@@ -266,6 +295,16 @@ void CCustomPreferences::Load(CInifile* I)
 
 void CCustomPreferences::Save(CInifile* I)
 {
+	if (ui_theme_preset == u32(XFinedTheme::Default()))
+	{
+		if (I->line_exist("editor_prefs", "ui_theme_preset"))
+			I->remove_line("editor_prefs", "ui_theme_preset");
+	}
+	else
+	{
+		I->w_u32("editor_prefs", "ui_theme_preset", ui_theme_preset);
+	}
+
     I->w_u32("editor_prefs", "device_flags", psDeviceFlags.flags);
     I->w_u32("editor_prefs", "sound_flags", psSoundFlags.flags);
 

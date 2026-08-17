@@ -21,6 +21,7 @@
 #include "ResourceManager.h"
 #include "engine\XrGamePersistentEditors.h"
 #include "Nq\NqDoc.h"
+#include "UI_CommandPalette.h"
 
 
 ECommandVec 		ECommands;
@@ -666,6 +667,11 @@ CCommandVar 	CommandAssignMacro(CCommandVar p1, CCommandVar p2)
     }
     return FALSE;
 }
+CCommandVar CommandOpenCommandPalette(CCommandVar, CCommandVar)
+{
+	CommandPalette::Open();
+	return TRUE;
+}
 void TUI::RegisterCommands()
 {
 	REGISTER_CMD_S		(COMMAND_INITIALIZE,			CommandInitialize);
@@ -732,6 +738,11 @@ void TUI::RegisterCommands()
     	APPEND_SUB_CMD	("Slot #8",						xr_string(""),0);
     REGISTER_SUB_CMD_END;
     REGISTER_CMD_S	    (COMMAND_ASSIGN_MACRO, 			CommandAssignMacro);
+	REGISTER_CMD_SE		(COMMAND_COMMAND_PALETTE,		"Windows\\Command Palette",	CommandOpenCommandPalette, true);
+
+	SECommand* palette_command = GetEditorCommands()[COMMAND_COMMAND_PALETTE];
+	if (palette_command && !palette_command->sub_commands.empty())
+		palette_command->sub_commands[0]->shortcut = xr_shortcut('P', FALSE, TRUE, TRUE);
 }                                                                        
 
 //---------------------------------------------------------------------------

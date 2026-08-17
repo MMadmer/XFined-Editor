@@ -1,9 +1,40 @@
 #include "stdafx.h"
 
+namespace
+{
+char LowerAscii(char value)
+{
+	return value >= 'A' && value <= 'Z' ? value + ('a' - 'A') : value;
+}
+
+bool ContainsNoCase(LPCSTR text, LPCSTR query)
+{
+	if (!query || !query[0])
+		return true;
+	if (!text)
+		return false;
+
+	for (; *text; ++text)
+	{
+		LPCSTR candidate = text;
+		LPCSTR expected = query;
+		while (*candidate && *expected && LowerAscii(*candidate) == LowerAscii(*expected))
+		{
+			++candidate;
+			++expected;
+		}
+		if (!*expected)
+			return true;
+	}
+	return false;
+}
+}
 
 UIPropertiesItem::UIPropertiesItem(shared_str Name, UIPropertiesForm* propertiesFrom):UITreeItem(Name),PropertiesFrom(propertiesFrom)
 {
 	PItem = nullptr;
+	m_FilterVisible = true;
+	m_Expanded = true;
 }
 
 UIPropertiesItem::~UIPropertiesItem()
@@ -12,6 +43,9 @@ UIPropertiesItem::~UIPropertiesItem()
 
 void UIPropertiesItem::Draw()
 {
+	if (!m_FilterVisible)
+		return;
+
 	ImGui::TableNextRow();
 	ImGui::TableNextColumn();
 	if (PItem&&PItem->m_Flags.test(PropItem::flShowCB))
@@ -23,10 +57,17 @@ void UIPropertiesItem::Draw()
 		}
 		ImGui::SameLine(0, 2);
 	}
-	if (Items.size())
+	if (!Items.empty())
 	{
 		ImGuiTreeNodeFlags FloderFlags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen;
+		// Filtering opens matching paths without discarding the user's expansion state.
+		ImGui::SetNextItemOpen(PropertiesFrom->IsFiltering() ? true : m_Expanded, ImGuiCond_Always);
 		bool open = ImGui::TreeNodeEx(Name.c_str(), FloderFlags);
+		if (!PropertiesFrom->IsFiltering())
+		{
+			m_Expanded = open;
+			PropertiesFrom->RememberExpansion(m_Path.c_str(), open);
+		}
 		ImGui::TableNextColumn();
 		DrawItem();
 		if (open)
@@ -48,7 +89,7 @@ void UIPropertiesItem::Draw()
 
 void UIPropertiesItem::DrawRoot()
 {
-	VERIFY(PItem == nullptr);
+	VERIFY(!PItem);
 	for (UITreeItem* Item : Items)
 	{
 		static_cast<UIPropertiesItem*>(Item)->Draw();
@@ -178,4 +219,55 @@ void UIPropertiesItem::DrawItem()
 UITreeItem* UIPropertiesItem::CreateItem(shared_str Name)
 {
 	return xr_new< UIPropertiesItem>(Name,PropertiesFrom);
+}
+
+bool UIPropertiesItem::RefreshFilter(LPCSTR filter, const xr_string& parentPath, bool parentMatches,
+	u32& visibleCount, u32& totalCount)
+{
+	xr_string path = parentPath;
+	if (Name.size())
+	{
+		if (!path.empty())
+			path += '\\';
+		path += Name.c_str();
+	}
+	m_Path = path;
+	if (!m_Path.empty())
+		m_Expanded = PropertiesFrom->RestoreExpansion(m_Path.c_str(), m_Expanded);
+
+	const bool selfMatches = parentMatches || ContainsNoCase(path.c_str(), filter) || ContainsNoCase(Name.c_str(), filter);
+	bool childMatches = false;
+	for (UITreeItem* item : Items)
+	{
+		UIPropertiesItem* propertyItem = static_cast<UIPropertiesItem*>(item);
+		childMatches |= propertyItem->RefreshFilter(filter, path, selfMatches, visibleCount, totalCount);
+	}
+
+	m_FilterVisible = selfMatches || childMatches;
+	if (PItem)
+	{
+		++totalCount;
+		if (m_FilterVisible)
+			++visibleCount;
+	}
+	return m_FilterVisible;
+}
+
+void UIPropertiesItem::SetExpandedRecursive(bool expanded)
+{
+	m_Expanded = expanded;
+	PropertiesFrom->RememberExpansion(m_Path.c_str(), expanded);
+	for (UITreeItem* item : Items)
+		static_cast<UIPropertiesItem*>(item)->SetExpandedRecursive(expanded);
+}
+
+void UIPropertiesItem::Reset(bool expanded)
+{
+	for (UITreeItem* item : Items)
+		xr_delete(item);
+	Items.clear();
+	PItem = nullptr;
+	m_FilterVisible = true;
+	m_Expanded = expanded;
+	m_Path.clear();
 }

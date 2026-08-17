@@ -5,8 +5,15 @@ UIPropertiesForm::UIPropertiesForm():m_Root("",this)
 	m_EditChooseValue = nullptr;
 	m_EditShortcutValue = nullptr;
 	m_EditTextureValue = nullptr;
+	m_EditTextValue = nullptr;
 	m_EditTextValueData = nullptr;
+	m_EditTextValueDataSize = 0;
+	m_EditGameTypeValue = nullptr;
 	m_Flags.zero();
+	m_Filter[0] = 0;
+	m_VisiblePropertyCount = 0;
+	m_PropertyCount = 0;
+	m_ExpandByDefault = true;
 }
 
 UIPropertiesForm::~UIPropertiesForm()
@@ -17,6 +24,7 @@ UIPropertiesForm::~UIPropertiesForm()
 
 void UIPropertiesForm::Draw()
 {
+	ImGui::PushID(this);
 	{
 		if (m_EditChooseValue)
 		{
@@ -45,7 +53,7 @@ void UIPropertiesForm::Draw()
 			{
 				if (is_result)
 				{
-					if (result.c_str() == nullptr)
+					if (!result.c_str())
 					{
 						xr_string result_as_str = "$null";
 						if (m_EditTextureValue->AfterEdit<CTextValue, xr_string>(result_as_str))
@@ -88,15 +96,60 @@ void UIPropertiesForm::Draw()
 		}
 	}
 
+	const float clearWidth = ImGui::CalcTextSize("X").x + ImGui::GetStyle().FramePadding.x * 2.f;
+	ImGui::SetNextItemWidth(-clearWidth - ImGui::GetStyle().ItemSpacing.x);
+	if (ImGui::InputTextWithHint("##property_filter", "Search properties...", m_Filter, sizeof(m_Filter)))
+		RefreshFilter();
+	ImGui::SameLine();
+	if (ImGui::SmallButton("X##clear_property_filter") && IsFiltering())
+	{
+		m_Filter[0] = 0;
+		RefreshFilter();
+	}
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Clear property search");
+
+	if (ImGui::SmallButton("Expand All"))
+		ExpandAll();
+	ImGui::SameLine();
+	if (ImGui::SmallButton("Collapse All"))
+		CollapseAll();
+	if (IsFiltering() && ImGui::IsItemHovered())
+		ImGui::SetTooltip("Matching branches stay open while search is active");
+	ImGui::SameLine();
+	if (IsFiltering())
+		ImGui::TextDisabled("%u / %u", m_VisiblePropertyCount, m_PropertyCount);
+	else
+		ImGui::TextDisabled("%u properties", m_PropertyCount);
+
 	static ImGuiTableFlags flags = ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersOuterH | ImGuiTableFlags_Resizable | ImGuiTableFlags_RowBg | ImGuiTableFlags_NoBordersInBody;
 	if (ImGui::BeginTable("props", 2, flags))
 	{
 		ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_NoHide);
 		ImGui::TableSetupColumn("Prop", ImGuiTableColumnFlags_WidthFixed);
 		ImGui::TableHeadersRow();
-		m_Root.DrawRoot();
+		if (m_VisiblePropertyCount)
+		{
+			m_Root.DrawRoot();
+		}
+		else
+		{
+			const u32 rgb = XFinedTheme::Rgb(XFinedTheme::ColorToken::Muted);
+			const ImVec4 muted(
+				float((rgb >> 16) & 0xff) / 255.f,
+				float((rgb >> 8) & 0xff) / 255.f,
+				float(rgb & 0xff) / 255.f,
+				1.f);
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			if (IsFiltering())
+				ImGui::TextColored(muted, "No properties match '%s'", m_Filter);
+			else
+				ImGui::TextColored(muted, "No properties");
+		}
 		ImGui::EndTable();
 	}
+	ImGui::PopID();
 }
 
 
@@ -110,6 +163,45 @@ void UIPropertiesForm::AssignItems(PropItemVec& items)
 		VERIFY(Item);
 		Item->PItem = item;
 	}
+	RefreshFilter();
+}
+
+void UIPropertiesForm::SetFilter(LPCSTR filter)
+{
+	strncpy_s(m_Filter, sizeof(m_Filter), filter ? filter : "", _TRUNCATE);
+	RefreshFilter();
+}
+
+void UIPropertiesForm::ExpandAll()
+{
+	m_ExpandByDefault = true;
+	m_Root.SetExpandedRecursive(true);
+}
+
+void UIPropertiesForm::CollapseAll()
+{
+	m_ExpandByDefault = false;
+	m_Root.SetExpandedRecursive(false);
+}
+
+void UIPropertiesForm::RefreshFilter()
+{
+	m_VisiblePropertyCount = 0;
+	m_PropertyCount = 0;
+	xr_string rootPath;
+	m_Root.RefreshFilter(m_Filter, rootPath, false, m_VisiblePropertyCount, m_PropertyCount);
+}
+
+bool UIPropertiesForm::RestoreExpansion(LPCSTR path, bool fallback) const
+{
+	const auto it = m_ExpansionState.find(path ? path : "");
+	return it != m_ExpansionState.end() ? it->second : fallback;
+}
+
+void UIPropertiesForm::RememberExpansion(LPCSTR path, bool expanded)
+{
+	if (path && path[0])
+		m_ExpansionState[path] = expanded;
 }
 
 PropItem* UIPropertiesForm::FindItemOfName(shared_str name)
@@ -136,8 +228,9 @@ void UIPropertiesForm::ClearProperties()
 	{
 		xr_delete(I);
 	}
-	m_Root = UIPropertiesItem("",this);
+	m_Root.Reset(m_ExpandByDefault);
 	m_Items.clear();
+	RefreshFilter();
 }
 
 PropItem* UIPropertiesForm::FindItem(const char* name)

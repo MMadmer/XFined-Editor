@@ -3,6 +3,8 @@
 #include "EditorProject.h"
 #include "UI_ToolsCustom.h"
 #include "ui_main.h"
+#include <climits>
+#include <cstdlib>
 #if defined(USE_DX11)
 #include "EDX11Utils.h"
 // the png encoder itself is compiled into RedImageTool, which XrECore links -
@@ -14,122 +16,462 @@
 #pragma comment(lib, "ws2_32.lib")
 
 static const u16 kPort = 28016;
+static constexpr int kShutdownBoth = 2;
+static const DWORD kDefaultRequestTimeoutMs = 180000;
+static const u32 kMaxClients = 16;
+static const u32 kMaxQueuedRequests = 64;
+static const size_t kMaxRequestBytes = 1024 * 1024;
 
 //------------------------------------------------------------------------------
-// request queue: socket thread produces, main thread consumes
+// request queue: socket workers produce, main thread consumes
 //------------------------------------------------------------------------------
+// The client and queue/batch each own one reference. The event dies only after
+// both sides have observed completion or cancellation.
 struct SMCPRequest
 {
 	xr_string		cmd;
 	xr_string		raw;		// full request line, for handler arguments
 	xr_string		response;
 	HANDLE			done;
+	volatile LONG	state;
+	volatile LONG	references;
+
+	enum EState
+	{
+		Queued,
+		Executing,
+		Completed,
+		Cancelled
+	};
+
+	SMCPRequest() : done(::CreateEventA(NULL, FALSE, FALSE, NULL)), state(Queued), references(1) {}
+	~SMCPRequest() { if (done) ::CloseHandle(done); }
+
+	void AddRef() { ::InterlockedIncrement(&references); }
+	void Release()
+	{
+		if (!::InterlockedDecrement(&references))
+		{
+			SMCPRequest* self = this;
+			xr_delete(self);
+		}
+	}
+	bool Cancel()
+	{
+		return Queued == ::InterlockedCompareExchange(&state, Cancelled, Queued);
+	}
 };
 
 static TXFinedMCPHandler	s_Handler = 0;
 void XFinedMCP::SetHandler(TXFinedMCPHandler handler) { s_Handler = handler; }
 
-bool XFinedMCP::GetArg(LPCSTR raw, LPCSTR field, char* dst, u32 dst_size)
+namespace
 {
-	dst[0] = 0;
-	if (!raw) return false;
-	char pat[64];
-	sprintf_s(pat, "\"%s\"", field);
-	const char* k = strstr(raw, pat);
-	if (!k) return false;
-	const char* c = strchr(k + strlen(pat), ':');
-	if (!c) return false;
-	const char* q1 = strchr(c, '"');
-	if (!q1) return false;
+static constexpr u32 kMaxJsonDepth = 64;
 
-	// The value is a JSON string, so an escaped quote does NOT end it and the
-	// text has to be unescaped on the way out: callers want what the sender
-	// meant, not the wire form. Scanning for the closing quote with strchr got
-	// both wrong - a search term like "two words" came back as a lone
-	// backslash, and every path arrived with its separators still doubled.
-	u32 w = 0;
-	for (const char* r = q1 + 1; *r && w + 1 < dst_size; ++r)
+static void SkipJsonWhitespace(const char*& cursor)
+{
+	while (' ' == *cursor || '\t' == *cursor || '\r' == *cursor || '\n' == *cursor)
+		++cursor;
+}
+
+static int JsonHexDigit(char value)
+{
+	if (value >= '0' && value <= '9')
+		return value - '0';
+	if (value >= 'a' && value <= 'f')
+		return value - 'a' + 10;
+	if (value >= 'A' && value <= 'F')
+		return value - 'A' + 10;
+	return -1;
+}
+
+static bool ParseJsonHexQuad(const char*& cursor, u32& value)
+{
+	value = 0;
+	for (u32 i = 0; i < 4; ++i)
 	{
-		if (*r == '"') break;
-		char ch = *r;
-		if (ch == '\\' && r[1])
-		{
-			switch (*++r)
-			{
-			case 'n':	ch = '\n';	break;
-			case 't':	ch = '\t';	break;
-			case 'r':	ch = '\r';	break;
-			case 'b':	ch = '\b';	break;
-			case 'f':	ch = '\f';	break;
-			case 'u':
-				{
-					// \uXXXX -> UTF-8. Not every argument is a path or an id any
-					// more: a game mode's title is text the player reads, and
-					// folding it to '?' would ship a mod whose campaign has no
-					// name. The sender escapes everything above ascii (json.dumps
-					// defaults to ensure_ascii), so this is the ONLY way non-latin
-					// text arrives.
-					int v = 0, got = 0;
-					for (; got < 4; ++got)
-					{
-						const char d = r[1];
-						const int  h = (d >= '0' && d <= '9') ? d - '0'
-									 : (d >= 'a' && d <= 'f') ? d - 'a' + 10
-									 : (d >= 'A' && d <= 'F') ? d - 'A' + 10 : -1;
-						if (h < 0) break;
-						v = v * 16 + h;
-						++r;
-					}
-					if (4 != got) { ch = '?'; break; }
-
-					// a high surrogate takes its partner with it
-					if (v >= 0xD800 && v <= 0xDBFF && r[1] == '\\' && r[2] == 'u')
-					{
-						const char* keep = r;
-						int lo = 0, got2 = 0;
-						r += 2;
-						for (; got2 < 4; ++got2)
-						{
-							const char d = r[1];
-							const int  h = (d >= '0' && d <= '9') ? d - '0'
-										 : (d >= 'a' && d <= 'f') ? d - 'a' + 10
-										 : (d >= 'A' && d <= 'F') ? d - 'A' + 10 : -1;
-							if (h < 0) break;
-							lo = lo * 16 + h;
-							++r;
-						}
-						if (4 == got2 && lo >= 0xDC00 && lo <= 0xDFFF)
-							v = 0x10000 + ((v - 0xD800) << 10) + (lo - 0xDC00);
-						else
-							r = keep;
-					}
-
-					char utf[4];
-					int n = 0;
-					if (v < 0x80)			{ utf[n++] = char(v); }
-					else if (v < 0x800)		{ utf[n++] = char(0xC0 | (v >> 6));   utf[n++] = char(0x80 | (v & 0x3F)); }
-					else if (v < 0x10000)	{ utf[n++] = char(0xE0 | (v >> 12));  utf[n++] = char(0x80 | ((v >> 6) & 0x3F));
-											  utf[n++] = char(0x80 | (v & 0x3F)); }
-					else					{ utf[n++] = char(0xF0 | (v >> 18));  utf[n++] = char(0x80 | ((v >> 12) & 0x3F));
-											  utf[n++] = char(0x80 | ((v >> 6) & 0x3F)); utf[n++] = char(0x80 | (v & 0x3F)); }
-					for (int i = 0; i < n && w + 1 < dst_size; ++i)
-						dst[w++] = utf[i];
-					continue;
-				}
-			default:	ch = *r;	break;		// \" \\ \/ and anything unknown
-			}
-		}
-		dst[w++] = ch;
+		const int digit = JsonHexDigit(*cursor);
+		if (digit < 0)
+			return false;
+		value = (value << 4) | u32(digit);
+		++cursor;
 	}
-	dst[w] = 0;
 	return true;
 }
 
-static CRITICAL_SECTION		s_Lock;
+static bool AppendJsonCodePoint(u32 code_point, xr_string* output)
+{
+	if (!code_point || code_point > 0x10FFFF || (code_point >= 0xD800 && code_point <= 0xDFFF))
+		return false;
+	if (!output)
+		return true;
+
+	char utf8[4];
+	u32 size = 0;
+	if (code_point < 0x80)
+	{
+		utf8[size++] = char(code_point);
+	}
+	else if (code_point < 0x800)
+	{
+		utf8[size++] = char(0xC0 | (code_point >> 6));
+		utf8[size++] = char(0x80 | (code_point & 0x3F));
+	}
+	else if (code_point < 0x10000)
+	{
+		utf8[size++] = char(0xE0 | (code_point >> 12));
+		utf8[size++] = char(0x80 | ((code_point >> 6) & 0x3F));
+		utf8[size++] = char(0x80 | (code_point & 0x3F));
+	}
+	else
+	{
+		utf8[size++] = char(0xF0 | (code_point >> 18));
+		utf8[size++] = char(0x80 | ((code_point >> 12) & 0x3F));
+		utf8[size++] = char(0x80 | ((code_point >> 6) & 0x3F));
+		utf8[size++] = char(0x80 | (code_point & 0x3F));
+	}
+	output->append(utf8, size);
+	return true;
+}
+
+static bool AppendRawJsonUtf8(const char*& cursor, xr_string* output)
+{
+	const char* start = cursor;
+	const u32 lead = static_cast<unsigned char>(*cursor);
+	u32 size = 0;
+	u32 code_point = 0;
+	u32 minimum = 0;
+	if (lead >= 0xC2 && lead <= 0xDF)
+	{
+		size = 2;
+		code_point = lead & 0x1F;
+		minimum = 0x80;
+	}
+	else if (lead >= 0xE0 && lead <= 0xEF)
+	{
+		size = 3;
+		code_point = lead & 0x0F;
+		minimum = 0x800;
+	}
+	else if (lead >= 0xF0 && lead <= 0xF4)
+	{
+		size = 4;
+		code_point = lead & 0x07;
+		minimum = 0x10000;
+	}
+	else
+	{
+		return false;
+	}
+
+	for (u32 i = 1; i < size; ++i)
+	{
+		const u32 byte = static_cast<unsigned char>(cursor[i]);
+		if ((byte & 0xC0) != 0x80)
+			return false;
+		code_point = (code_point << 6) | (byte & 0x3F);
+	}
+	if (code_point < minimum || code_point > 0x10FFFF ||
+		(code_point >= 0xD800 && code_point <= 0xDFFF))
+	{
+		return false;
+	}
+
+	if (output)
+		output->append(start, size);
+	cursor += size;
+	return true;
+}
+
+static bool ParseJsonString(const char*& cursor, xr_string* output)
+{
+	if ('"' != *cursor)
+		return false;
+	++cursor;
+	while (*cursor)
+	{
+		const u32 byte = static_cast<unsigned char>(*cursor);
+		if ('"' == byte)
+		{
+			++cursor;
+			return true;
+		}
+		if ('\\' == byte)
+		{
+			++cursor;
+			const char escape = *cursor;
+			if (!escape)
+				return false;
+			++cursor;
+			switch (escape)
+			{
+			case '"': if (output) output->push_back('"'); break;
+			case '\\': if (output) output->push_back('\\'); break;
+			case '/':  if (output) output->push_back('/');  break;
+			case 'b':  if (output) output->push_back('\b'); break;
+			case 'f':  if (output) output->push_back('\f'); break;
+			case 'n':  if (output) output->push_back('\n'); break;
+			case 'r':  if (output) output->push_back('\r'); break;
+			case 't':  if (output) output->push_back('\t'); break;
+			case 'u':
+				{
+					u32 code_point = 0;
+					if (!ParseJsonHexQuad(cursor, code_point))
+						return false;
+					if (code_point >= 0xD800 && code_point <= 0xDBFF)
+					{
+						if ('\\' != *cursor)
+							return false;
+						++cursor;
+						if ('u' != *cursor)
+							return false;
+						++cursor;
+						u32 low = 0;
+						if (!ParseJsonHexQuad(cursor, low) || low < 0xDC00 || low > 0xDFFF)
+							return false;
+						code_point = 0x10000 + ((code_point - 0xD800) << 10) + (low - 0xDC00);
+					}
+					else if (code_point >= 0xDC00 && code_point <= 0xDFFF)
+					{
+						return false;
+					}
+					if (!AppendJsonCodePoint(code_point, output))
+						return false;
+					break;
+				}
+			default:
+				return false;
+			}
+			continue;
+		}
+		if (byte < 0x20)
+			return false;
+		if (byte < 0x80)
+		{
+			if (output)
+				output->push_back(char(byte));
+			++cursor;
+			continue;
+		}
+		if (!AppendRawJsonUtf8(cursor, output))
+			return false;
+	}
+	return false;
+}
+
+static bool SkipJsonValue(const char*& cursor, u32 depth);
+
+static bool SkipJsonArray(const char*& cursor, u32 depth)
+{
+	if (depth >= kMaxJsonDepth || '[' != *cursor)
+		return false;
+	++cursor;
+	SkipJsonWhitespace(cursor);
+	if (']' == *cursor)
+	{
+		++cursor;
+		return true;
+	}
+	for (;;)
+	{
+		if (!SkipJsonValue(cursor, depth + 1))
+			return false;
+		SkipJsonWhitespace(cursor);
+		if (']' == *cursor)
+		{
+			++cursor;
+			return true;
+		}
+		if (',' != *cursor)
+			return false;
+		++cursor;
+		SkipJsonWhitespace(cursor);
+	}
+}
+
+static bool SkipJsonObject(const char*& cursor, u32 depth)
+{
+	if (depth >= kMaxJsonDepth || '{' != *cursor)
+		return false;
+	++cursor;
+	SkipJsonWhitespace(cursor);
+	if ('}' == *cursor)
+	{
+		++cursor;
+		return true;
+	}
+	for (;;)
+	{
+		if (!ParseJsonString(cursor, 0))
+			return false;
+		SkipJsonWhitespace(cursor);
+		if (':' != *cursor)
+			return false;
+		++cursor;
+		SkipJsonWhitespace(cursor);
+		if (!SkipJsonValue(cursor, depth + 1))
+			return false;
+		SkipJsonWhitespace(cursor);
+		if ('}' == *cursor)
+		{
+			++cursor;
+			return true;
+		}
+		if (',' != *cursor)
+			return false;
+		++cursor;
+		SkipJsonWhitespace(cursor);
+	}
+}
+
+static bool SkipJsonNumber(const char*& cursor)
+{
+	if ('-' == *cursor)
+		++cursor;
+	if ('0' == *cursor)
+	{
+		++cursor;
+	}
+	else
+	{
+		if (*cursor < '1' || *cursor > '9')
+			return false;
+		do { ++cursor; } while (*cursor >= '0' && *cursor <= '9');
+	}
+	if ('.' == *cursor)
+	{
+		++cursor;
+		if (*cursor < '0' || *cursor > '9')
+			return false;
+		do { ++cursor; } while (*cursor >= '0' && *cursor <= '9');
+	}
+	if ('e' == *cursor || 'E' == *cursor)
+	{
+		++cursor;
+		if ('+' == *cursor || '-' == *cursor)
+			++cursor;
+		if (*cursor < '0' || *cursor > '9')
+			return false;
+		do { ++cursor; } while (*cursor >= '0' && *cursor <= '9');
+	}
+	return true;
+}
+
+static bool SkipJsonValue(const char*& cursor, u32 depth)
+{
+	if ('"' == *cursor)
+		return ParseJsonString(cursor, 0);
+	if ('{' == *cursor)
+		return SkipJsonObject(cursor, depth);
+	if ('[' == *cursor)
+		return SkipJsonArray(cursor, depth);
+	if (!strncmp(cursor, "true", 4))
+	{
+		cursor += 4;
+		return true;
+	}
+	if (!strncmp(cursor, "false", 5))
+	{
+		cursor += 5;
+		return true;
+	}
+	if (!strncmp(cursor, "null", 4))
+	{
+		cursor += 4;
+		return true;
+	}
+	return SkipJsonNumber(cursor);
+}
+}
+
+bool XFinedMCP::GetArg(LPCSTR raw, LPCSTR field, char* dst, u32 dst_size)
+{
+	if (!dst || !dst_size)
+		return false;
+	dst[0] = 0;
+	if (!raw || !field || !*field)
+		return false;
+
+	const char* cursor = raw;
+	SkipJsonWhitespace(cursor);
+	if ('{' != *cursor)
+		return false;
+	++cursor;
+	SkipJsonWhitespace(cursor);
+
+	bool found = false;
+	xr_string value;
+	if ('}' != *cursor)
+	{
+		for (;;)
+		{
+			xr_string key;
+			if (!ParseJsonString(cursor, &key))
+				return false;
+			SkipJsonWhitespace(cursor);
+			if (':' != *cursor)
+				return false;
+			++cursor;
+			SkipJsonWhitespace(cursor);
+
+			if (key == field)
+			{
+				if (found || '"' != *cursor)
+					return false;
+				xr_string parsed;
+				if (!ParseJsonString(cursor, &parsed))
+					return false;
+				value.swap(parsed);
+				found = true;
+			}
+			else if (!SkipJsonValue(cursor, 1))
+			{
+				return false;
+			}
+
+			SkipJsonWhitespace(cursor);
+			if ('}' == *cursor)
+				break;
+			if (',' != *cursor)
+				return false;
+			++cursor;
+			SkipJsonWhitespace(cursor);
+		}
+	}
+	++cursor;
+	SkipJsonWhitespace(cursor);
+	if (*cursor || !found || value.size() >= dst_size)
+		return false;
+
+	memcpy(dst, value.data(), value.size());
+	dst[value.size()] = 0;
+	return true;
+}
+
+struct SMCPClient
+{
+	SOCKET socket;
+	HANDLE thread;
+
+	explicit SMCPClient(SOCKET value) : socket(value), thread(0) {}
+};
+
+static CRITICAL_SECTION			s_Lock;
+static bool					s_LockReady = false;
 static xr_vector<SMCPRequest*>	s_Queue;
-static SOCKET				s_Listen	= INVALID_SOCKET;
-static HANDLE				s_Thread	= 0;
-static volatile bool		s_Run		= false;
+static xr_vector<SMCPClient*>	s_Clients;
+static SOCKET					s_Listen = INVALID_SOCKET;
+static HANDLE					s_AcceptThread = 0;
+static HANDLE					s_StopEvent = 0;
+static volatile LONG			s_Run = 0;
+static bool					s_WsaReady = false;
+static DWORD					s_RequestTimeoutMs = kDefaultRequestTimeoutMs;
+
+static bool IsRunning()
+{
+	return 0 != ::InterlockedCompareExchange(&s_Run, 0, 0);
+}
 
 //------------------------------------------------------------------------------
 // helpers
@@ -506,111 +848,479 @@ static void Execute(SMCPRequest& r)
 
 void XFinedMCP::Pump()
 {
+	if (!s_LockReady)
+		return;
+
+	xr_vector<SMCPRequest*> batch;
 	::EnterCriticalSection(&s_Lock);
-	xr_vector<SMCPRequest*> batch = s_Queue;
-	s_Queue.clear();
+	batch.swap(s_Queue);
 	::LeaveCriticalSection(&s_Lock);
 	for (u32 i = 0; i < batch.size(); ++i)
 	{
-		Execute(*batch[i]);
-		::SetEvent(batch[i]->done);
+		SMCPRequest* request = batch[i];
+		if (!IsRunning())
+		{
+			request->Cancel();
+			request->Release();
+			continue;
+		}
+		if (SMCPRequest::Queued == ::InterlockedCompareExchange(
+			&request->state, SMCPRequest::Executing, SMCPRequest::Queued))
+		{
+			Execute(*request);
+			::InterlockedExchange(&request->state, SMCPRequest::Completed);
+			::SetEvent(request->done);
+		}
+		request->Release();
 	}
 }
 
 //------------------------------------------------------------------------------
 // socket thread
 //------------------------------------------------------------------------------
-static void ServeClient(SOCKET client)
+enum EReceiveResult
 {
-	xr_string acc;
-	char buf[4096];
+	ReceiveOpen,
+	ReceiveClosed,
+	ReceiveOverflow
+};
+
+enum ERequestWaitResult
+{
+	RequestReady,
+	RequestTimedOut,
+	RequestStopped,
+	RequestDisconnected,
+	RequestOverflow
+};
+
+static bool SendAll(SOCKET client, const char* data, size_t size)
+{
+	size_t sent = 0;
+	while (sent < size)
+	{
+		const int chunk = int(_min(size - sent, size_t(INT_MAX)));
+		const int n = ::send(client, data + sent, chunk, 0);
+		if (n > 0)
+		{
+			sent += size_t(n);
+			continue;
+		}
+
+		const int error = ::WSAGetLastError();
+		if (SOCKET_ERROR != n || WSAEWOULDBLOCK != error)
+			return false;
+
+		fd_set writable;
+		FD_ZERO(&writable);
+		FD_SET(client, &writable);
+		timeval wait = { 0, 100000 };
+		if (::select(0, NULL, &writable, NULL, &wait) == SOCKET_ERROR)
+			return false;
+		if (!IsRunning() || (s_StopEvent && WAIT_OBJECT_0 == ::WaitForSingleObject(s_StopEvent, 0)))
+			return false;
+	}
+	return true;
+}
+
+static EReceiveResult ReceiveAvailable(SOCKET client, xr_string& accumulator)
+{
+	char buffer[4096];
 	for (;;)
 	{
-		const int n = ::recv(client, buf, sizeof(buf), 0);
-		if (n <= 0) break;
-		acc.append(buf, n);
-		size_t nl;
-		while ((nl = acc.find('\n')) != xr_string::npos)
+		const int n = ::recv(client, buffer, sizeof(buffer), 0);
+		if (n > 0)
 		{
-			xr_string line = acc.substr(0, nl);
-			acc.erase(0, nl + 1);
-			// micro-parse: {"cmd":"..."} — the only field we care about
-			xr_string cmd;
-			const size_t k = line.find("\"cmd\"");
-			if (k != xr_string::npos)
-			{
-				const size_t q1 = line.find('"', line.find(':', k));
-				const size_t q2 = (q1 != xr_string::npos) ? line.find('"', q1 + 1) : xr_string::npos;
-				if (q2 != xr_string::npos) cmd = line.substr(q1 + 1, q2 - q1 - 1);
-			}
+			if (accumulator.size() + size_t(n) > kMaxRequestBytes)
+				return ReceiveOverflow;
+			accumulator.append(buffer, n);
+			continue;
+		}
+		if (!n)
+			return ReceiveClosed;
 
-			SMCPRequest req;
-			req.cmd = cmd;
-			req.raw = line;
-			req.done = ::CreateEventA(NULL, FALSE, FALSE, NULL);
-			::EnterCriticalSection(&s_Lock);
-			s_Queue.push_back(&req);
-			::LeaveCriticalSection(&s_Lock);
+		const int error = ::WSAGetLastError();
+		if (WSAEWOULDBLOCK == error)
+			return ReceiveOpen;
+		if (WSAEINTR != error)
+			return ReceiveClosed;
+	}
+}
 
-			xr_string out;
-			// generous: scene loads run synchronously on the main thread
-			if (::WaitForSingleObject(req.done, 180000) == WAIT_OBJECT_0)
-				out = req.response;
-			else
-				out = "{\"ok\":false,\"error\":\"editor busy (timeout)\"}";
-			::CloseHandle(req.done);
+static EReceiveResult PollClient(SOCKET client, xr_string& accumulator)
+{
+	fd_set readable;
+	FD_ZERO(&readable);
+	FD_SET(client, &readable);
+	timeval now = { 0, 0 };
+	const int selected = ::select(0, &readable, NULL, NULL, &now);
+	if (selected == SOCKET_ERROR)
+		return ReceiveClosed;
+	return selected > 0 ? ReceiveAvailable(client, accumulator) : ReceiveOpen;
+}
 
-			out += "\n";
-			::send(client, out.c_str(), (int)out.size(), 0);
+static bool QueueRequest(SMCPRequest* request)
+{
+	bool queued = false;
+	::EnterCriticalSection(&s_Lock);
+	if (IsRunning() && s_Queue.size() < kMaxQueuedRequests)
+	{
+		s_Queue.push_back(request);
+		request->AddRef();
+		queued = true;
+	}
+	::LeaveCriticalSection(&s_Lock);
+	return queued;
+}
+
+static ERequestWaitResult WaitForRequest(SOCKET client, SMCPRequest* request, xr_string& accumulator)
+{
+	const ULONGLONG deadline = ::GetTickCount64() + s_RequestTimeoutMs;
+	HANDLE events[] = { request->done, s_StopEvent };
+	for (;;)
+	{
+		const ULONGLONG now = ::GetTickCount64();
+		if (now >= deadline)
+			return RequestTimedOut;
+
+		const DWORD remaining = DWORD(_min(deadline - now, ULONGLONG(25)));
+		const DWORD result = ::WaitForMultipleObjects(_countof(events), events, FALSE, remaining);
+		if (WAIT_OBJECT_0 == result)
+			return RequestReady;
+		if (WAIT_OBJECT_0 + 1 == result || !IsRunning())
+			return RequestStopped;
+		if (WAIT_TIMEOUT != result)
+			return RequestStopped;
+
+		switch (PollClient(client, accumulator))
+		{
+		case ReceiveClosed:		return RequestDisconnected;
+		case ReceiveOverflow:	return RequestOverflow;
+		default:				break;
 		}
 	}
-	::closesocket(client);
+}
+
+static bool ProcessLine(SOCKET client, const xr_string& line, xr_string& accumulator)
+{
+	char command[128];
+	if (!XFinedMCP::GetArg(line.c_str(), "cmd", command, sizeof(command)) || !command[0])
+	{
+		const xr_string out = "{\"ok\":false,\"error\":\"invalid JSON request or missing string 'cmd'\"}\n";
+		return SendAll(client, out.c_str(), out.size());
+	}
+
+	SMCPRequest* request = xr_new<SMCPRequest>();
+	if (!request->done)
+	{
+		request->Release();
+		const xr_string out = "{\"ok\":false,\"error\":\"request event allocation failed\"}\n";
+		return SendAll(client, out.c_str(), out.size());
+	}
+
+	request->cmd = command;
+	request->raw = line;
+	if (!QueueRequest(request))
+	{
+		request->Release();
+		const xr_string out = IsRunning()
+			? "{\"ok\":false,\"error\":\"MCP queue full\"}\n"
+			: "{\"ok\":false,\"error\":\"editor shutting down\"}\n";
+		return SendAll(client, out.c_str(), out.size());
+	}
+
+	xr_string out;
+	const ERequestWaitResult result = WaitForRequest(client, request, accumulator);
+	if (RequestReady == result)
+		out = request->response;
+	else
+		request->Cancel();
+
+	if (RequestTimedOut == result)
+		out = "{\"ok\":false,\"error\":\"editor busy (timeout)\"}";
+	else if (RequestOverflow == result)
+		out = "{\"ok\":false,\"error\":\"request buffer exceeds 1 MiB\"}";
+
+	request->Release();
+	if (RequestStopped == result || RequestDisconnected == result)
+		return false;
+
+	out += "\n";
+	return SendAll(client, out.c_str(), out.size()) && RequestOverflow != result;
+}
+
+static void ServeClient(SOCKET client)
+{
+	xr_string accumulator;
+	while (IsRunning())
+	{
+		const size_t newline = accumulator.find('\n');
+		if (newline != xr_string::npos)
+		{
+			xr_string line = accumulator.substr(0, newline);
+			accumulator.erase(0, newline + 1);
+			if (!line.empty() && '\r' == line.back())
+				line.pop_back();
+			if (!ProcessLine(client, line, accumulator))
+				break;
+			continue;
+		}
+
+		fd_set readable;
+		FD_ZERO(&readable);
+		FD_SET(client, &readable);
+		timeval wait = { 0, 100000 };
+		const int selected = ::select(0, &readable, NULL, NULL, &wait);
+		if (selected == SOCKET_ERROR)
+			break;
+		if (selected > 0)
+		{
+			const EReceiveResult result = ReceiveAvailable(client, accumulator);
+			if (ReceiveOverflow == result)
+			{
+				const xr_string out = "{\"ok\":false,\"error\":\"request buffer exceeds 1 MiB\"}\n";
+				SendAll(client, out.c_str(), out.size());
+			}
+			if (ReceiveOpen != result)
+				break;
+		}
+	}
+}
+
+static DWORD WINAPI ClientThread(LPVOID parameter)
+{
+	SMCPClient* client = static_cast<SMCPClient*>(parameter);
+	ServeClient(client->socket);
+
+	::EnterCriticalSection(&s_Lock);
+	const SOCKET socket = client->socket;
+	client->socket = INVALID_SOCKET;
+	if (socket != INVALID_SOCKET)
+		::closesocket(socket);
+	::LeaveCriticalSection(&s_Lock);
+	return 0;
+}
+
+static void ReapFinishedClients()
+{
+	for (u32 i = 0; i < s_Clients.size();)
+	{
+		SMCPClient* client = s_Clients[i];
+		if (!client->thread || WAIT_OBJECT_0 != ::WaitForSingleObject(client->thread, 0))
+		{
+			++i;
+			continue;
+		}
+
+		::CloseHandle(client->thread);
+		xr_delete(client);
+		s_Clients.erase(s_Clients.begin() + i);
+	}
 }
 
 static DWORD WINAPI AcceptThread(LPVOID)
 {
-	while (s_Run)
+	while (IsRunning())
 	{
-		SOCKET client = ::accept(s_Listen, NULL, NULL);
-		if (client == INVALID_SOCKET) break;
-		ServeClient(client);
+		fd_set readable;
+		FD_ZERO(&readable);
+		FD_SET(s_Listen, &readable);
+		timeval wait = { 0, 100000 };
+		const int selected = ::select(0, &readable, NULL, NULL, &wait);
+		if (selected == SOCKET_ERROR)
+			break;
+		if (!selected)
+			continue;
+
+		SOCKET socket = ::accept(s_Listen, NULL, NULL);
+		if (socket == INVALID_SOCKET)
+		{
+			if (WSAEWOULDBLOCK == ::WSAGetLastError())
+				continue;
+			break;
+		}
+		u_long non_blocking = 1;
+		if (::ioctlsocket(socket, FIONBIO, &non_blocking) == SOCKET_ERROR)
+		{
+			::closesocket(socket);
+			continue;
+		}
+
+		ReapFinishedClients();
+		if (!IsRunning())
+		{
+			::closesocket(socket);
+			break;
+		}
+		if (s_Clients.size() >= kMaxClients)
+		{
+			const xr_string out = "{\"ok\":false,\"error\":\"too many MCP clients\"}\n";
+			SendAll(socket, out.c_str(), out.size());
+			::closesocket(socket);
+			continue;
+		}
+
+		SMCPClient* client = xr_new<SMCPClient>(socket);
+		client->thread = ::CreateThread(NULL, 0, ClientThread, client, 0, NULL);
+		if (!client->thread)
+		{
+			::closesocket(socket);
+			xr_delete(client);
+			continue;
+		}
+		s_Clients.push_back(client);
 	}
 	return 0;
 }
 
+static void CleanupStartupFailure()
+{
+	::InterlockedExchange(&s_Run, 0);
+	if (s_Listen != INVALID_SOCKET)
+	{
+		::closesocket(s_Listen);
+		s_Listen = INVALID_SOCKET;
+	}
+	if (s_StopEvent)
+	{
+		::CloseHandle(s_StopEvent);
+		s_StopEvent = 0;
+	}
+	if (s_WsaReady)
+	{
+		::WSACleanup();
+		s_WsaReady = false;
+	}
+	if (s_LockReady)
+	{
+		::DeleteCriticalSection(&s_Lock);
+		s_LockReady = false;
+	}
+}
+
 void XFinedMCP::Start()
 {
-	if (s_Thread) return;
+	if (s_LockReady)
+		return;
+
 	::InitializeCriticalSection(&s_Lock);
+	s_LockReady = true;
+	s_RequestTimeoutMs = kDefaultRequestTimeoutMs;
+	char timeout[32] = {};
+	const DWORD timeout_size = ::GetEnvironmentVariableA("XFINED_MCP_REQUEST_TIMEOUT_MS", timeout, sizeof(timeout));
+	if (timeout_size && timeout_size < sizeof(timeout))
+	{
+		char* end = 0;
+		const unsigned long value = std::strtoul(timeout, &end, 10);
+		if (end && !*end && value && value <= 3600000)
+			s_RequestTimeoutMs = DWORD(value);
+	}
+
 	WSADATA wsa;
-	if (::WSAStartup(MAKEWORD(2, 2), &wsa)) return;
+	if (::WSAStartup(MAKEWORD(2, 2), &wsa))
+	{
+		CleanupStartupFailure();
+		return;
+	}
+	s_WsaReady = true;
+	s_StopEvent = ::CreateEventA(NULL, TRUE, FALSE, NULL);
+	if (!s_StopEvent)
+	{
+		CleanupStartupFailure();
+		return;
+	}
 
 	s_Listen = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (s_Listen == INVALID_SOCKET) return;
+	if (s_Listen == INVALID_SOCKET)
+	{
+		CleanupStartupFailure();
+		return;
+	}
 
 	sockaddr_in addr = {};
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(kPort);
 	addr.sin_addr.s_addr = ::inet_addr("127.0.0.1");
-	if (::bind(s_Listen, (sockaddr*)&addr, sizeof(addr)) || ::listen(s_Listen, 1))
+	if (::bind(s_Listen, (sockaddr*)&addr, sizeof(addr)) || ::listen(s_Listen, SOMAXCONN))
 	{
 		Msg("! [MCP] port %d busy — endpoint disabled", kPort);
-		::closesocket(s_Listen);
-		s_Listen = INVALID_SOCKET;
+		CleanupStartupFailure();
 		return;
 	}
-	s_Run = true;
-	s_Thread = ::CreateThread(NULL, 0, AcceptThread, NULL, 0, NULL);
+	u_long non_blocking = 1;
+	if (::ioctlsocket(s_Listen, FIONBIO, &non_blocking) == SOCKET_ERROR)
+	{
+		CleanupStartupFailure();
+		return;
+	}
+	::InterlockedExchange(&s_Run, 1);
+	s_AcceptThread = ::CreateThread(NULL, 0, AcceptThread, NULL, 0, NULL);
+	if (!s_AcceptThread)
+	{
+		CleanupStartupFailure();
+		return;
+	}
 	Msg("* [MCP] listening on 127.0.0.1:%d", kPort);
 }
 
 void XFinedMCP::Stop()
 {
-	if (!s_Thread) return;
-	s_Run = false;
-	if (s_Listen != INVALID_SOCKET) ::closesocket(s_Listen);
-	::WaitForSingleObject(s_Thread, 2000);
-	::CloseHandle(s_Thread);
-	s_Thread = 0;
+	if (!s_LockReady)
+		return;
+
+	::InterlockedExchange(&s_Run, 0);
+	if (s_StopEvent)
+		::SetEvent(s_StopEvent);
+	if (s_Listen != INVALID_SOCKET)
+	{
+		::shutdown(s_Listen, kShutdownBoth);
+		::closesocket(s_Listen);
+		s_Listen = INVALID_SOCKET;
+	}
+	if (s_AcceptThread)
+	{
+		::WaitForSingleObject(s_AcceptThread, INFINITE);
+		::CloseHandle(s_AcceptThread);
+		s_AcceptThread = 0;
+	}
+
+	::EnterCriticalSection(&s_Lock);
+	for (u32 i = 0; i < s_Clients.size(); ++i)
+		if (s_Clients[i]->socket != INVALID_SOCKET)
+			::shutdown(s_Clients[i]->socket, kShutdownBoth);
+	::LeaveCriticalSection(&s_Lock);
+
+	for (u32 i = 0; i < s_Clients.size(); ++i)
+	{
+		if (s_Clients[i]->thread)
+		{
+			::WaitForSingleObject(s_Clients[i]->thread, INFINITE);
+			::CloseHandle(s_Clients[i]->thread);
+		}
+		xr_delete(s_Clients[i]);
+	}
+	s_Clients.clear();
+
+	xr_vector<SMCPRequest*> abandoned;
+	::EnterCriticalSection(&s_Lock);
+	abandoned.swap(s_Queue);
+	::LeaveCriticalSection(&s_Lock);
+	for (u32 i = 0; i < abandoned.size(); ++i)
+	{
+		abandoned[i]->Cancel();
+		abandoned[i]->Release();
+	}
+
+	if (s_StopEvent)
+	{
+		::CloseHandle(s_StopEvent);
+		s_StopEvent = 0;
+	}
+	if (s_WsaReady)
+	{
+		::WSACleanup();
+		s_WsaReady = false;
+	}
 	::DeleteCriticalSection(&s_Lock);
+	s_LockReady = false;
 }

@@ -28,3 +28,4 @@ using ImTextureID = IDirect3DBaseTexture9*;
 #define IMGUI_INCLUDE_IMGUI_USER_H
 
 #include "imgui.h"
+#include "XrUITheme.h"

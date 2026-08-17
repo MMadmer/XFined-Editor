@@ -22,4 +22,5 @@ private:
 	bool m_mouse_down;
 	bool m_mouse_move;
 	bool m_shiftstate_down;
+	bool m_overlay_mouse_down;
 };

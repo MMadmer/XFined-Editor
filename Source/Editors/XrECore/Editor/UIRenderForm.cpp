@@ -1,11 +1,13 @@
 #include "stdafx.h"
 #include "UIRenderForm.h"
+#include "UI_ViewportNavigation.h"
 #include "ui_main.h"
 UIRenderForm::UIRenderForm()
 {
 	m_mouse_down = false;
 	m_mouse_move = false;
 	m_shiftstate_down = false;
+	m_overlay_mouse_down = false;
 }
 
 UIRenderForm::~UIRenderForm()
@@ -75,6 +77,7 @@ void UIRenderForm::Draw()
 
 		if(m_OnToolBar)
 			m_OnToolBar(canvas_size);
+		const bool navigation_owns_mouse = ViewportNavigation::Draw(canvas_pos, canvas_size);
 
 		ImGui::SetCursorScreenPos(canvas_pos);
 		// accept every button: the default left-only button never activates on
@@ -91,10 +94,14 @@ void UIRenderForm::Draw()
 			ImGui::IsMouseReleased(ImGuiMouseButton_Left) ||
 			ImGui::IsMouseReleased(ImGuiMouseButton_Right) ||
 			ImGui::IsMouseReleased(ImGuiMouseButton_Middle);
+		if (navigation_owns_mouse && any_btn_down)
+			m_overlay_mouse_down = true;
+		const bool overlay_owns_interaction = navigation_owns_mouse || m_overlay_mouse_down;
 
 		// gate on hover, not focus — a drag started here keeps running even
 		// after the cursor leaves the viewport
-		if (ImGui::IsItemHovered() || m_mouse_down)
+		const bool canvas_hovered = ImGui::IsItemHovered() && !overlay_owns_interaction;
+		if (canvas_hovered || m_mouse_down)
 		{
 
 			if (any_btn_down && !m_mouse_down&& cursor_in_zone)
@@ -135,7 +142,7 @@ void UIRenderForm::Draw()
 
 		// asset dropped from the content browser — refresh the pick ray first so
 		// the handler can raycast against whatever is under the cursor
-		if (ImGui::BeginDragDropTarget())
+		if (!overlay_owns_interaction && ImGui::BeginDragDropTarget())
 		{
 			if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("XRAY_ASSET"))
 			{
@@ -150,11 +157,11 @@ void UIRenderForm::Draw()
 
 		// wheel over the viewport: dolly, or speed tune while flying
 		const float wheel = ImGui::GetIO().MouseWheel;
-		if (wheel != 0.f && (ImGui::IsItemHovered() || m_mouse_down))
+		if (wheel != 0.f && (canvas_hovered || m_mouse_down))
 			UI->MouseWheel(TShiftState(ShiftState), wheel);
 
 		// no context menu when the RMB press was camera navigation
-		if (!m_OnContextMenu.empty()&& !curent_shiftstate_down && !EDevice->m_Camera.WasNavInput())
+		if (!overlay_owns_interaction && !m_OnContextMenu.empty()&& !curent_shiftstate_down && !EDevice->m_Camera.WasNavInput())
 		{
 			if (ImGui::BeginPopupContextItem("Menu"))
 			{
@@ -162,6 +169,8 @@ void UIRenderForm::Draw()
 				ImGui::EndPopup();
 			}
 		}
+		if (!any_btn_down)
+			m_overlay_mouse_down = false;
 
 
 	}

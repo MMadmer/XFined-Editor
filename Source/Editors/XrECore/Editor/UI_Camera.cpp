@@ -107,6 +107,14 @@ void CUI_Camera::Set(const Fvector& hpb, const Fvector& pos)
     BuildCamera();
 }
 
+void CUI_Camera::Set(const Fvector& hpb, const Fvector& pos, const Fvector& target)
+{
+	m_HPB.set(hpb);
+	m_Position.set(pos);
+	m_Target.set(target);
+	BuildCamera();
+}
+
 void CUI_Camera::BuildCamera()
 {
 	if (m_HPB.x>PI_MUL_2)  m_HPB.x-=PI_MUL_2;	if (m_HPB.x<-PI_MUL_2) m_HPB.x+=PI_MUL_2;

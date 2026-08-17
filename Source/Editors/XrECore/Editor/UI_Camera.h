@@ -80,11 +80,13 @@ public:
     const Fmatrix&	GetView		(Fmatrix& V) const {return V.invert(m_CamMat);}
     const Fvector&	GetHPB		() const {return m_HPB;}
     const Fvector& GetPosition() const;
+	const Fvector&	GetTarget	() const {return m_Target;}
     const Fvector&	GetRight	() const;
     const Fvector& GetNormal() const;
     const Fvector& GetDirection() const;
     void			Set			(float h, float p, float b, float x, float y, float z);
     void			Set			(const Fvector& hpb, const Fvector& pos);
+	void			Set			(const Fvector& hpb, const Fvector& pos, const Fvector& target);
     void			SetSensitivity(float sm, float sr);
     void			SetViewport	(float _near, float _far, float _fov);
     void			SetDepth	(float _far, bool bForcedUpdate);

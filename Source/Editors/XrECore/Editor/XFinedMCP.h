@@ -4,7 +4,7 @@
 //
 // A tiny line-based JSON server on 127.0.0.1:28016, alive from the very first
 // frame (project browser included). AI agents talk to it through the stdio
-// bridge in tools/mcp/xfined_mcp.py. Requests are queued by the socket thread
+// bridge in tools/mcp/xfined_mcp.py. Requests are queued by socket workers
 // and executed on the main thread (device and scene are not thread-safe).
 //
 // Protocol: one JSON object per line in, one per line out.
@@ -28,7 +28,8 @@ public:
 	static void		Pump		();		// main thread: execute queued requests
 	static void		SetHandler	(TXFinedMCPHandler handler);
 
-	// helper for handlers: extracts a string field from the raw request line
+	// Extracts one exact top-level string field. Missing, malformed, duplicate,
+	// embedded-NUL, and oversized values all return false with an empty buffer.
 	static bool		GetArg		(LPCSTR raw, LPCSTR field, char* dst, u32 dst_size);
 
 	// helper for handlers: encodes a picture as a base64 PNG. The pointer is

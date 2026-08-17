@@ -4,6 +4,7 @@
 
 #include "UI_MainCommand.h"
 #include "IInputReceiver.h"
+#include "UI_ProgressCenter.h"
 
 // refs
 class CCustomObject;
@@ -25,12 +26,21 @@ struct ECORE_API SPBItem{
     shared_str	info;
     float 		max;
     float 		progress;
+	u64			started_at_ms;
+	u64			last_publish_ms;
+	u64			last_log_ms;
+	s32			last_publish_percent;
+	s32			last_log_percent;
+	shared_str	last_logged_info;
 public:
-                SPBItem				(LPCSTR txt, LPCSTR inf, float mx):text(txt),info(inf),max(mx),progress(0.f){}
+                SPBItem				(LPCSTR txt, LPCSTR inf, float mx);
     void		GetInfo				(xr_string& txt, float& p, float& m);
     void		Inc					(LPCSTR info=0, bool bWarn=false);
     void		Update				(float val);
 	void 		Info				(LPCSTR text, bool bWarn=false);
+private:
+	s32			Percent				() const;
+	void		Publish				(bool force, bool warning);
 };
 
 typedef xr_vector<EEditorState> EStateList;
@@ -237,11 +247,13 @@ protected:
 // progress bar
     DEFINE_VECTOR	(SPBItem*,PBVec,PBVecIt);
     PBVec			m_ProgressItems;
+	bool			m_ProgressOwnsConsole;
 public:
 	SPBItem*		ProgressStart		(float max_val, LPCSTR text);
 	void 			ProgressEnd			(SPBItem*&);
     virtual void	ProgressDraw();
     SPBItem*		ProgressLast		(){return m_ProgressItems.empty()?0:m_ProgressItems.back();}
+	void			GetProgressSnapshot	(SProgressTaskInfoVec& result) const;
 
 	void ShowConsole();
     void WriteConsole(TMsgDlgType mt, const char* txt);

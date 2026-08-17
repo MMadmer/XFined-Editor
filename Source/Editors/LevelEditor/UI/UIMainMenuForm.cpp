@@ -540,12 +540,33 @@ void UIMainMenuForm::Draw()
                 if (ImGui::MenuItem("Stats", "",&selected)) { psDeviceFlags.set(rsStatistic, selected);  UI->RedrawScene(); }
 
             }
-             ImGui::Separator();
+            ImGui::Separator();
+            if (ImGui::BeginMenu("Theme"))
+            {
+                for (u32 i = 0; i < u32(XFinedTheme::Preset::Count); ++i)
+                {
+                    const XFinedTheme::Preset preset = XFinedTheme::Preset(i);
+                    const bool selected = EPrefs->ui_theme_preset == i;
+                    if (ImGui::MenuItem(XFinedTheme::Name(preset), "", selected))
+                        EPrefs->SetThemePreset(i);
+                }
+                ImGui::Separator();
+                const u32 default_preset = u32(XFinedTheme::Default());
+                ImGui::BeginDisabled(EPrefs->ui_theme_preset == default_preset);
+                if (ImGui::MenuItem("Reset to Default"))
+                    EPrefs->SetThemePreset(default_preset);
+                ImGui::EndDisabled();
+                ImGui::EndMenu();
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("Preferences", "")) { ExecCommand(COMMAND_EDITOR_PREF); }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Windows"))
         {
+            if (ImGui::MenuItem("Command Palette", "Ctrl+Shift+P"))
+                ExecCommand(COMMAND_COMMAND_PALETTE);
+            ImGui::Separator();
             {
                 bool selected = UIContentBrowser::IsOpen();
                 if (ImGui::MenuItem("Content Browser", "", &selected)) { if (selected) UIContentBrowser::Show(); else UIContentBrowser::Close(); }

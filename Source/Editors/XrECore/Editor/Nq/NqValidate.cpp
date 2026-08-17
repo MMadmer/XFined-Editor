@@ -721,10 +721,17 @@ void NqValidate::Run(const SNqQuest& q, const SContext& ctx, xr_vector<SNqProble
 				xr_string sl = NqUtil::Format("out:%s", pin.c_str());
 				if (!PinDeclared(*k, n, pin))
 					ERR(c, "E007", nid, sl.c_str(), "pin '%s' is not declared by %s", pin.c_str(), n.kind.c_str());
+				xr_flat_hash_map<xr_string, u8> seen_targets;
 				for (u32 t = 0; t < n.out[p].second.size(); ++t)
 				{
-					const SNqNode* tn = q.FindNode(n.out[p].second[t].c_str());
-					if (!tn) { ERR(c, "E007", nid, sl.c_str(), "target node '%s' does not exist", n.out[p].second[t].c_str()); continue; }
+					const xr_string& target = n.out[p].second[t];
+					if (!seen_targets.emplace(target, u8(1)).second)
+					{
+						WARN(c, "W022", nid, sl.c_str(), "target '%s' is listed twice, the duplicate edge is ignored", target.c_str());
+						continue;
+					}
+					const SNqNode* tn = q.FindNode(target.c_str());
+					if (!tn) { ERR(c, "E007", nid, sl.c_str(), "target node '%s' does not exist", target.c_str()); continue; }
 					if (NqText::IsTrigger(tn->kind.c_str()))
 						ERR(c, "E007", nid, sl.c_str(), "edge leads into trigger '%s' - triggers have no input", tn->id.c_str());
 				}

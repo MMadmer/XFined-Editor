@@ -45,7 +45,6 @@ enum
 
     COMMAND_MUTE_SOUND,
 
-    // имеют разную реализацию
     COMMAND_CLEAR,
     COMMAND_LOAD,
     COMMAND_SAVE,
@@ -69,6 +68,7 @@ enum
 
     COMMAND_SIMULATE,
     COMMAND_USE_SIMULATE_POSITIONS,
+	COMMAND_COMMAND_PALETTE,
 
     COMMAND_MAIN_LAST
 };

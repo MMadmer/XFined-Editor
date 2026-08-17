@@ -5,6 +5,8 @@
 #include "..\..\XrECore\Editor\EditorGameModes.h"
 #include "..\..\XrECore\Editor\EditorFileOps.h"
 #include "..\..\XrECore\Editor\EThumbnailVisual.h"
+#include "..\..\XrECore\Editor\UI_CommandPalette.h"
+#include "..\..\XrECore\Editor\UI_ViewportNavigation.h"
 #include "..\..\XrECore\Editor\Nq\NqMcp.h"
 #include "..\UI\QuestGraph\UIQuestGraph.h"
 #include "EditorModScene.h"
@@ -308,6 +310,7 @@ CCommandVar CommandClear(CCommandVar p1, CCommandVar p2)
     if( !Scene->locked() ){
         if (!Scene->IfModified()) return TRUE;
         EDevice->m_Camera.Reset	();
+		ViewportNavigation::ResetState();
         Scene->Reset			();
         Scene->m_LevelOp.Reset	();
         Tools->m_LastFileName 		= "";
@@ -1294,45 +1297,187 @@ static xr_string JsonEscapePath(LPCSTR text)
     return out;
 }
 
-// Content-browser source argument: "project" / "editor" / "darf", or 0 / 1 / 2.
-// The value is read straight off the request line because XFinedMCP::GetArg only
-// ever returns QUOTED values - a bare {"source":2} would make it latch onto the
-// next field's quote instead. Returns false only when a value is present but
-// unrecognised; an absent argument leaves the browser on its current tab.
+static void RespondThemeJson(xr_string& out)
+{
+	const XFinedTheme::Preset current = XFinedTheme::Current();
+	out = "{\"ok\":true,\"preset\":\"";
+	out += XFinedTheme::Key(current);
+	out += "\",\"name\":\"";
+	out += XFinedTheme::Name(current);
+	out += "\",\"default\":";
+	out += current == XFinedTheme::Default() ? "true" : "false";
+	out += ",\"presets\":[";
+	for (u32 i = 0; i < u32(XFinedTheme::Preset::Count); ++i)
+	{
+		if (i)
+			out += ",";
+		const XFinedTheme::Preset preset = XFinedTheme::Preset(i);
+		out += "{\"key\":\"";
+		out += XFinedTheme::Key(preset);
+		out += "\",\"name\":\"";
+		out += XFinedTheme::Name(preset);
+		out += "\"}";
+	}
+	out += "]}";
+}
+
+static void RespondCommandPaletteJson(xr_string& out, LPCSTR query, int limit)
+{
+	xr_vector<CommandPalette::SResult> results;
+	CommandPalette::Query(query, results, u32(std::clamp(limit, 1, 250)));
+	out = "{\"ok\":true,\"open\":";
+	out += CommandPalette::IsOpen() ? "true" : "false";
+	out += ",\"query\":\"";
+	out += JsonStr(query);
+	out += "\",\"results\":[";
+	for (u32 i = 0; i < results.size(); ++i)
+	{
+		if (i)
+			out += ",";
+		const CommandPalette::SResult& result = results[i];
+		char numbers[128];
+		sprintf_s(numbers, "\",\"command\":%u,\"subcommand\":%u,\"score\":%d}",
+			result.command, result.subcommand, result.score);
+		out += "{\"id\":\"";
+		out += JsonStr(result.id.c_str());
+		out += "\",\"category\":\"";
+		out += JsonStr(result.category.c_str());
+		out += "\",\"path\":\"";
+		out += JsonStr(result.path.c_str());
+		out += "\",\"name\":\"";
+		out += JsonStr(result.name.c_str());
+		out += "\",\"shortcut\":\"";
+		out += JsonStr(result.shortcut.c_str());
+		out += numbers;
+	}
+	out += "]}";
+}
+
+static void RespondProgressJson(xr_string& out)
+{
+	SProgressTaskInfoVec tasks;
+	UI->GetProgressSnapshot(tasks);
+	out = "{\"ok\":true,\"active\":";
+	out += tasks.empty() ? "false" : "true";
+	out += ",\"tasks\":[";
+	for (u32 i = 0; i < tasks.size(); ++i)
+	{
+		if (i)
+			out += ",";
+		const SProgressTaskInfo& task = tasks[i];
+		char values[256];
+		sprintf_s(values,
+			"\",\"current\":%.3f,\"total\":%.3f,\"fraction\":%.6f,\"elapsed_ms\":%llu,"
+			"\"depth\":%u,\"determinate\":%s,\"cancel_requested\":%s}",
+			task.current, task.total, task.fraction, task.elapsed_ms, task.depth,
+			task.determinate ? "true" : "false", task.cancel_requested ? "true" : "false");
+		out += "{\"text\":\"";
+		out += JsonStr(task.text.c_str());
+		out += "\",\"detail\":\"";
+		out += JsonStr(task.detail.c_str());
+		out += values;
+	}
+	out += "]}";
+}
+
+static bool IsBrowserTokenTerminator(LPCSTR cursor)
+{
+	while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') ++cursor;
+	return *cursor == ',' || *cursor == '}';
+}
+
+// Browser enums accept either a complete JSON string token or a complete
+// non-negative integer token. The caller applies the field-specific enum range.
+static bool ParseBrowserToken(LPCSTR raw, LPCSTR field, char* parsed, u32 parsed_size,
+	bool& present, bool& quoted)
+{
+	parsed[0] = 0;
+	present = false;
+	quoted = false;
+	if (!raw) return true;
+
+	char pattern[64];
+	sprintf_s(pattern, "\"%s\"", field);
+	LPCSTR key = strstr(raw, pattern);
+	if (!key) return true;
+	present = true;
+
+	LPCSTR cursor = key + xr_strlen(pattern);
+	while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') ++cursor;
+	if (*cursor != ':') return false;
+	for (++cursor; *cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n'; ++cursor) {}
+
+	if (*cursor == '"')
+	{
+		quoted = true;
+		LPCSTR start = ++cursor;
+		for (; *cursor && *cursor != '"'; ++cursor)
+		{
+			if (*cursor != '\\') continue;
+			if (!cursor[1]) return false;
+			++cursor;
+		}
+		const size_t length = size_t(cursor - start);
+		if (*cursor != '"' || length >= parsed_size || !IsBrowserTokenTerminator(cursor + 1))
+			return false;
+		return XFinedMCP::GetArg(raw, field, parsed, parsed_size);
+	}
+
+	LPCSTR start = cursor;
+	while (*cursor >= '0' && *cursor <= '9') ++cursor;
+	const size_t length = size_t(cursor - start);
+	if (!length || length >= parsed_size || !IsBrowserTokenTerminator(cursor)) return false;
+	CopyMemory(parsed, start, length);
+	parsed[length] = 0;
+	return true;
+}
+
 static bool ParseBrowserSource(LPCSTR raw, int& src)
 {
-    src = -1;
-    static const char pat[] = "\"source\"";
-    const char* k = raw ? strstr(raw, pat) : 0;
-    if (!k) return true;
-    const char* c = strchr(k + (sizeof(pat) - 1), ':');
-    if (!c) return true;
-    while (*++c == ' ') {}
+	src = -1;
+	char parsed[64];
+	bool present = false;
+	bool quoted = false;
+	if (!ParseBrowserToken(raw, "source", parsed, sizeof(parsed), present, quoted)) return false;
+	if (!present) return true;
 
-    char val[64] = {};
-    if (*c == '"')
-    {
-        const char* e = strchr(c + 1, '"');
-        if (!e) return false;
-        u32 n = u32(e - c - 1);
-        if (n >= sizeof(val)) n = sizeof(val) - 1;
-        CopyMemory(val, c + 1, n);
-    }
-    else
-    {
-        u32 n = 0;
-        while (n + 1 < sizeof(val) && c[n] && c[n] != ',' && c[n] != '}' && c[n] != ' ')
-        {
-            val[n] = c[n];
-            ++n;
-        }
-    }
-    if (!val[0])						return true;
-    if (0 == _stricmp(val, "project"))	{ src = 0; return true; }
-    if (0 == _stricmp(val, "editor"))	{ src = 1; return true; }
-    if (0 == _stricmp(val, "darf"))		{ src = 2; return true; }
-    if (val[0] == '-' || (val[0] >= '0' && val[0] <= '9')) { src = atoi(val); return true; }
-    return false;
+	if (quoted)
+	{
+		if (0 == _stricmp(parsed, "project")) src = 0;
+		else if (0 == _stricmp(parsed, "editor")) src = 1;
+		else if (0 == _stricmp(parsed, "darf")) src = 2;
+		else return false;
+		return true;
+	}
+
+	if (parsed[1] || parsed[0] < '0' || parsed[0] > '2') return false;
+	src = parsed[0] - '0';
+	return true;
+}
+
+static bool ParseBrowserCategory(LPCSTR raw, int& category)
+{
+	category = -1;
+	char parsed[64];
+	bool present = false;
+	bool quoted = false;
+	if (!ParseBrowserToken(raw, "category", parsed, sizeof(parsed), present, quoted)) return false;
+	if (!present) return true;
+
+	if (quoted)
+	{
+		category = UIContentBrowser::FindCategory(parsed);
+		return category >= 0 && category < UIContentBrowser::CategoryCount();
+	}
+
+	u32 value = 0;
+	for (LPCSTR cursor = parsed; *cursor; ++cursor)
+	{
+		value = value * 10 + u32(*cursor - '0');
+		if (value >= u32(UIContentBrowser::CategoryCount())) return false;
+	}
+	category = int(value);
+	return true;
 }
 
 static LPCSTR BrowserSourceName(int src)
@@ -1344,6 +1489,50 @@ static LPCSTR BrowserSourceName(int src)
     case 2:		return "darf";
     default:	return "";
     }
+}
+
+static void AppendBrowserLocationJson(xr_string& out, const UIContentBrowser::SLocation& location)
+{
+	char head[192];
+	LPCSTR category = location.category >= 0 && location.category < UIContentBrowser::CategoryCount()
+		? UIContentBrowser::CategoryName(location.category)
+		: "";
+	sprintf_s(head, "{\"source\":%d,\"source_name\":\"%s\",\"category\":%d,\"category_name\":\"%s\",\"folder\":\"",
+		location.source, BrowserSourceName(location.source), location.category, category);
+	out += head;
+	out += JsonEscapePath(location.folder.c_str());
+	out += "\"}";
+}
+
+static void RespondContentNavigationJson(xr_string& out)
+{
+	UIContentBrowser::SLocation current;
+	xr_vector<UIContentBrowser::SLocation> back;
+	xr_vector<UIContentBrowser::SLocation> forward;
+	xr_vector<UIContentBrowser::SLocation> favorites;
+	UIContentBrowser::GetHistory(current, back, forward);
+	UIContentBrowser::GetFavorites(favorites);
+
+	out = "{\"ok\":true,\"open\":";
+	out += UIContentBrowser::IsOpen() ? "true" : "false";
+	out += ",\"current\":";
+	AppendBrowserLocationJson(out, current);
+	const char* names[] = { "back", "forward", "favorites" };
+	const xr_vector<UIContentBrowser::SLocation>* lists[] = { &back, &forward, &favorites };
+	for (u32 list_index = 0; list_index < _countof(lists); ++list_index)
+	{
+		out += ",\"";
+		out += names[list_index];
+		out += "\":[";
+		for (u32 i = 0; i < lists[list_index]->size(); ++i)
+		{
+			if (i)
+				out += ",";
+			AppendBrowserLocationJson(out, (*lists[list_index])[i]);
+		}
+		out += "]";
+	}
+	out += "}";
 }
 
 // object names are lowercased on SetName - make lookups case-insensitive
@@ -1384,6 +1573,218 @@ static void RespondObjectJson(xr_string& out, CCustomObject* obj)
 
 bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
 {
+	if (0 == xr_strcmp(cmd, "theme"))
+	{
+		if (!EPrefs)
+		{
+			out = "{\"ok\":false,\"error\":\"editor preferences are not ready\"}";
+			return true;
+		}
+
+		char action[32] = {}, requested[64] = {};
+		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
+		XFinedMCP::GetArg(raw, "preset", requested, sizeof(requested));
+		if (!action[0])
+			xr_strcpy(action, requested[0] ? "set" : "get");
+
+		if (0 == _stricmp(action, "set"))
+		{
+			XFinedTheme::Preset preset;
+			if (!XFinedTheme::TryParse(requested, preset))
+			{
+				out = "{\"ok\":false,\"error\":\"unknown theme preset\",\"accepted\":[\"xfined-purple\",\"graphite\"]}";
+				return true;
+			}
+			EPrefs->SetThemePreset(u32(preset));
+		}
+		else if (0 == _stricmp(action, "reset"))
+		{
+			EPrefs->SetThemePreset(u32(XFinedTheme::Default()));
+		}
+		else if (0 != _stricmp(action, "get"))
+		{
+			out = "{\"ok\":false,\"error\":\"action must be get, set, or reset\"}";
+			return true;
+		}
+
+		RespondThemeJson(out);
+		return true;
+	}
+
+	if (0 == xr_strcmp(cmd, "command_palette"))
+	{
+		char action[32] = {}, query[256] = {}, id[512] = {};
+		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
+		XFinedMCP::GetArg(raw, "query", query, sizeof(query));
+		XFinedMCP::GetArg(raw, "id", id, sizeof(id));
+		if (!action[0])
+			xr_strcpy(action, query[0] ? "query" : "state");
+
+		if (0 == _stricmp(action, "open"))
+			CommandPalette::Open(query);
+		else if (0 == _stricmp(action, "close"))
+			CommandPalette::Close();
+		else if (0 == _stricmp(action, "execute"))
+		{
+			const int command = GetArgInt(raw, "command", -1);
+			const int subcommand = GetArgInt(raw, "subcommand", 0);
+			const bool executed = id[0]
+				? CommandPalette::Execute(id)
+				: command >= 0 && subcommand >= 0 &&
+					CommandPalette::Execute(u32(command), u32(subcommand));
+			if (!executed)
+			{
+				out = "{\"ok\":false,\"error\":\"unknown or unavailable command; query the palette first\"}";
+				return true;
+			}
+			CommandPalette::Close();
+		}
+		else if (0 != _stricmp(action, "query") && 0 != _stricmp(action, "state"))
+		{
+			out = "{\"ok\":false,\"error\":\"action must be state, query, open, close, or execute\"}";
+			return true;
+		}
+
+		RespondCommandPaletteJson(out, query, GetArgInt(raw, "limit", 50));
+		return true;
+	}
+
+	if (0 == xr_strcmp(cmd, "viewport_navigation"))
+	{
+		char action[32] = {}, view[32] = {}, scope[32] = {};
+		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
+		XFinedMCP::GetArg(raw, "view", view, sizeof(view));
+		XFinedMCP::GetArg(raw, "scope", scope, sizeof(scope));
+		if (!action[0])
+			xr_strcpy(action, view[0] ? "set" : "get");
+
+		if (0 == _stricmp(action, "set"))
+		{
+			ViewportNavigation::Target target;
+			if (!ViewportNavigation::TryParseTarget(view, target) || !ViewportNavigation::SetTarget(target))
+			{
+				out = "{\"ok\":false,\"error\":\"view must be perspective, front, back, left, right, top, or bottom\"}";
+				return true;
+			}
+		}
+		else if (0 == _stricmp(action, "frame"))
+		{
+			const bool selection = 0 == _stricmp(scope, "selection");
+			if ((!selection && scope[0] && 0 != _stricmp(scope, "all")) ||
+				!(selection ? ViewportNavigation::FrameSelection() : ViewportNavigation::FrameAll()))
+			{
+				out = "{\"ok\":false,\"error\":\"scope must be all or selection, and a scene must be ready\"}";
+				return true;
+			}
+		}
+		else if (0 != _stricmp(action, "get"))
+		{
+			out = "{\"ok\":false,\"error\":\"action must be get, set, or frame\"}";
+			return true;
+		}
+
+		const ViewportNavigation::Target current = ViewportNavigation::CurrentTarget();
+		out = "{\"ok\":true,\"view\":\"";
+		out += ViewportNavigation::TargetKey(current);
+		out += "\",";
+		AppendCameraJson(out);
+		out += "}";
+		return true;
+	}
+
+	if (0 == xr_strcmp(cmd, "progress"))
+	{
+		char action[32] = {};
+		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
+		if (!action[0])
+			xr_strcpy(action, "get");
+		if (0 == _stricmp(action, "cancel"))
+		{
+			if (!UI->ProgressLast())
+			{
+				out = "{\"ok\":false,\"error\":\"no active operation\"}";
+				return true;
+			}
+			UI->NeedBreak();
+			ELog.Msg(mtInformation, "Cancellation requested through MCP.");
+		}
+		else if (0 != _stricmp(action, "get"))
+		{
+			out = "{\"ok\":false,\"error\":\"action must be get or cancel\"}";
+			return true;
+		}
+		RespondProgressJson(out);
+		return true;
+	}
+
+	if (0 == xr_strcmp(cmd, "property_inspector"))
+	{
+		char action[32] = {}, target[32] = {}, filter[256] = {};
+		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
+		XFinedMCP::GetArg(raw, "target", target, sizeof(target));
+		XFinedMCP::GetArg(raw, "filter", filter, sizeof(filter));
+		if (!action[0])
+			xr_strcpy(action, filter[0] ? "filter" : "get");
+		if (!target[0])
+			xr_strcpy(target, "selection");
+
+		UIPropertiesForm* properties = nullptr;
+		bool world_target = false;
+		if (0 == _stricmp(target, "selection"))
+		{
+			properties = LTools->GetProperties();
+		}
+		else if (0 == _stricmp(target, "world"))
+		{
+			properties = LTools->GetWorldProperties();
+			world_target = true;
+		}
+		else
+		{
+			out = "{\"ok\":false,\"error\":\"target must be selection or world\"}";
+			return true;
+		}
+
+		if (0 == _stricmp(action, "filter"))
+			properties->SetFilter(filter);
+		else if (0 == _stricmp(action, "expand"))
+			properties->ExpandAll();
+		else if (0 == _stricmp(action, "collapse"))
+			properties->CollapseAll();
+		else if (0 == _stricmp(action, "open"))
+		{
+			if (world_target)
+				MainForm->GetWorldPropertiesFrom()->Open();
+			else
+				MainForm->GetPropertiesFrom()->Open();
+		}
+		else if (0 == _stricmp(action, "close"))
+		{
+			if (world_target)
+				MainForm->GetWorldPropertiesFrom()->Close();
+			else
+				MainForm->GetPropertiesFrom()->Close();
+		}
+		else if (0 != _stricmp(action, "get"))
+		{
+			out = "{\"ok\":false,\"error\":\"action must be get, filter, expand, collapse, open, or close\"}";
+			return true;
+		}
+
+		const bool panel_open = world_target
+			? !MainForm->GetWorldPropertiesFrom()->IsClosed()
+			: !MainForm->GetPropertiesFrom()->IsClosed();
+		char counts[128];
+		sprintf_s(counts, "\",\"visible\":%u,\"total\":%u,\"open\":%s}",
+			properties->VisiblePropertyCount(), properties->PropertyCount(), panel_open ? "true" : "false");
+		out = "{\"ok\":true,\"target\":\"";
+		out += target;
+		out += "\",\"filter\":\"";
+		out += JsonStr(properties->GetFilter());
+		out += counts;
+		return true;
+	}
+
     // ------------------------------------------------------------------------
     // The generic bridge to the editor's own command registry. Everything the
     // menus and shortcuts can do goes through ExecCommand, so exposing the
@@ -1574,6 +1975,74 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "content_delete"))		{ EditorFileOps::McpDelete(raw, out);			return true; }
     if (0 == xr_strcmp(cmd, "content_mkdir"))		{ EditorFileOps::McpMakeDir(raw, out);			return true; }
 
+	if (0 == xr_strcmp(cmd, "content_browser_navigation"))
+	{
+		char action[32] = {}, folder[512] = {};
+		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
+		const bool has_folder = XFinedMCP::GetArg(raw, "folder", folder, sizeof(folder));
+		if (!action[0])
+			xr_strcpy(action, "get");
+
+		int source = -1;
+		if (!ParseBrowserSource(raw, source))
+		{
+			out = "{\"ok\":false,\"error\":\"source must be project, editor, darf or 0/1/2\"}";
+			return true;
+		}
+		int category = -1;
+		if (!ParseBrowserCategory(raw, category))
+		{
+			out = "{\"ok\":false,\"error\":\"unknown category (see list_assets)\"}";
+			return true;
+		}
+
+		xr_string err;
+		bool success = true;
+		if (0 == _stricmp(action, "navigate"))
+			success = UIContentBrowser::NavigateToFolder(source, category, folder, err);
+		else if (0 == _stricmp(action, "back"))
+			success = UIContentBrowser::NavigateBack(err);
+		else if (0 == _stricmp(action, "forward"))
+			success = UIContentBrowser::NavigateForward(err);
+		else if (0 == _stricmp(action, "up"))
+			success = UIContentBrowser::NavigateUp(err);
+		else if (0 == _stricmp(action, "home"))
+			success = UIContentBrowser::NavigateHome(err);
+		else if (0 == _stricmp(action, "favorite_add"))
+		{
+			UIContentBrowser::SLocation current;
+			xr_vector<UIContentBrowser::SLocation> back;
+			xr_vector<UIContentBrowser::SLocation> forward;
+			UIContentBrowser::GetHistory(current, back, forward);
+			if (source >= 0)
+				current.source = source;
+			if (category >= 0)
+				current.category = category;
+			if (has_folder)
+				current.folder = folder;
+			success = UIContentBrowser::AddFavorite(current, err);
+		}
+		else if (0 == _stricmp(action, "favorite_remove"))
+			success = UIContentBrowser::RemoveFavorite(GetArgInt(raw, "index", -1), err);
+		else if (0 == _stricmp(action, "favorite_open"))
+			success = UIContentBrowser::NavigateFavorite(GetArgInt(raw, "index", -1), err);
+		else if (0 != _stricmp(action, "get"))
+		{
+			out = "{\"ok\":false,\"error\":\"action must be get, navigate, back, forward, up, home, favorite_add, favorite_remove, or favorite_open\"}";
+			return true;
+		}
+
+		if (!success)
+		{
+			out = "{\"ok\":false,\"error\":\"";
+			out += JsonEscapePath(err.c_str());
+			out += "\"}";
+			return true;
+		}
+		RespondContentNavigationJson(out);
+		return true;
+	}
+
     // reveal an asset in the content browser: the panel-driving twin of
     // asset_preview, which only ever renders offscreen
     if (0 == xr_strcmp(cmd, "content_browser_open"))
@@ -1735,6 +2204,7 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             return true;
         }
         EDevice->m_Camera.Set(hpb, pos);
+		ViewportNavigation::ResetState();
         UI->RedrawScene(true);
         out = "{\"ok\":true,";
         AppendCameraJson(out);

@@ -8,10 +8,23 @@ standard MCP server over stdio — no third-party dependencies, pure stdlib.
 Register (Claude Code):  claude mcp add -s user xfined-editor -- python <this file>
 """
 import json
+import os
 import socket
 import sys
 
 HOST, PORT = "127.0.0.1", 28016
+CONNECT_TIMEOUT_SECONDS = 20.0
+
+
+def _request_timeout_seconds() -> float:
+    raw = os.environ.get("XFINED_MCP_CLIENT_TIMEOUT_MS", os.environ.get("XFINED_MCP_REQUEST_TIMEOUT_MS", "180000"))
+    try:
+        return max(5.0, float(raw) / 1000.0 + 5.0)
+    except ValueError:
+        return 185.0
+
+
+REQUEST_TIMEOUT_SECONDS = _request_timeout_seconds()
 
 TOOLS = [
     {
@@ -178,6 +191,108 @@ TOOLS = [
         "description": "Rebuild the default panel arrangement (same as Windows > Reset Layout). Useful when the "
                        "docking layout ends up broken or level_imgui.ini was lost.",
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "xfined_theme",
+        "description": "Read or change the editor theme. action='get' reports the current and available presets; "
+                       "action='set' persists preset='xfined-purple' or 'graphite'; action='reset' restores the "
+                       "XFined Purple default. Omitting action reads the current theme.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["get", "set", "reset"]},
+                "preset": {"type": "string", "enum": ["xfined-purple", "graphite"]},
+            },
+        },
+    },
+    {
+        "name": "xfined_command_palette",
+        "description": "Search, open, close, inspect, or execute the editor command palette. action='query' returns "
+                       "the same ranked results shown by Ctrl+Shift+P. action='execute' accepts the returned numeric "
+                       "command/subcommand pair (preferred) or an exact id. Omitting action uses query when query is "
+                       "present, otherwise reports palette state.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["state", "query", "open", "close", "execute"]},
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 250},
+                "id": {"type": "string", "description": "exact id returned by query"},
+                "command": {"type": "integer", "minimum": 0},
+                "subcommand": {"type": "integer", "minimum": 0},
+            },
+        },
+    },
+    {
+        "name": "xfined_viewport_navigation",
+        "description": "Read or control the viewport camera widget. Set one of the six canonical axis views or "
+                       "return to the free perspective camera; action='frame' focuses all objects or the selection.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["get", "set", "frame"]},
+                "view": {"type": "string", "enum": ["perspective", "front", "back", "left", "right", "top", "bottom"]},
+                "scope": {"type": "string", "enum": ["all", "selection"]},
+            },
+        },
+    },
+    {
+        "name": "xfined_progress",
+        "description": "Read the editor's non-modal task center, including nested task progress and elapsed time, "
+                       "or request cooperative cancellation for a task that yields UI frames. Blocking legacy jobs "
+                       "continue reporting in the progress console. Omitting action reads state.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["get", "cancel"]},
+            },
+        },
+    },
+    {
+        "name": "xfined_property_inspector",
+        "description": "Drive the Properties or World Properties panel: read counts/filter/open state, set a search "
+                       "filter, expand or collapse all matching branches, or open/close the panel.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["get", "filter", "expand", "collapse", "open", "close"]},
+                "target": {"type": "string", "enum": ["selection", "world"]},
+                "filter": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "xfined_content_browser_navigation",
+        "description": "Inspect or drive Content Browser history, breadcrumbs, Back/Forward/Up/Home, and session "
+                       "favorite folders. Location state includes source, category, and source-relative folder.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["get", "navigate", "back", "forward", "up", "home", "favorite_add", "favorite_remove", "favorite_open"]},
+                "source": {
+                    "description": "project/editor/darf or 0/1/2",
+                    "oneOf": [
+                        {"type": "string", "enum": ["project", "editor", "darf"]},
+                        {"type": "integer", "enum": [0, 1, 2]},
+                    ],
+                },
+                "category": {
+                    "description": "editor asset category name or index",
+                    "oneOf": [
+                        {
+                            "type": "string",
+                            "enum": [
+                                "Objects", "Levels", "Groups", "Visuals", "Textures", "Textures (raw)",
+                                "Particles", "Sounds", "Entities", "Light Anims",
+                            ],
+                        },
+                        {"type": "integer", "enum": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]},
+                    ],
+                },
+                "folder": {"type": "string", "description": "source-relative folder; empty means root"},
+                "index": {"type": "integer", "minimum": 0, "description": "favorite index returned by get"},
+            },
+        },
     },
     {
         "name": "xfined_asset_preview_model",
@@ -920,6 +1035,12 @@ CMD_MAP = {
     "xfined_mod_export": "mod_export",
     "xfined_preview_model": "preview_model",
     "xfined_reset_layout": "reset_layout",
+    "xfined_theme": "theme",
+    "xfined_command_palette": "command_palette",
+    "xfined_viewport_navigation": "viewport_navigation",
+    "xfined_progress": "progress",
+    "xfined_property_inspector": "property_inspector",
+    "xfined_content_browser_navigation": "content_browser_navigation",
     "xfined_asset_preview_model": "asset_preview",
     "xfined_mod_export_spawn": "mod_export_spawn",
     "xfined_mod_export_cut": "mod_export_cut",
@@ -987,7 +1108,8 @@ def editor_call(cmd: str, extra: dict | None = None) -> dict:
     if extra:
         payload.update(extra)
     try:
-        with socket.create_connection((HOST, PORT), timeout=20) as s:
+        with socket.create_connection((HOST, PORT), timeout=CONNECT_TIMEOUT_SECONDS) as s:
+            s.settimeout(REQUEST_TIMEOUT_SECONDS)
             s.sendall((json.dumps(payload) + "\n").encode())
             buf = b""
             while not buf.endswith(b"\n"):
@@ -995,9 +1117,18 @@ def editor_call(cmd: str, extra: dict | None = None) -> dict:
                 if not chunk:
                     break
                 buf += chunk
-        return json.loads(buf.decode())
-    except (OSError, json.JSONDecodeError) as e:
+        try:
+            text = buf.decode("utf-8")
+        except UnicodeDecodeError as e:
+            return {
+                "ok": False,
+                "error": f"editor returned malformed UTF-8 at response byte {e.start}",
+            }
+        return json.loads(text)
+    except OSError as e:
         return {"ok": False, "error": f"editor not reachable on {HOST}:{PORT} ({e})"}
+    except json.JSONDecodeError as e:
+        return {"ok": False, "error": f"editor returned malformed JSON ({e})"}
 
 
 def tool_result(name: str, args: dict) -> dict:

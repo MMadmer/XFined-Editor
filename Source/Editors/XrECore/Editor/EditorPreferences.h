@@ -5,6 +5,7 @@
 //---------------------------------------------------------------------------
 // refs
 class UIPropertiesForm;
+class PropValue;
 
 //---------------------------------------------------------------------------
 enum{
@@ -29,6 +30,7 @@ public:
     u32             start_w;
     u32             start_h;
     u32             start_maximized;
+	u32				ui_theme_preset;
 	// view
     float 			view_np;
     float 			view_fp;
@@ -67,6 +69,7 @@ public:
     shared_str      sWeather;
 protected:
 	void 			OnKeyboardCommonFileClick	(ButtonValue* value, bool& bModif, bool& bSafe);
+	void			OnThemeChanged			(PropValue* value);
 	void 	        OnClose();
     void			ApplyValues();
 
@@ -86,6 +89,7 @@ public:				// User declarations
 
     void 			Load				();
     void 			Save				();
+	void			SetThemePreset			(u32 preset, bool persist = true);
     
     void 			AppendRecentFile	(LPCSTR name);
     LPCSTR 			FirstRecentFile		(){return scene_recent_list.empty()?"":scene_recent_list.front().c_str();}

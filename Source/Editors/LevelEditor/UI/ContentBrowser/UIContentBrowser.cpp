@@ -85,6 +85,9 @@ static void ToVisualName(LPCSTR path, char* dst, u32 dst_size)
 }
 
 UIContentBrowser* UIContentBrowser::Form = nullptr;
+xr_vector<UIContentBrowser::SLocation> UIContentBrowser::s_Favorites;
+xr_string UIContentBrowser::s_FavoriteProject;
+xr_string UIContentBrowser::s_FavoriteGameRoot;
 
 // filled in by the preview window when it is compiled into the build
 static UIContentBrowser::TShowVisual	s_ShowVisual	= 0;
@@ -165,6 +168,79 @@ static const u32 kThumbBudget = 512;
 // progressive - the rest shows up on the following frames / after a search.
 static const u32 kDarfThumbsPerFrame	= 16;
 static const int kDarfMaxTiles			= 2000;
+static const u32 kNavigationHistoryLimit = 64;
+
+static bool SameLocation(const UIContentBrowser::SLocation& lhs,
+	const UIContentBrowser::SLocation& rhs)
+{
+	return lhs.source == rhs.source && (lhs.source != 1 || lhs.category == rhs.category) &&
+		0 == _stricmp(lhs.folder.c_str(), rhs.folder.c_str());
+}
+
+static void RemoveScopedLocations(xr_vector<UIContentBrowser::SLocation>& locations,
+	bool remove_project, bool remove_darf)
+{
+	for (u32 i = 0; i < locations.size();)
+	{
+		const int source = locations[i].source;
+		if ((remove_project && source == 0) || (remove_darf && source == 2))
+			locations.erase(locations.begin() + i);
+		else
+			++i;
+	}
+}
+
+static bool NormalizeFolderPath(LPCSTR input, xr_string& out, xr_string& err)
+{
+	const xr_string raw = input ? input : "";
+	out.clear();
+	err.clear();
+	if (raw.empty()) return true;
+
+	xr_string part;
+	for (LPCSTR p = raw.c_str();; ++p)
+	{
+		const char ch = *p;
+		if (ch && ch != '\\' && ch != '/')
+		{
+			if (strchr(":*?\"<>|", ch))
+			{
+				err = "folder contains an invalid character";
+				return false;
+			}
+			part += ch;
+			continue;
+		}
+
+		if (!part.empty())
+		{
+			if (part == "." || part == "..")
+			{
+				err = "folder traversal is not allowed";
+				return false;
+			}
+			if (!out.empty()) out += "\\";
+			out += part;
+			part.clear();
+		}
+		if (!ch) break;
+	}
+
+	if (out.size() >= sizeof(string_path))
+	{
+		err = "folder path is too long";
+		return false;
+	}
+	return true;
+}
+
+static ImVec4 ThemeColor(XFinedTheme::ColorToken token, float alpha = 1.0f)
+{
+	const u32 rgb = XFinedTheme::Rgb(token);
+	return ImVec4(float((rgb >> 16) & 0xff) / 255.0f,
+		float((rgb >> 8) & 0xff) / 255.0f,
+		float(rgb & 0xff) / 255.0f, alpha);
+}
 
 UIContentBrowser::UIContentBrowser()
 {
@@ -256,6 +332,410 @@ int UIContentBrowser::FindCategory(LPCSTR name)
 	return -1;
 }
 
+UIContentBrowser::SLocation UIContentBrowser::CurrentLocation() const
+{
+	return SLocation(m_Source, int(m_Category), m_CurFolder.c_str());
+}
+
+void UIContentBrowser::PushHistory(xr_vector<SLocation>& history, const SLocation& location)
+{
+	if (!history.empty() && SameLocation(history.back(), location)) return;
+	if (history.size() >= kNavigationHistoryLimit) history.erase(history.begin());
+	history.push_back(location);
+}
+
+void UIContentBrowser::RememberNavigation(const SLocation& origin)
+{
+	if (SameLocation(origin, CurrentLocation())) return;
+	PushHistory(m_BackHistory, origin);
+	m_ForwardHistory.clear();
+}
+
+bool UIContentBrowser::ApplyLocation(SLocation location, bool record, xr_string& err)
+{
+	err.clear();
+	if (location.source < 0) location.source = m_Source;
+	if (location.category < 0) location.category = int(m_Category);
+	if (location.source < 0 || location.source > 2)
+	{
+		err = "source must be 0 (project), 1 (editor), or 2 (DARF)";
+		return false;
+	}
+	if (location.category < 0 || location.category >= kCategoryCount)
+	{
+		err = "asset category is out of range";
+		return false;
+	}
+	if (!NormalizeFolderPath(location.folder.c_str(), location.folder, err)) return false;
+	if (location.source == 0 && !EditorProject::Active())
+	{
+		err = "no project is open";
+		return false;
+	}
+
+	EnsureListing();
+	const SLocation origin = CurrentLocation();
+	if (SameLocation(origin, location)) return true;
+
+	const bool rebuild = location.source != m_Source || u32(location.category) != m_Category;
+	if (rebuild)
+	{
+		m_Source = location.source;
+		m_Category = u32(location.category);
+		m_NeedRefresh = true;
+		if (m_Source == 2)
+		{
+			m_DarfReady = false;
+			m_DarfStatus = "mounting the linked game install...";
+		}
+		EnsureListing();
+	}
+
+	SFolder* folder = FindFolder(location.folder.c_str());
+	if (!folder)
+	{
+		if (rebuild)
+		{
+			m_Source = origin.source;
+			m_Category = u32(origin.category);
+			m_NeedRefresh = true;
+			Refresh();
+			m_CurFolder = origin.folder;
+		}
+		err = "folder is not available in this source";
+		return false;
+	}
+
+	location.folder = folder->path;
+	if (record)
+	{
+		PushHistory(m_BackHistory, origin);
+		m_ForwardHistory.clear();
+	}
+	m_CurFolder = location.folder;
+	ClearSelection();
+	m_Rename.clear();
+	m_RenameFocus = false;
+	m_ScrollToSelection = false;
+	return true;
+}
+
+bool UIContentBrowser::GoBack(xr_string& err)
+{
+	EnsureListing();
+	const SLocation current = CurrentLocation();
+	xr_string last_error;
+	while (!m_BackHistory.empty())
+	{
+		const SLocation target = m_BackHistory.back();
+		if (ApplyLocation(target, false, err))
+		{
+			if (!m_BackHistory.empty() && SameLocation(m_BackHistory.back(), target))
+				m_BackHistory.pop_back();
+			PushHistory(m_ForwardHistory, current);
+			return true;
+		}
+		last_error = err;
+		if (!m_BackHistory.empty() && SameLocation(m_BackHistory.back(), target))
+			m_BackHistory.pop_back();
+	}
+	err = last_error.empty() ? "back history is empty" : last_error;
+	return false;
+}
+
+bool UIContentBrowser::GoForward(xr_string& err)
+{
+	EnsureListing();
+	const SLocation current = CurrentLocation();
+	xr_string last_error;
+	while (!m_ForwardHistory.empty())
+	{
+		const SLocation target = m_ForwardHistory.back();
+		if (ApplyLocation(target, false, err))
+		{
+			if (!m_ForwardHistory.empty() && SameLocation(m_ForwardHistory.back(), target))
+				m_ForwardHistory.pop_back();
+			PushHistory(m_BackHistory, current);
+			return true;
+		}
+		last_error = err;
+		if (!m_ForwardHistory.empty() && SameLocation(m_ForwardHistory.back(), target))
+			m_ForwardHistory.pop_back();
+	}
+	err = last_error.empty() ? "forward history is empty" : last_error;
+	return false;
+}
+
+bool UIContentBrowser::GoUp(xr_string& err)
+{
+	if (m_CurFolder.empty())
+	{
+		err = "already at the source root";
+		return false;
+	}
+
+	xr_string parent = m_CurFolder;
+	if (LPCSTR cut = strrchr(parent.c_str(), '\\'))
+		parent.erase(size_t(cut - parent.c_str()));
+	else
+		parent.clear();
+	return ApplyLocation(SLocation(m_Source, int(m_Category), parent.c_str()), true, err);
+}
+
+bool UIContentBrowser::GoHome(xr_string& err)
+{
+	if (m_CurFolder.empty())
+	{
+		err = "already at the source root";
+		return false;
+	}
+	return ApplyLocation(SLocation(m_Source, int(m_Category), ""), true, err);
+}
+
+void UIContentBrowser::SyncFavoriteScopes()
+{
+	LPCSTR project_root = EditorProject::Active() ? EditorProject::Root() : "";
+	LPCSTR game_root = EditorProject::GameRoot();
+	const bool project_changed = 0 != _stricmp(s_FavoriteProject.c_str(), project_root);
+	const bool game_changed = 0 != _stricmp(s_FavoriteGameRoot.c_str(), game_root);
+
+	if (project_changed || game_changed)
+		RemoveScopedLocations(s_Favorites, project_changed, project_changed || game_changed);
+
+	s_FavoriteProject = project_root;
+	s_FavoriteGameRoot = game_root;
+}
+
+void UIContentBrowser::GetHistory(SLocation& current, xr_vector<SLocation>& back,
+	xr_vector<SLocation>& forward)
+{
+	SyncFavoriteScopes();
+	if (Form)
+	{
+		Form->EnsureListing();
+		current = Form->CurrentLocation();
+		back = Form->m_BackHistory;
+		forward = Form->m_ForwardHistory;
+		return;
+	}
+	current = SLocation(-1, -1, "");
+	back.clear();
+	forward.clear();
+}
+
+bool UIContentBrowser::NavigateToFolder(int source, int category, LPCSTR folder, xr_string& err)
+{
+	Show();
+	if (!Form)
+	{
+		err = "content browser unavailable";
+		return false;
+	}
+	return Form->ApplyLocation(SLocation(source, category, folder), true, err);
+}
+
+bool UIContentBrowser::NavigateBack(xr_string& err)
+{
+	Show();
+	if (!Form) { err = "content browser unavailable"; return false; }
+	return Form->GoBack(err);
+}
+
+bool UIContentBrowser::NavigateForward(xr_string& err)
+{
+	Show();
+	if (!Form) { err = "content browser unavailable"; return false; }
+	return Form->GoForward(err);
+}
+
+bool UIContentBrowser::NavigateUp(xr_string& err)
+{
+	Show();
+	if (!Form) { err = "content browser unavailable"; return false; }
+	return Form->GoUp(err);
+}
+
+bool UIContentBrowser::NavigateHome(xr_string& err)
+{
+	Show();
+	if (!Form) { err = "content browser unavailable"; return false; }
+	return Form->GoHome(err);
+}
+
+int UIContentBrowser::FindFavorite(const SLocation& location) const
+{
+	for (u32 i = 0; i < s_Favorites.size(); ++i)
+		if (SameLocation(s_Favorites[i], location)) return int(i);
+	return -1;
+}
+
+bool UIContentBrowser::ValidateFavorite(SLocation& location, xr_string& err)
+{
+	if (location.source == m_Source &&
+		(location.source != 1 || u32(location.category) == m_Category))
+	{
+		EnsureListing();
+		SFolder* folder = FindFolder(location.folder.c_str());
+		if (!folder)
+		{
+			err = "folder is not available in this source";
+			return false;
+		}
+		location.folder = folder->path;
+		return true;
+	}
+
+	if (location.source == 0)
+	{
+		if (!EditorProject::Active())
+		{
+			err = "no project is open";
+			return false;
+		}
+		if (location.folder.empty()) return true;
+
+		xr_string top = location.folder;
+		if (const size_t cut = top.find('\\'); cut != xr_string::npos) top.erase(cut);
+		if (EditorProject::IsEditorOnlyEntry(top.c_str()))
+		{
+			err = "folder is editor-owned, not project content";
+			return false;
+		}
+
+		string_path absolute;
+		const size_t absolute_length = xr_strlen(EditorProject::Root()) + 1 + location.folder.size();
+		if (absolute_length >= sizeof(absolute))
+		{
+			err = "project favorite path is too long";
+			return false;
+		}
+		xr_sprintf(absolute, sizeof(absolute), "%s\\%s", EditorProject::Root(), location.folder.c_str());
+		const DWORD attributes = ::GetFileAttributesA(absolute);
+		if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) return true;
+		err = "folder is not available in this source";
+		return false;
+	}
+
+	if (location.source == 2)
+	{
+		xr_string mount_error;
+		if (!EditorGameContent::EnsureMounted(mount_error))
+		{
+			err = mount_error;
+			return false;
+		}
+		if (location.folder.empty()) return true;
+
+		const size_t length = location.folder.size();
+		for (int i = 0; i < EditorGameContent::Count(); ++i)
+		{
+			LPCSTR path = EditorGameContent::Get(i)->path.c_str();
+			if (xr_strlen(path) > length && 0 == _strnicmp(path, location.folder.c_str(), length) &&
+				path[length] == '\\')
+				return true;
+		}
+		err = "folder is not available in this source";
+		return false;
+	}
+
+	if (location.folder.empty()) return true;
+	ChooseItemVec items;
+	if (kCategories[location.category].id == kLevelsCategoryId)
+	{
+		FS_FileSet levels;
+		if (FS.file_list(levels, _maps_, FS_ListFiles | FS_ClampExt, "*.level"))
+			for (FS_FileSetIt it = levels.begin(); it != levels.end(); ++it)
+				items.push_back(SChooseItem(it->name.c_str(), ""));
+		xr_vector<xr_string> base;
+		EditorProject::ListBaseScenes(base);
+		for (u32 i = 0; i < base.size(); ++i) items.push_back(SChooseItem(base[i].c_str(), ""));
+	}
+	else if (SChooseEvents* events = UIChooseForm::GetEvents(kCategories[location.category].id);
+		events && events->on_fill)
+	{
+		events->on_fill(items, 0);
+	}
+
+	const size_t length = location.folder.size();
+	for (u32 i = 0; i < items.size(); ++i)
+	{
+		LPCSTR path = items[i].name.c_str();
+		if (xr_strlen(path) > length && 0 == _strnicmp(path, location.folder.c_str(), length) &&
+			path[length] == '\\')
+			return true;
+	}
+	err = "folder is not available in this source";
+	return false;
+}
+
+void UIContentBrowser::GetFavorites(xr_vector<SLocation>& out)
+{
+	SyncFavoriteScopes();
+	out = s_Favorites;
+}
+
+bool UIContentBrowser::AddFavorite(SLocation location, xr_string& err)
+{
+	Show();
+	if (!Form) { err = "content browser unavailable"; return false; }
+	Form->EnsureListing();
+	if (location.source < 0) location.source = Form->m_Source;
+	if (location.category < 0) location.category = int(Form->m_Category);
+	if (location.source < 0 || location.source > 2)
+	{
+		err = "source must be 0 (project), 1 (editor), or 2 (DARF)";
+		return false;
+	}
+	if (location.category < 0 || location.category >= kCategoryCount)
+	{
+		err = "asset category is out of range";
+		return false;
+	}
+	if (!NormalizeFolderPath(location.folder.c_str(), location.folder, err)) return false;
+	if (location.source == 0 && !EditorProject::Active())
+	{
+		err = "no project is open";
+		return false;
+	}
+	if (Form->FindFavorite(location) >= 0)
+	{
+		err = "folder is already a favorite";
+		return false;
+	}
+
+	if (!Form->ValidateFavorite(location, err)) return false;
+
+	s_Favorites.push_back(location);
+	err.clear();
+	return true;
+}
+
+bool UIContentBrowser::RemoveFavorite(int index, xr_string& err)
+{
+	SyncFavoriteScopes();
+	if (index < 0 || index >= int(s_Favorites.size()))
+	{
+		err = "favorite index is out of range";
+		return false;
+	}
+	s_Favorites.erase(s_Favorites.begin() + index);
+	err.clear();
+	return true;
+}
+
+bool UIContentBrowser::NavigateFavorite(int index, xr_string& err)
+{
+	Show();
+	SyncFavoriteScopes();
+	if (Form) Form->EnsureListing();
+	if (!Form || index < 0 || index >= int(s_Favorites.size()))
+	{
+		err = "favorite index is out of range";
+		return false;
+	}
+	return Form->ApplyLocation(s_Favorites[index], true, err);
+}
+
 void UIContentBrowser::DropCache()
 {
 	for (ThumbMapIt it = m_Thumbs.begin(); it != m_Thumbs.end(); ++it)
@@ -274,10 +754,18 @@ void UIContentBrowser::DropCache()
 //------------------------------------------------------------------------------
 // `dirs` collects the folders themselves: an empty one has no items to derive it
 // from, and a folder the user just created is empty by definition.
+static bool ContentAbsolutePathFits(LPCSTR base, size_t relative_length)
+{
+	return xr_strlen(base) + 1 + relative_length < sizeof(string_path);
+}
+
 static void ScanContentDir(const char* base, const char* rel, ChooseItemVec& out,
 						   xr_vector<xr_string>& dirs)
 {
 	char mask[MAX_PATH];
+	const size_t base_length = xr_strlen(base);
+	const size_t rel_length = xr_strlen(rel);
+	if (base_length + 1 + rel_length + (rel_length ? 1 : 0) + 1 >= sizeof(mask)) return;
 	sprintf_s(mask, "%s\\%s%s*", base, rel, rel[0] ? "\\" : "");
 	WIN32_FIND_DATAA fd;
 	HANDLE h = ::FindFirstFileA(mask, &fd);
@@ -285,6 +773,9 @@ static void ScanContentDir(const char* base, const char* rel, ChooseItemVec& out
 	do
 	{
 		if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+		const size_t sub_length = rel_length + (rel_length ? 1 : 0) + xr_strlen(fd.cFileName);
+		if (sub_length >= sizeof(string_path) || !ContentAbsolutePathFits(base, sub_length)) continue;
+		if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
 		char sub[MAX_PATH];
 		sprintf_s(sub, "%s%s%s", rel, rel[0] ? "\\" : "", fd.cFileName);
 		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
@@ -300,17 +791,35 @@ static void ScanContentDir(const char* base, const char* rel, ChooseItemVec& out
 
 void UIContentBrowser::EnsureListing()
 {
-	// A project opening, closing or changing invalidates the whole listing.
-	// Without this the panel keeps whatever it scanned first - and with
-	// -project it is drawn once BEFORE the project opens, so it kept an empty
-	// tree and every reveal answered "asset not found in this source".
-	LPCSTR root = EditorProject::Active() ? EditorProject::Root() : "";
-	if (0 != xr_strcmp(m_ListedProject.c_str(), root))
+	SyncFavoriteScopes();
+	LPCSTR project_root = EditorProject::Active() ? EditorProject::Root() : "";
+	LPCSTR game_root = EditorProject::GameRoot();
+	const bool project_changed = 0 != _stricmp(m_ListedProject.c_str(), project_root);
+	const bool game_changed = 0 != _stricmp(m_ListedGameRoot.c_str(), game_root);
+	const bool invalidate_project = project_changed;
+	const bool invalidate_darf = project_changed || game_changed;
+
+	if (project_changed || game_changed)
 	{
-		m_ListedProject	= root;
-		m_NeedRefresh	= true;
-		m_CurFolder.clear();
-		ClearSelection();
+		m_ListedProject = project_root;
+		m_ListedGameRoot = game_root;
+		RemoveScopedLocations(m_BackHistory, invalidate_project, invalidate_darf);
+		RemoveScopedLocations(m_ForwardHistory, invalidate_project, invalidate_darf);
+
+		if (invalidate_darf)
+		{
+			m_DarfReady = false;
+			m_DarfStatus = "mounting the linked game install...";
+		}
+
+		if ((m_Source == 0 && invalidate_project) || (m_Source == 2 && invalidate_darf))
+		{
+			m_NeedRefresh = true;
+			m_CurFolder.clear();
+			ClearSelection();
+			m_Rename.clear();
+			m_RenameFocus = false;
+		}
 	}
 	if (m_NeedRefresh) Refresh();
 }
@@ -333,8 +842,12 @@ void UIContentBrowser::Refresh()
 		{
 			WIN32_FIND_DATAA fd;
 			string_path mask;
-			sprintf_s(mask, "%s\\*", EditorProject::Root());
-			HANDLE h = ::FindFirstFileA(mask, &fd);
+			HANDLE h = INVALID_HANDLE_VALUE;
+			if (xr_strlen(EditorProject::Root()) + 2 < sizeof(mask))
+			{
+				sprintf_s(mask, "%s\\*", EditorProject::Root());
+				h = ::FindFirstFileA(mask, &fd);
+			}
 			if (INVALID_HANDLE_VALUE != h)
 			{
 				do
@@ -342,6 +855,8 @@ void UIContentBrowser::Refresh()
 					if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
 					// the editor's own scratch is not the author's content
 					if (EditorProject::IsEditorOnlyEntry(fd.cFileName)) continue;
+					if (!ContentAbsolutePathFits(EditorProject::Root(), xr_strlen(fd.cFileName))) continue;
+					if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
 					if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 					{
 						m_Dirs.push_back(xr_string(fd.cFileName));
@@ -427,24 +942,18 @@ void UIContentBrowser::Refresh()
 	}
 
 	BuildTree		();
+	if (!FindFolder(m_CurFolder.c_str()))
+	{
+		m_CurFolder.clear();
+		ClearSelection();
+	}
 }
 
 void UIContentBrowser::SwitchSource(int src)
 {
 	if (m_Source == src) return;
-	m_Source		= src;
-	m_CurFolder		= "";
-	ClearSelection();
-	m_NeedRefresh	= true;
-	// an open name box belongs to the tile it was opened on, which is gone now
-	m_Rename.clear();
-	m_RenameFocus	= false;
-	if (src == 2)
-	{
-		// the first mount reads every archive file table and can take a moment
-		m_DarfReady		= false;
-		m_DarfStatus	= "mounting the linked game install...";
-	}
+	xr_string err;
+	ApplyLocation(SLocation(src, int(m_Category), ""), true, err);
 }
 
 UIContentBrowser::SFolder* UIContentBrowser::EnsureFolder(LPCSTR path)
@@ -754,7 +1263,8 @@ void UIContentBrowser::DrawFolder(SFolder& f)
 	const bool open = ImGui::TreeNodeEx(f.name.c_str(), flags);
 	if (ImGui::IsItemClicked())
 	{
-		m_CurFolder = f.path;
+		xr_string err;
+		ApplyLocation(SLocation(m_Source, int(m_Category), f.path.c_str()), true, err);
 		// A folder is an entry like any other: clicking it in the tree selects
 		// it, so Delete / Copy / Rename act on it exactly as they do on a tile.
 		// The root has no path of its own and cannot be one of them.
@@ -998,7 +1508,7 @@ UIContentBrowser::SFolder* UIContentBrowser::FindFolder(LPCSTR path)
 	while (!stack.empty())
 	{
 		SFolder* f = stack.back(); stack.pop_back();
-		if (f->path == path) return f;
+		if (0 == _stricmp(f->path.c_str(), path)) return f;
 		for (u32 i = 0; i < f->children.size(); ++i) stack.push_back(&f->children[i]);
 	}
 	return 0;
@@ -1065,10 +1575,8 @@ void UIContentBrowser::DrawTiles()
 			// than either rule on its own
 			if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 			{
-				LPCSTR cut = strrchr(m_CurFolder.c_str(), '\\');
-				if (cut)	m_CurFolder.erase(size_t(cut - m_CurFolder.c_str()));
-				else		m_CurFolder.clear();
-				ClearSelection();
+				xr_string err;
+				GoUp(err);
 			}
 			if (ImGui::IsItemHovered()) ImGui::SetTooltip("up one folder (double click)");
 			ImGui::PopID();
@@ -1096,8 +1604,9 @@ void UIContentBrowser::DrawTiles()
 
 			// folders read as folders through colour: there is no icon atlas here.
 			// Selected (or being renamed) is lit up.
-			ImGui::PushStyleColor(ImGuiCol_Button, (sel || renaming) ? ImVec4(0.46f, 0.41f, 0.20f, 1.f)
-																	: ImVec4(0.30f, 0.27f, 0.14f, 1.f));
+			ImGui::PushStyleColor(ImGuiCol_Button,
+				ThemeColor((sel || renaming) ? XFinedTheme::ColorToken::Accent
+					: XFinedTheme::ColorToken::Input));
 			ImGui::Button("[ ]", ImVec2(tile_w, tile_w));
 			ImGui::PopStyleColor();
 
@@ -1125,8 +1634,8 @@ void UIContentBrowser::DrawTiles()
 					if (as_level)	OpenAsset(sub.path.c_str());
 					else
 					{
-						m_CurFolder = sub.path;
-						ClearSelection();
+						xr_string err;
+						ApplyLocation(SLocation(m_Source, int(m_Category), sub.path.c_str()), true, err);
 					}
 				}
 				if (!renaming)
@@ -1340,7 +1849,11 @@ void UIContentBrowser::DrawEntryContextMenu(LPCSTR path, bool folder)
 
 	if (ImGui::MenuItem("Open"))
 	{
-		if (folder)	{ m_CurFolder = path; ClearSelection(); }
+		if (folder)
+		{
+			xr_string err;
+			ApplyLocation(SLocation(m_Source, int(m_Category), path), true, err);
+		}
 		else		OpenAsset(path);
 	}
 
@@ -1469,6 +1982,7 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 	if (!name || !name[0])	{ err = "empty asset name"; return false; }
 	Show();									// the panel has to exist to show anything
 	if (!Form)				{ err = "content browser unavailable"; return false; }
+	const SLocation origin = Form->CurrentLocation();
 
 	if (source >= 0 && source <= 2 && source != Form->m_Source)
 		Form->SwitchSource(source);
@@ -1492,15 +2006,22 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 		if (const size_t n = xr_strlen(folder); n && folder[n - 1] == '\\') folder[n - 1] = 0;
 		if (Form->FindFolder(folder))
 		{
-			Form->m_CurFolder	= folder;
+			xr_string nav_err;
+			if (!Form->ApplyLocation(SLocation(Form->m_Source, int(Form->m_Category), folder), false, nav_err))
+			{
+				err = nav_err;
+				return false;
+			}
+			Form->RememberNavigation(origin);
 			Form->m_Filter.Clear();
 			Form->m_Selection.clear();
-			Form->m_Anchor		= SEntry(folder, true);
+			Form->m_Selection.push_back(SEntry(Form->m_CurFolder.c_str(), true));
+			Form->m_Anchor		= Form->m_Selection.back();
 			Form->m_HasAnchor	= true;
 			Form->m_ScrollToSelection = true;
 			// a game level is a folder on disk but a level to open
-			if (open_viewer && Form->IsGameLevelEntry(folder))
-				return Form->OpenAsset(folder, &err);
+			if (open_viewer && Form->IsGameLevelEntry(Form->m_CurFolder.c_str()))
+				return Form->OpenAsset(Form->m_CurFolder.c_str(), &err);
 			return true;
 		}
 	}
@@ -1511,10 +2032,16 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 	// that is plainly there.
 	if (found < 0 && 1 == Form->m_Source)
 	{
-		const u32 was = Form->m_Category;
+		const SLocation sweep_location = Form->CurrentLocation();
+		const xr_vector<SEntry> sweep_selection = Form->m_Selection;
+		const SEntry sweep_anchor = Form->m_Anchor;
+		const SEntry sweep_pending_range = Form->m_PendingRange;
+		const bool sweep_has_anchor = Form->m_HasAnchor;
+		const bool sweep_has_pending_range = Form->m_HasPendingRange;
+		const bool sweep_scroll_to_selection = Form->m_ScrollToSelection;
 		for (int c = 0; c < kCategoryCount && found < 0; ++c)
 		{
-			if (u32(c) == was)	continue;
+			if (c == sweep_location.category)	continue;
 			Form->m_Category	= u32(c);
 			Form->m_CurFolder	= "";
 			Form->Refresh		();
@@ -1523,8 +2050,16 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 		}
 		if (found < 0)
 		{
-			Form->m_Category = was;
+			Form->m_Source = sweep_location.source;
+			Form->m_Category = u32(sweep_location.category);
+			Form->m_CurFolder = sweep_location.folder;
 			Form->Refresh();
+			Form->m_Selection = sweep_selection;
+			Form->m_Anchor = sweep_anchor;
+			Form->m_PendingRange = sweep_pending_range;
+			Form->m_HasAnchor = sweep_has_anchor;
+			Form->m_HasPendingRange = sweep_has_pending_range;
+			Form->m_ScrollToSelection = sweep_scroll_to_selection;
 		}
 	}
 
@@ -1535,12 +2070,21 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 	}
 
 	// navigate to the folder that holds it, clear any search that would hide it
-	LPCSTR	cut = strrchr(name, '\\');
-	Form->m_CurFolder	= cut ? xr_string(name).substr(0, size_t(cut - name)) : xr_string("");
+	const xr_string found_name = Form->m_Items[found].name.c_str();
+	LPCSTR	cut = strrchr(found_name.c_str(), '\\');
+	const xr_string target_folder = cut ? found_name.substr(0, size_t(cut - found_name.c_str())) : xr_string("");
+	xr_string nav_err;
+	if (!Form->ApplyLocation(SLocation(Form->m_Source, int(Form->m_Category), target_folder.c_str()),
+		false, nav_err))
+	{
+		err = nav_err;
+		return false;
+	}
+	Form->RememberNavigation(origin);
 	Form->m_Filter.Clear();
 
 	Form->m_Selection.clear();
-	Form->m_Selection.push_back(SEntry(name, false));
+	Form->m_Selection.push_back(SEntry(found_name.c_str(), false));
 	Form->m_Anchor		= Form->m_Selection.back();
 	Form->m_HasAnchor	= true;
 	// selecting it is only half a reveal - the next frame brings it into view
@@ -1548,7 +2092,7 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 
 	// the reveal itself succeeded; a viewer that will not open is worth saying
 	// out loud rather than reporting a bare ok
-	if (open_viewer) return Form->OpenAsset(name, &err);
+	if (open_viewer) return Form->OpenAsset(found_name.c_str(), &err);
 	return true;
 }
 
@@ -1577,17 +2121,16 @@ bool UIContentBrowser::McpCopyToProject(LPCSTR names, LPCSTR folder, LPCSTR dst,
 
 	if (!Form) Form = xr_new<UIContentBrowser>();
 
-	if (source >= 0 && source != Form->m_Source)	Form->SwitchSource(source);
-	if (category >= 0)
+	const int target_source = source >= 0 ? source : Form->m_Source;
+	const int target_category = category >= 0 ? category : int(Form->m_Category);
+	if (target_category >= kCategoryCount)
 	{
-		if (category >= kCategoryCount)	{ err = "unknown category"; return false; }
-		if (u32(category) != Form->m_Category)
-		{
-			Form->m_Category	= u32(category);
-			Form->m_CurFolder	= "";
-			Form->m_NeedRefresh	= true;
-		}
+		err = "unknown category";
+		return false;
 	}
+	if ((target_source != Form->m_Source || u32(target_category) != Form->m_Category) &&
+		!Form->ApplyLocation(SLocation(target_source, target_category, ""), true, err))
+		return false;
 	if (Form->m_Source == 0)	{ err = "the project's own Content is a destination, not a source"; return false; }
 
 	// the listing has to be current: the tree is what turns a folder into the
@@ -2106,8 +2649,18 @@ void UIContentBrowser::HandleShortcuts()
 	// only when this panel owns the keyboard, or Ctrl+C in the viewport would
 	// end up copying assets
 	if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) return;
+	if (UI) UI->BlockShortCuts();
+	if (ImGui::IsAnyItemActive()) return;
 
 	const ImGuiIO& io = ImGui::GetIO();
+	if (io.KeyAlt)
+	{
+		xr_string err;
+		if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) GoBack(err);
+		if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) GoForward(err);
+		if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, false)) GoUp(err);
+		if (ImGui::IsKeyPressed(ImGuiKey_Home, false)) GoHome(err);
+	}
 
 	// Delete carries no modifier, and F2 renames whatever single entry is
 	// selected - both belong outside the Ctrl gate below
@@ -2414,8 +2967,17 @@ void UIContentBrowser::CommitRename()
 	xr_string now(parent);
 	if (!now.empty()) now += "\\";
 	now += s;
-	if (0 == strncmp(m_CurFolder.c_str(), was.c_str(), was.size()))
+	if (PathIsAncestor(was, m_CurFolder))
 		m_CurFolder = now + (m_CurFolder.c_str() + was.size());
+
+	auto rewrite_location = [&](SLocation& location)
+	{
+		if (location.source != 0 || !PathIsAncestor(was, location.folder)) return;
+		location.folder = now + (location.folder.c_str() + was.size());
+	};
+	for (u32 i = 0; i < m_BackHistory.size(); ++i) rewrite_location(m_BackHistory[i]);
+	for (u32 i = 0; i < m_ForwardHistory.size(); ++i) rewrite_location(m_ForwardHistory[i]);
+	for (u32 i = 0; i < s_Favorites.size(); ++i) rewrite_location(s_Favorites[i]);
 
 	m_NeedRefresh = true;
 }
@@ -2470,6 +3032,161 @@ void UIContentBrowser::DrawSplitter(float height)
 	ImGui::SameLine(0.f, 0.f);
 }
 
+static LPCSTR BrowserSourceName(int source)
+{
+	switch (source)
+	{
+	case 0: return "Content";
+	case 1: return "Editor Content";
+	case 2: return "DARF Content";
+	default: return "Unknown";
+	}
+}
+
+void UIContentBrowser::DrawBreadcrumbs()
+{
+	xr_string err;
+	xr_string requested;
+	bool navigate = false;
+	const bool at_root = m_CurFolder.empty();
+	if (at_root) ImGui::PushStyleColor(ImGuiCol_Button, ThemeColor(XFinedTheme::ColorToken::Accent));
+	if (ImGui::SmallButton(BrowserSourceName(m_Source))) navigate = true;
+	if (at_root) ImGui::PopStyleColor();
+
+	xr_string path;
+	LPCSTR begin = m_CurFolder.c_str();
+	while (begin && begin[0])
+	{
+		LPCSTR cut = strchr(begin, '\\');
+		const size_t length = cut ? size_t(cut - begin) : xr_strlen(begin);
+		xr_string part;
+		part.assign(begin, length);
+		if (!path.empty()) path += "\\";
+		path += part;
+
+		ImGui::SameLine(0.0f, 5.0f);
+		ImGui::TextDisabled(">");
+		ImGui::SameLine(0.0f, 5.0f);
+		ImGui::PushID(path.c_str());
+		const bool current = 0 == _stricmp(path.c_str(), m_CurFolder.c_str());
+		if (current) ImGui::PushStyleColor(ImGuiCol_Button, ThemeColor(XFinedTheme::ColorToken::Accent));
+		if (ImGui::SmallButton(part.c_str()))
+		{
+			requested = path;
+			navigate = true;
+		}
+		if (current) ImGui::PopStyleColor();
+		ImGui::PopID();
+		if (!cut) break;
+		begin = cut + 1;
+	}
+	if (navigate)
+		ApplyLocation(SLocation(m_Source, int(m_Category), requested.c_str()), true, err);
+}
+
+void UIContentBrowser::DrawFavoritesPopup()
+{
+	if (!ImGui::BeginPopup("cb_favorites")) return;
+
+	ImGui::TextColored(ThemeColor(XFinedTheme::ColorToken::Accent), "Favorite folders");
+	ImGui::Separator();
+	if (s_Favorites.empty())
+		ImGui::TextDisabled("No favorites in this session");
+
+	for (u32 i = 0; i < s_Favorites.size(); ++i)
+	{
+		const SLocation favorite = s_Favorites[i];
+		xr_string label = BrowserSourceName(favorite.source);
+		if (favorite.source == 1)
+		{
+			label += " / ";
+			label += CategoryName(favorite.category);
+		}
+		if (!favorite.folder.empty())
+		{
+			label += " / ";
+			label += favorite.folder;
+		}
+
+		ImGui::PushID(int(i));
+		const float remove_width = ImGui::GetFrameHeight();
+		const float row_width = ImGui::GetContentRegionAvail().x - remove_width - ImGui::GetStyle().ItemSpacing.x;
+		if (ImGui::Selectable(label.c_str(), SameLocation(favorite, CurrentLocation()),
+			ImGuiSelectableFlags_None, ImVec2(row_width > 80.0f ? row_width : 80.0f, 0.0f)))
+		{
+			xr_string err;
+			if (!ApplyLocation(favorite, true, err))
+				ELog.Msg(mtError, "Cannot open favorite: %s", err.c_str());
+			else
+				ImGui::CloseCurrentPopup();
+			ImGui::PopID();
+			break;
+		}
+		ImGui::SameLine();
+		if (ImGui::SmallButton("x"))
+		{
+			s_Favorites.erase(s_Favorites.begin() + i);
+			ImGui::PopID();
+			break;
+		}
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove favorite");
+		ImGui::PopID();
+	}
+
+	ImGui::EndPopup();
+}
+
+void UIContentBrowser::DrawNavigationBar()
+{
+	ImGui::PushID("cb_navigation");
+	xr_string err;
+	ImGui::BeginDisabled(m_BackHistory.empty());
+	if (ImGui::SmallButton("<")) GoBack(err);
+	ImGui::EndDisabled();
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Back (Alt+Left)");
+
+	ImGui::SameLine();
+	ImGui::BeginDisabled(m_ForwardHistory.empty());
+	if (ImGui::SmallButton(">")) GoForward(err);
+	ImGui::EndDisabled();
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Forward (Alt+Right)");
+
+	ImGui::SameLine();
+	ImGui::BeginDisabled(m_CurFolder.empty());
+	if (ImGui::SmallButton("Up")) GoUp(err);
+	ImGui::EndDisabled();
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Parent folder (Alt+Up)");
+
+	ImGui::SameLine();
+	ImGui::BeginDisabled(m_CurFolder.empty());
+	if (ImGui::SmallButton("Home")) GoHome(err);
+	ImGui::EndDisabled();
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Source root (Alt+Home)");
+
+	const int favorite = FindFavorite(CurrentLocation());
+	const bool can_favorite = favorite >= 0 || m_Source != 0 || EditorProject::Active();
+	ImGui::SameLine(0.0f, 10.0f);
+	ImGui::BeginDisabled(!can_favorite);
+	if (ImGui::SmallButton(favorite >= 0 ? "Unfavorite" : "Favorite"))
+	{
+		if (favorite >= 0)
+			s_Favorites.erase(s_Favorites.begin() + favorite);
+		else if (!AddFavorite(CurrentLocation(), err))
+			ELog.Msg(mtError, "Cannot add favorite: %s", err.c_str());
+	}
+	ImGui::EndDisabled();
+	if (!can_favorite && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		ImGui::SetTooltip("Open a project first");
+
+	ImGui::SameLine();
+	if (ImGui::SmallButton("Favorites...")) ImGui::OpenPopup("cb_favorites");
+	DrawFavoritesPopup();
+
+	ImGui::SameLine(0.0f, 14.0f);
+	DrawBreadcrumbs();
+	ImGui::PopID();
+}
+
 void UIContentBrowser::Draw()
 {
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(420, 260));
@@ -2502,10 +3219,8 @@ void UIContentBrowser::Draw()
 			for (int i = 0; i < kCategoryCount; ++i)
 				if (ImGui::Selectable(kCategories[i].caption, m_Category == (u32)i))
 				{
-					m_Category		= i;
-					m_CurFolder		= "";
-					ClearSelection();
-					m_NeedRefresh	= true;
+					xr_string err;
+					ApplyLocation(SLocation(1, i, ""), true, err);
 				}
 			ImGui::EndCombo();
 		}
@@ -2523,7 +3238,7 @@ void UIContentBrowser::Draw()
 	if (IsReadOnlySource())
 	{
 		ImGui::SameLine(0, 16);
-		ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "READ ONLY");
+		ImGui::TextColored(ThemeColor(XFinedTheme::ColorToken::Warning), "READ ONLY");
 		if (ImGui::IsItemHovered())
 			ImGui::SetTooltip("nothing here is ever modified: browse, preview, and Copy out of it");
 	}
@@ -2538,6 +3253,8 @@ void UIContentBrowser::Draw()
 		ImGui::TextDisabled("| %d on the clipboard%s", int(m_Clipboard.size()), m_ClipCut ? " (cut)" : "");
 	}
 
+	ImGui::Separator();
+	DrawNavigationBar();
 	ImGui::Separator();
 
 	// no project / no game link: one explaining line instead of an empty tree.

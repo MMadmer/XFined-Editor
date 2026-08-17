@@ -19,6 +19,8 @@
 #include "UIImageEditorForm.h"
 #include "UISoundEditorForm.h"
 #include "UIMinimapEditorForm.h"
+#include "UI_CommandPalette.h"
+#include "UI_ProgressCenter.h"
 #include "..\XrETools\ETools.h"
 #include "UILogForm.h"
 #include "gamefont.h"
@@ -28,6 +30,7 @@ TUI* 	UI			= 0;
 TUI::TUI()
 {
     m_HConsole = 0;
+	m_ProgressOwnsConsole = false;
 	UI				= this;
     m_AppClosed = false;
     m_bAppActive 	= false;
@@ -630,7 +633,8 @@ void TUI::OnFrame()
 
 	// show hint
     ShowObjectHint		();
-	ResetBreak			();
+	if (m_ProgressItems.empty())
+		ResetBreak();
 #if 0
 	// check mail
     CheckMailslot		();
@@ -780,16 +784,17 @@ static void XFinedBrandConsole()
 SPBItem* TUI::ProgressStart		(float max_val, LPCSTR text)
 {
 	VERIFY(m_bReady);
+	if (m_ProgressItems.empty())
+	{
+		ResetBreak();
+		m_ProgressOwnsConsole = !m_HConsole;
+		if (m_ProgressOwnsConsole)
+			ShowConsole();
+	}
 	SPBItem* item 				= xr_new<SPBItem>(text,"",max_val);
     m_ProgressItems.push_back	(item);
-    ELog.Msg					(mtInformation,text);
+    ELog.Msg					(mtInformation, "%s", item->text.c_str());
     ProgressDraw				();
-    if (!m_HConsole)
-    {
-        AllocConsole();
-        m_HConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        XFinedBrandConsole();
-    }
 	return item;
 }
 void TUI::ProgressEnd			(SPBItem*& pbi)
@@ -797,33 +802,52 @@ void TUI::ProgressEnd			(SPBItem*& pbi)
 	VERIFY(m_bReady);
     if (pbi){
         PBVecIt it=std::find(m_ProgressItems.begin(),m_ProgressItems.end(),pbi); VERIFY(it!=m_ProgressItems.end());
+		const u64 elapsed_ms = ::GetTickCount64() - pbi->started_at_ms;
+		if (elapsed_ms >= 500)
+		{
+			xr_string elapsed;
+			UIProgressCenter::FormatElapsed(elapsed_ms, elapsed);
+			ELog.Msg(mtInformation, "%s finished in %s.", pbi->text.c_str(), elapsed.c_str());
+		}
         m_ProgressItems.erase	(it);
         xr_delete				(pbi);
         ProgressDraw			();
-        if (m_ProgressItems.size() == 0)
-        {
-            FreeConsole();
-            m_HConsole = 0;
-        }
+		if (m_ProgressItems.empty())
+		{
+			ResetBreak();
+			if (m_ProgressOwnsConsole)
+				CloseConsole();
+			m_ProgressOwnsConsole = false;
+		}
     }
 }
 
 void TUI::ProgressDraw()
 {
-    SPBItem* pbi = UI->ProgressLast();
-    if (pbi) 
-    {
-        xr_string txt;
-        float 		p, m;
-        pbi->GetInfo(txt, p, m);
-        // progress
-        int val = fis_zero(m) ? 0 : (int)((p / m) * 100);
-        string2048 out;
-        xr_sprintf(out,"[%d%%]%s\r\n", val, txt.c_str());
-        DWORD  dw;
-        SetConsoleTextAttribute(m_HConsole, 10);
-        ::WriteConsole(m_HConsole, out, xr_strlen(out), &dw, NULL);
-    }
+	if (!m_ProgressItems.empty())
+		RedrawScene();
+}
+
+void TUI::GetProgressSnapshot(SProgressTaskInfoVec& result) const
+{
+	result.clear();
+	result.reserve(m_ProgressItems.size());
+	const u64 now = ::GetTickCount64();
+	for (u32 i = 0; i < m_ProgressItems.size(); ++i)
+	{
+		const SPBItem& item = *m_ProgressItems[i];
+		SProgressTaskInfo task;
+		task.text = item.text.c_str();
+		task.detail = item.info.c_str();
+		task.current = item.progress;
+		task.total = item.max;
+		task.determinate = item.max > EPS_S;
+		task.fraction = task.determinate ? clampr(item.progress / item.max, 0.f, 1.f) : 0.f;
+		task.elapsed_ms = now - item.started_at_ms;
+		task.depth = i;
+		task.cancel_requested = bNeedAbort;
+		result.push_back(std::move(task));
+	}
 }
 
 void TUI::ShowConsole()
@@ -881,6 +905,8 @@ void TUI::OnDrawUI()
     UIMinimapEditorForm::Update();
     UILogForm::Update();
     EDevice->seqDrawUI.Process(rp_DrawUI);
+	CommandPalette::Draw();
+	UIProgressCenter::Draw(*this);
 }
 
 void TUI::RealResetUI()
@@ -898,6 +924,13 @@ void TUI::OnStats(CGameFont* font)
 {
 }
 
+SPBItem::SPBItem(LPCSTR txt, LPCSTR inf, float mx) :
+	text(txt ? txt : ""), info(inf ? inf : ""), max(mx), progress(0.f),
+	started_at_ms(::GetTickCount64()), last_publish_ms(0), last_log_ms(0),
+	last_publish_percent(-1), last_log_percent(-1)
+{
+}
+
 void SPBItem::GetInfo			(xr_string& txt, float& p, float& m)
 {
     if (info.size())txt.sprintf("%s (%s)",text.c_str(),info.c_str());
@@ -907,23 +940,77 @@ void SPBItem::GetInfo			(xr_string& txt, float& p, float& m)
 }  
 void SPBItem::Inc				(LPCSTR info, bool bWarn)
 {
-    Info						(info,bWarn);
-    Update						(progress+1.f);
+	if (info && info[0])
+		this->info = info;
+	progress += 1.f;
+	Publish(bWarn, bWarn);
 }
 void SPBItem::Update			(float val)
 {
     progress					= val;
-    UI->ProgressDraw			();
+	Publish(false, false);
 }
 void SPBItem::Info				(LPCSTR text, bool bWarn)
 {
 	if (text&&text[0]){
     	info					= text;
-        xr_string 				txt;
-        float 					p,m;
-        GetInfo					(txt,p,m);
-	    ELog.Msg				(bWarn?mtError:mtInformation,txt.c_str());
-	    UI->ProgressDraw		();
+		Publish(bWarn, bWarn);
     }
+}
+
+s32 SPBItem::Percent() const
+{
+	if (max <= EPS_S)
+		return 0;
+	return iFloor(clampr(progress / max, 0.f, 1.f) * 100.f);
+}
+
+void SPBItem::Publish(bool force, bool warning)
+{
+	const u64 now = ::GetTickCount64();
+	const s32 percent = Percent();
+	const bool finished = max > EPS_S && progress >= max && last_publish_percent != 100;
+	const bool percentage_changed = percent != last_publish_percent;
+	const bool draw_due = force || finished || last_publish_ms == 0 ||
+		(percentage_changed && now - last_publish_ms >= 50);
+	if (draw_due)
+	{
+		last_publish_ms = now;
+		last_publish_percent = percent;
+		if (UI)
+			UI->ProgressDraw();
+	}
+
+	xr_string label;
+	float current = 0.f;
+	float total = 0.f;
+	GetInfo(label, current, total);
+	xr_string message;
+	if (max > EPS_S)
+		message.sprintf("[%d%%] %s", percent, label.c_str());
+	else
+		message = label;
+	if (warning)
+	{
+		ELog.Msg(mtError, "%s", message.c_str());
+		last_log_ms = now;
+		last_log_percent = percent;
+		last_logged_info = info;
+		return;
+	}
+
+	const bool detail_changed = last_logged_info != info;
+	const bool first_detail = detail_changed && !last_logged_info.size() && info.size();
+	const bool progress_due = percentage_changed && percent - last_log_percent >= 10 &&
+		(last_log_ms == 0 || now - last_log_ms >= 500);
+	const bool time_due = percentage_changed && last_log_ms && now - last_log_ms >= 2000;
+	const bool log_due = first_detail || finished || progress_due || time_due;
+	if (log_due)
+	{
+		ELog.Msg(mtInformation, "%s", message.c_str());
+		last_log_ms = now;
+		last_log_percent = percent;
+		last_logged_info = info;
+	}
 }
 
