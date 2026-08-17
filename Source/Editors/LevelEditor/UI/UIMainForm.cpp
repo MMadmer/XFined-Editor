@@ -144,14 +144,20 @@ void UIMainForm::DropAsset(LPCSTR name)
 // Swap pSettings for the linked game's configs, then rebuild everything that
 // cached the old ones: the server-entity factory (its statics parse actor
 // profiles out of pSettings) and the Spawn tool's class roster. Runs once
-// per link fingerprint; scene entities are not touched, because this fires
-// before the pending scene of a fresh link ever loads.
+// per project/link context. Context switches are rejected while scene objects
+// are live, so replacing the factory cannot invalidate their entity classes.
 static void SyncGameConfigs()
 {
     static xr_string s_active;
+    static xr_string s_active_context;
     if (!EditorProject::Active() || !EditorProject::GameLinked())
         return;
-    if (s_active.size() && s_active == EditorGameConfigs::ActiveFingerprint())
+
+    xr_string desired_context = EditorProject::Root();
+    desired_context += "|";
+    desired_context += EditorProject::GameRoot();
+    if (s_active_context == desired_context && s_active.size() &&
+        s_active == EditorGameConfigs::ActiveFingerprint())
         return;
 
     xr_string err;
@@ -176,6 +182,7 @@ static void SyncGameConfigs()
         tool->RefreshClasses();
 
     s_active = EditorGameConfigs::ActiveFingerprint();
+    s_active_context = desired_context;
 }
 
 void UIMainForm::Draw()
@@ -206,6 +213,8 @@ void UIMainForm::Draw()
 
 bool UIMainForm::Frame()
 {
+    // Idle pumps MCP before drawing, so linked configs must be ready before a remote scene load.
+    SyncGameConfigs();
     if(UI)  return UI->Idle();
     return false;
 }

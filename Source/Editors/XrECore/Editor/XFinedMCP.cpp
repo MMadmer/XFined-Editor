@@ -785,11 +785,14 @@ static void Execute(SMCPRequest& r)
 				r.response = "{\"ok\":true,\"note\":\"already open\"}";
 			else
 			{
-				if (EditorProject::Active()) EditorProject::Close();
 				if (EditorProject::Open(path))
 					r.response = "{\"ok\":true}";
 				else
-					r.response = "{\"ok\":false,\"error\":\"can't open project (missing folder?)\"}";
+				{
+					r.response = "{\"ok\":false,\"error\":\"";
+					r.response += EditorProject::OpenError()[0] ? EditorProject::OpenError() : "can't open project";
+					r.response += "\"}";
+				}
 			}
 		}
 	}

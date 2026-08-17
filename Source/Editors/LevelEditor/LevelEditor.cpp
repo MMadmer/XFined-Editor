@@ -45,6 +45,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
     Scene = xr_new<EScene>();
     EditorScene = Scene;
+    EditorProject::SetLiveSceneQuery([]
+    {
+        return Scene && (Scene->ObjCount() || Scene->IsUnsaved() || Scene->IsModified());
+    });
     UIMainForm* MainForm = xr_new< UIMainForm>();
     pApp = xr_new<XRayEditor>();
     g_XrGameManager = xr_new<XrGameManager>();
@@ -62,6 +66,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     {
     }
 	xr_delete(MainForm);
+    EditorProject::SetLiveSceneQuery(nullptr);
 	xr_delete(pApp);
 	xr_delete(g_XrGameManager);
 	xr_delete(g_SEFactoryManager);

@@ -50,6 +50,8 @@ static char				s_NewName[64]		= {};
 static char				s_PendingScene[MAX_PATH] = {};
 // tile previews outlive Open() by one frame - the click happens mid-draw
 static bool				s_ReleasePreviewsPending = false;
+static EditorProject::TLiveSceneQuery s_LiveSceneQuery = 0;
+static char				s_OpenError[256]		= {};
 // ---- linked game install ----------------------------------------------------
 static char				s_GameRoot[MAX_PATH]	= {};	// [project] game_root
 static char				s_LinkError[256]		= {};	// last LinkGame() failure
@@ -119,6 +121,31 @@ static bool DirExists(const char* p)
 {
 	DWORD a = ::GetFileAttributesA(p);
 	return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+static bool SamePath(LPCSTR left, LPCSTR right)
+{
+	if (!left || !right || !left[0] || !right[0]) return false;
+
+	string_path normalized_left = {};
+	string_path normalized_right = {};
+	const DWORD left_size = ::GetFullPathNameA(left, sizeof(normalized_left), normalized_left, NULL);
+	const DWORD right_size = ::GetFullPathNameA(right, sizeof(normalized_right), normalized_right, NULL);
+	if (!left_size || left_size >= sizeof(normalized_left) || !right_size || right_size >= sizeof(normalized_right))
+		return false;
+
+	for (char* p = normalized_left; *p; ++p) if (*p == '/') *p = '\\';
+	for (char* p = normalized_right; *p; ++p) if (*p == '/') *p = '\\';
+	while (xr_strlen(normalized_left) > 3 && normalized_left[xr_strlen(normalized_left) - 1] == '\\')
+		normalized_left[xr_strlen(normalized_left) - 1] = 0;
+	while (xr_strlen(normalized_right) > 3 && normalized_right[xr_strlen(normalized_right) - 1] == '\\')
+		normalized_right[xr_strlen(normalized_right) - 1] = 0;
+	return 0 == _stricmp(normalized_left, normalized_right);
+}
+
+static bool HasLiveScene()
+{
+	return s_LiveSceneQuery && s_LiveSceneQuery();
 }
 
 bool EditorProject::PickFolder(char* dest, u32 dest_size, const wchar_t* title)
@@ -247,6 +274,7 @@ void EditorProject::SaveManifest()
 //------------------------------------------------------------------------------
 LPCSTR	EditorProject::GameRoot()	{ return s_GameRoot; }
 LPCSTR	EditorProject::LinkError()	{ return s_LinkError; }
+void EditorProject::SetLiveSceneQuery(TLiveSceneQuery query) { s_LiveSceneQuery = query; }
 
 bool EditorProject::GameLinked()
 {
@@ -276,6 +304,18 @@ bool EditorProject::LinkGame(LPCSTR folder)
 	for (char* p = clean; *p; ++p) if (*p == '/') *p = '\\';
 	while (clean[0] && clean[xr_strlen(clean)-1] == '\\')
 		clean[xr_strlen(clean)-1] = 0;
+	if (SamePath(s_GameRoot, clean))
+	{
+		xr_string reason;
+		if (EditorGameContent::LooksLikeGame(clean, reason)) return true;
+		strncpy_s(s_LinkError, sizeof(s_LinkError), reason.c_str(), _TRUNCATE);
+		return false;
+	}
+	if (HasLiveScene())
+	{
+		strcpy_s(s_LinkError, "close or clear the current scene before linking a different game");
+		return false;
+	}
 
 	xr_string reason;
 	if (!EditorGameContent::LooksLikeGame(clean, reason))
@@ -284,16 +324,16 @@ bool EditorProject::LinkGame(LPCSTR folder)
 		return false;
 	}
 
-	strcpy_s(s_GameRoot, clean);
-	s_LinkFresh = false;
-	SaveManifest();
-
 	xr_string err;
-	if (!EditorGameContent::Mount(s_GameRoot, err))
+	if (!EditorGameContent::Mount(clean, err))
 	{
 		strncpy_s(s_LinkError, sizeof(s_LinkError), err.c_str(), _TRUNCATE);
 		return false;
 	}
+
+	strcpy_s(s_GameRoot, clean);
+	s_LinkFresh = false;
+	SaveManifest();
 
 	Msg("* Game linked: %s", s_GameRoot);
 	return true;
@@ -405,7 +445,19 @@ void EditorProject::Unmount()
 //------------------------------------------------------------------------------
 bool EditorProject::Open(LPCSTR folder)
 {
-	if (!folder || !DirExists(folder)) return false;
+	s_OpenError[0] = 0;
+	if (!folder || !DirExists(folder))
+	{
+		strcpy_s(s_OpenError, "project folder does not exist");
+		return false;
+	}
+	if (s_Active && SamePath(s_Project, folder)) return true;
+	if (s_Active && HasLiveScene())
+	{
+		strcpy_s(s_OpenError, "close or clear the current scene before switching projects");
+		return false;
+	}
+	if (s_Active) Close();
 	ResolveAppRoot();
 
 	xr_strcpy(s_Project, folder);
@@ -436,6 +488,8 @@ bool EditorProject::Open(LPCSTR folder)
 	Msg("* Project opened: %s", s_Project);
 	return true;
 }
+
+LPCSTR EditorProject::OpenError() { return s_OpenError; }
 
 void EditorProject::ListRecentJson(xr_string& out)
 {

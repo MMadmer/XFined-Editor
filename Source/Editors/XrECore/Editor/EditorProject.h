@@ -15,6 +15,8 @@
 class ECORE_API EditorProject
 {
 public:
+	using TLiveSceneQuery = bool (*)();
+
 	static bool		Active				();
 	static LPCSTR	Root				();		// project folder, no trailing slash
 	static LPCSTR	Name				();
@@ -51,9 +53,12 @@ public:
 	static bool		DrawGameLink		();
 	// MCP: report the link, or set it when the request carries a 'path'
 	static void		McpGameLink			(LPCSTR raw, xr_string& out);
+	// The host editor owns the concrete scene type; XrECore only asks whether a context switch is safe.
+	static void		SetLiveSceneQuery	(TLiveSceneQuery query);
 
 	// opens an existing project folder (must hold project.ltx unless create)
 	static bool		Open				(LPCSTR folder);
+	static LPCSTR	OpenError			();
 	// creates <parent>\<name> (latin letters, digits, _ and - only) and opens it
 	static bool		Create				(LPCSTR parent, LPCSTR name);
 	// captures preview, stores last scene, unmounts and re-opens the browser
