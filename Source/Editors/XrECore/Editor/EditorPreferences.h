@@ -18,8 +18,8 @@ enum{
     epoShowHint			= (1<<6),
     epoDrawLOD			= (1<<7),
     epoDiscardInstance	= (1<<8),
-    epoDeffLoadRB		= (1<<9),
-    epoDeffLoadCF		= (1<<10),
+    epoEagerLoadRenderBuffers = (1<<9),
+    epoEagerLoadCollisionModels = (1<<10),
     epoSelectInGroup    = (1<<11),
 };
 class ECORE_API CCustomPreferences:protected XrUI

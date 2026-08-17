@@ -211,13 +211,13 @@ void CEditableMesh::FillRenderBuffer(IntVec& face_lst, int start_face, int num_f
 //----------------------------------------------------
 void CEditableMesh::Render(const Fmatrix& parent, CSurface* S)
 {
-    if (0==m_RenderBuffers) GenerateRenderBuffers();
     // visibility test
     if (!m_Flags.is(flVisible)) return;
     // frustum test
     Fbox bb; bb.set(m_Box);
     bb.xform(parent);
     if (!::Render->occ_visible(bb)) return;
+    if (!m_RenderBuffers) GenerateRenderBuffers();
     // render
     RBMapPairIt rb_pair = m_RenderBuffers->find(S);
     if (rb_pair!=m_RenderBuffers->end()){
@@ -270,11 +270,11 @@ void CEditableMesh::RenderList(const Fmatrix& parent, u32 color, bool bEdge, Int
 
 void CEditableMesh::RenderSelection(const Fmatrix& parent, CSurface* s, u32 color)
 {
-    if (0==m_RenderBuffers) GenerateRenderBuffers();
 //	if (!m_Visible) return;
     Fbox bb; bb.set(m_Box);
     bb.xform(parent);
 	if (!::Render->occ_visible(bb)) return;
+    if (!m_RenderBuffers) GenerateRenderBuffers();
     // render
 	RCache.set_xform_world(parent);
     if (s){

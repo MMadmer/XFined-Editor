@@ -214,7 +214,7 @@ bool CEditableMesh::LoadMesh(IReader& F){
 	}
 
 #if 1
-    if (!EPrefs->object_flags.is(epoDeffLoadRB))
+    if (EPrefs->object_flags.is(epoEagerLoadRenderBuffers))
     {
         GenerateFNormals	();
         GenerateAdjacency	();
@@ -225,8 +225,8 @@ bool CEditableMesh::LoadMesh(IReader& F){
 	    UnloadVNormals		();
     }
     
-    if (!EPrefs->object_flags.is(epoDeffLoadCF)) 
-    	GenerateCFModel();       
+    if (EPrefs->object_flags.is(epoEagerLoadCollisionModels))
+		GenerateCFModel();
 #endif
 	//OptimizeMesh	(false);
     RebuildVMaps	();
