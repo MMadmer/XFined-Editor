@@ -76,7 +76,12 @@ void UIAIMapTool::Draw()
 				tool->m_ignored_materials.clear();
 			}
 			ImGui::SetNextItemWidth(-1);
-			ImGui::ListBox("##mat_list_box", &m_IgnoreMaterialsListSelected, [](void* data, int ind, const char** out)->bool {*out = reinterpret_cast<xr_vector<xr_string>*>(data)->at(ind).c_str();  return true; }, reinterpret_cast<void*>(&this->m_IgnoreMaterialsList), m_IgnoreMaterialsList.size(), 7);
+			ImGui::ListBox("##mat_list_box", &m_IgnoreMaterialsListSelected,
+				[](void* data, int index) -> const char*
+				{
+					return static_cast<xr_vector<xr_string>*>(data)->at(index).c_str();
+				},
+				&m_IgnoreMaterialsList, m_IgnoreMaterialsList.size(), 7);
 		}
 		ImGui::Separator();
 		ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
@@ -87,11 +92,7 @@ void UIAIMapTool::Draw()
 	{
 		ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
 		ImGui::PushItemWidth(-1);
-		float size = float(ImGui::CalcItemWidth());
 		{
-			float my_tex_w = (float)ImGui::GetIO().Fonts->TexWidth;
-			float my_tex_h = (float)ImGui::GetIO().Fonts->TexHeight;
-			
 			{
 				if (ImGui::RadioButton("Add    ", m_Mode == mdAppend)) { m_Mode = mdAppend; } ImGui::SameLine(0, -1);
 				ImGui::InvisibleButton("none1", ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight())); ImGui::SameLine(0, -1);

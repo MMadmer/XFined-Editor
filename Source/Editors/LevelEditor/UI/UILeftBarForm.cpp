@@ -134,7 +134,14 @@ void UILeftBarForm::Draw()
 		ObjectList* lst = Scene->GetSnapList(true);
 		
 		ImGui::SetNextItemWidth(-1);
-		ImGui::ListBox("##snap_list_box", &m_SnapItem_Current, [](void* data, int ind, const char** out)->bool {auto item = reinterpret_cast<ObjectList*>(data)->begin(); std::advance(item, ind); *out = (*item)->GetName(); return true; }, reinterpret_cast<void*>(lst), lst->size(), 7);
+		ImGui::ListBox("##snap_list_box", &m_SnapItem_Current,
+			[](void* data, int index) -> const char*
+			{
+				auto item = static_cast<ObjectList*>(data)->begin();
+				std::advance(item, index);
+				return (*item)->GetName();
+			},
+			lst, lst->size(), 7);
 		ImGui::TreePop();
 		ImGui::PopStyleVar(2);
 

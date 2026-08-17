@@ -1519,7 +1519,7 @@ const NqCatalog::SKind* NqCanvas::PickKind(LPCSTR hint, u32 use_mask)
 		// the technical id keeps its old place at the right edge, but only while
 		// the title leaves room for it
 		const float idw = ImGui::CalcTextSize(k.id.c_str()).x;
-		const float x = ImGui::GetContentRegionMax().x - idw;
+		const float x = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - idw;
 		if (x > ImGui::CalcTextSize(k.title.c_str()).x + ImGui::GetStyle().ItemSpacing.x * 2.f)
 		{
 			ImGui::SameLine(x);

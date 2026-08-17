@@ -62,46 +62,46 @@ void UITopBarForm::Draw()
 
 
 		m_tUndo->Load();
-		if (ImGui::ImageButton(ui_imtex(m_tUndo), ImVec2(20, 20), ImVec2(m_timeUndo > EDevice->TimerAsync() ? 0.5 : 0, 0), ImVec2(m_timeUndo > EDevice->TimerAsync() ? 1 : 0.5, 1), 0))
+		if (ImGui::ImageButton("##Undo", ui_imtex(m_tUndo), ImVec2(20, 20), ImVec2(m_timeUndo > EDevice->TimerAsync() ? 0.5 : 0, 0), ImVec2(m_timeUndo > EDevice->TimerAsync() ? 1 : 0.5, 1), 0))
 		{
 			m_timeUndo = EDevice->TimerAsync() + 130;
 			ClickUndo();
 		}ImGui::SameLine();
 		m_tRedo->Load();
-		if (ImGui::ImageButton(ui_imtex(m_tRedo), ImVec2(20, 20), ImVec2(m_timeRedo > EDevice->TimerAsync() ? 0.5 : 0, 0), ImVec2(m_timeRedo > EDevice->TimerAsync() ? 1 : 0.5, 1), 0))
+		if (ImGui::ImageButton("##Redo", ui_imtex(m_tRedo), ImVec2(20, 20), ImVec2(m_timeRedo > EDevice->TimerAsync() ? 0.5 : 0, 0), ImVec2(m_timeRedo > EDevice->TimerAsync() ? 1 : 0.5, 1), 0))
 		{
 			m_timeRedo = EDevice->TimerAsync() + 130;
 			ClickRedo();
 		}ImGui::SameLine();
 
 		m_tNew->Load();
-		if (ImGui::ImageButton(ui_imtex(m_tNew), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
+		if (ImGui::ImageButton("##New", ui_imtex(m_tNew), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickNew();
 		}ImGui::SameLine();
 		m_tOpen->Load();
-		if (ImGui::ImageButton(ui_imtex(m_tOpen), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
+		if (ImGui::ImageButton("##Open", ui_imtex(m_tOpen), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickOpen();
 		}ImGui::SameLine();
 		m_tSave->Load();
-		if (ImGui::ImageButton(ui_imtex(m_tSave), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
+		if (ImGui::ImageButton("##Save", ui_imtex(m_tSave), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickSave();
 		}ImGui::SameLine();
 
 		m_tCForm->Load();
-		if (ImGui::ImageButton(ui_imtex(m_tCForm), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
+		if (ImGui::ImageButton("##CForm", ui_imtex(m_tCForm), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickCForm();
 		}ImGui::SameLine();
 		m_tAIMap->Load();
-		if (ImGui::ImageButton(ui_imtex(m_tAIMap), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
+		if (ImGui::ImageButton("##AIMap", ui_imtex(m_tAIMap), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickAIMap();
 		}ImGui::SameLine();
 		m_tGGraph->Load();
-		if (ImGui::ImageButton(ui_imtex(m_tGGraph), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
+		if (ImGui::ImageButton("##GGraph", ui_imtex(m_tGGraph), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickGGraph();
 		}ImGui::SameLine();
@@ -111,7 +111,7 @@ void UITopBarForm::Draw()
 		if (LTools->IsCompilerRunning() || LTools->IsGameRunning())
 		{
 			m_tTerminated->Load();
-			if (ImGui::ImageButton(ui_imtex(m_tTerminated), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
+			if (ImGui::ImageButton("##Terminate", ui_imtex(m_tTerminated), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
 			{
 				ClickTerminated();
 			}
@@ -119,7 +119,7 @@ void UITopBarForm::Draw()
 		else
 		{
 			m_tPlayInEditor->Load();
-			if (ImGui::ImageButton(ui_imtex(m_tPlayInEditor), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
+			if (ImGui::ImageButton("##PlayInEditor", ui_imtex(m_tPlayInEditor), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
 			{
 				ClickPlayInEditor();
 			}
@@ -145,26 +145,26 @@ void UITopBarForm::Draw()
 		}
 		ImGui::SameLine();
 		m_tReloadConfigs->Load();
-		if (ImGui::ImageButton(ui_imtex(m_tReloadConfigs), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
+		if (ImGui::ImageButton("##ReloadConfigs", ui_imtex(m_tReloadConfigs), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickReloadConfigs();
 		}ImGui::SameLine();
 
 		m_tBuildAndMake->Load();
-		if (ImGui::ImageButton(ui_imtex(m_tBuildAndMake), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
+		if (ImGui::ImageButton("##BuildAndMake", ui_imtex(m_tBuildAndMake), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickBuildAndMake();
 		}
 		ImGui::SameLine();
 		m_tPlayPC->Load();
 
-		if (ImGui::ImageButton(ui_imtex(m_tPlayPC), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
+		if (ImGui::ImageButton("##PlayPC", ui_imtex(m_tPlayPC), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickPlayPC();
 		}
 		ImGui::SameLine();
 		m_tPlayCleanGame->Load();
-		if (ImGui::ImageButton(ui_imtex(m_tPlayCleanGame), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
+		if (ImGui::ImageButton("##PlayCleanGame", ui_imtex(m_tPlayCleanGame), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickPlayCleanGame();
 		}
@@ -177,7 +177,7 @@ void UITopBarForm::Draw()
 		}
 
 		m_tOpenGameData->Load();
-		if (ImGui::ImageButton(ui_imtex(m_tOpenGameData), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
+		if (ImGui::ImageButton("##OpenGameData", ui_imtex(m_tOpenGameData), ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickOpenGameData();
 		}

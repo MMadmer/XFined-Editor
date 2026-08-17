@@ -42,7 +42,12 @@ void UIDOOneColor::Draw()
 	}
 	ImGui::EndGroup(); ImGui::SameLine();
 	ImGui::SetNextItemWidth(-1);
-	ImGui::ListBox("##list", &list_index, [](void* data, int ind, const char** out)->bool {auto item = reinterpret_cast<xr_vector<xr_string>*>(data)->at(ind).c_str();; *out = item; return true; }, reinterpret_cast<void*>(&list), list.size(), 4);
+	ImGui::ListBox("##list", &list_index,
+		[](void* data, int index) -> const char*
+		{
+			return static_cast<xr_vector<xr_string>*>(data)->at(index).c_str();
+		},
+		&list, list.size(), 4);
 	ImGui::EndChild();
 	ImGui::Separator();
 }

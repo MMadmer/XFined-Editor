@@ -50,7 +50,12 @@ void UIDOShuffle::Draw()
 		{
 			int selected = m_list_selected;
 			ImGui::SetNextItemWidth(-1);
-			if (ImGui::ListBox("##list", &selected, [](void* data, int ind, const char** out)->bool {auto item = reinterpret_cast<xr_vector<xr_string>*>(data)->at(ind).c_str();; *out = item; return true; }, reinterpret_cast<void*>(&m_list), m_list.size(), 15))
+			if (ImGui::ListBox("##list", &selected,
+				[](void* data, int index) -> const char*
+				{
+					return static_cast<xr_vector<xr_string>*>(data)->at(index).c_str();
+				},
+				&m_list, m_list.size(), 15))
 			{
 				if (m_list_selected != selected)
 				{

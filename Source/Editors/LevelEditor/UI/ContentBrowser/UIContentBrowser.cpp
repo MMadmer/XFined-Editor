@@ -1102,7 +1102,7 @@ ImTextureID UIContentBrowser::GetThumb(LPCSTR name)
 		if (TakeVisualThumbnail(name, pixels, failed))
 		{
 			// a failed render caches a null texture, so it is not asked for again
-			tex = failed ? 0 : (ImTextureID)XFinedMCP::PixelsToTexture(pixels);
+			tex = failed ? 0 : static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(pixels));
 			SThumb t; t.tex = tex; t.last_used = m_Tick;
 			m_Thumbs.insert(mk_pair(key, t));
 			return tex;
@@ -1133,7 +1133,7 @@ ImTextureID UIContentBrowser::GetThumb(LPCSTR name)
 			if (SUCCEEDED(D3DXCreateTextureFromFileInMemoryEx(HW.pDevice, bytes, sz,
 				D3DX_DEFAULT, D3DX_DEFAULT, 1, 0, D3DFMT_X8R8G8B8, D3DPOOL_MANAGED,
 				D3DX_FILTER_LINEAR, D3DX_FILTER_NONE, 0, NULL, NULL, &t)))
-				tex = (ImTextureID)t;
+				tex = t;
 #endif
 		}
 		EditorGameContent::FreeBytes(bytes);
@@ -1152,7 +1152,7 @@ ImTextureID UIContentBrowser::GetThumb(LPCSTR name)
 			IDirect3DTexture9* t = 0;
 			if (SUCCEEDED(D3DXCreateTextureFromFileExA(HW.pDevice, abs, D3DX_DEFAULT, D3DX_DEFAULT, 1, 0,
 				D3DFMT_X8R8G8B8, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_NONE, 0, NULL, NULL, &t)))
-				tex = (ImTextureID)t;
+				tex = t;
 #endif
 		}
 	}
@@ -1168,7 +1168,7 @@ ImTextureID UIContentBrowser::GetThumb(LPCSTR name)
 			U32Vec	pixels;
 			bool	failed = false;
 			if (TakeVisualThumbnail(name, pixels, failed))
-				tex = failed ? 0 : (ImTextureID)XFinedMCP::PixelsToTexture(pixels);
+				tex = failed ? 0 : static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(pixels));
 			else
 			{
 				QueueObjectThumbnail(name, name);
@@ -1703,7 +1703,7 @@ void UIContentBrowser::DrawTiles()
 		const bool renaming	= !m_Rename.empty() && (m_Rename == full);
 
 		bool clicked;
-		if (tex)	clicked = ImGui::ImageButton(tex, ImVec2(m_TileSize, m_TileSize));
+		if (tex)	clicked = ImGui::ImageButton("##Thumbnail", tex, ImVec2(m_TileSize, m_TileSize));
 		else		clicked = ImGui::Button(leaf, ImVec2(tile_w, tile_w));
 
 		{
@@ -3006,10 +3006,10 @@ void UIContentBrowser::DrawSplitter(float height)
 	{
 		m_TreeWidth += ImGui::GetIO().MouseDelta.x;
 
-		// Total inner width, NOT GetContentRegionAvail(): the cursor has already
-		// wrapped past the button by now, so "avail" would report the full width
-		// again and the clamp below would let the tile pane be squeezed to zero.
-		const float inner	= ImGui::GetWindowContentRegionMax().x - ImGui::GetWindowContentRegionMin().x;
+		// Recover the stable right boundary from cursor + remaining space, then
+		// measure it from the window's inner left edge.
+		const float content_right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+		const float inner = content_right - ImGui::GetWindowPos().x - ImGui::GetStyle().WindowPadding.x;
 		const float tiles	= 160.f + grab + spacing;	// one tile column + the handle
 		const float max_w	= (inner > tiles) ? (inner - tiles) : 120.f;
 		if (m_TreeWidth > max_w)	m_TreeWidth = max_w;

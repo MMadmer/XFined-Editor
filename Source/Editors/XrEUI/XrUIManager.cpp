@@ -264,7 +264,7 @@ void XrUIManager::Draw()
 
         // no layout yet (fresh install) or an explicit reset: lay the panels out
         // before DockSpace() consumes the id
-        if (m_ResetDockLayout || ImGui::DockBuilderGetNode(dockMain) == NULL)
+        if (m_ResetDockLayout || !ImGui::DockBuilderGetNode(dockMain))
         {
             m_ResetDockLayout = false;
             BuildDefaultDockLayout(dockMain);
@@ -283,11 +283,16 @@ void XrUIManager::Draw()
     OnDrawUI();
     ImGui::EndFrame();
     ImGui::Render();
-    #if defined(USE_DX11)
+#if defined(USE_DX11)
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 #else
     ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
 #endif
+    if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+    {
+        ImGui::UpdatePlatformWindows();
+        ImGui::RenderPlatformWindowsDefault();
+    }
     // cleared here rather than at the end: the pruning below makes no ImGui
     // calls and can return early
     m_InUIPass = false;

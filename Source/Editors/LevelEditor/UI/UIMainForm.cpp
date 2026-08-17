@@ -416,7 +416,7 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
 				}
 				ImGui::EndPopup();
 			}
-            if (ImGui::ImageButton(ui_imtex(m_tMenu), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Menu", ui_imtex(m_tMenu), ImVec2(16, ImGui::GetFontSize())))
 			{
 				ImGui::OpenPopup("MenuScene");
             }
@@ -464,7 +464,7 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Border));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
-            if (ImGui::ImageButton(ui_imtex(m_tSelect), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Select", ui_imtex(m_tSelect), ImVec2(16, ImGui::GetFontSize())))
             {
                 LTools->SetAction(etaSelect);
                 LTools->GetGimzo()->SetType(Gizmo::EType::None);
@@ -487,7 +487,7 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tAdd->Load();
-            if (ImGui::ImageButton(ui_imtex(m_tAdd), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Add", ui_imtex(m_tAdd), ImVec2(16, ImGui::GetFontSize())))
             {
                 LTools->SetAction(etaAdd);
                 LTools->GetGimzo()->SetType(Gizmo::EType::None);
@@ -513,7 +513,7 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tMove->Load();
-            if (ImGui::ImageButton(ui_imtex(m_tMove), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Move", ui_imtex(m_tMove), ImVec2(16, ImGui::GetFontSize())))
             {
                 LTools->SetAction(etaSelect);
                 LTools->GetGimzo()->SetType(Gizmo::EType::Move);
@@ -539,7 +539,7 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tScale->Load();
-            if (ImGui::ImageButton(ui_imtex(m_tScale), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Scale", ui_imtex(m_tScale), ImVec2(16, ImGui::GetFontSize())))
             {
                 LTools->SetAction(etaSelect);
                 LTools->GetGimzo()->SetType(Gizmo::EType::Scale);
@@ -564,7 +564,7 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tRotate->Load();
-            if (ImGui::ImageButton(ui_imtex(m_tRotate), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Rotate", ui_imtex(m_tRotate), ImVec2(16, ImGui::GetFontSize())))
             {
                 LTools->SetAction(etaSelect);
                 LTools->GetGimzo()->SetType(Gizmo::EType::Rotate);
@@ -593,7 +593,7 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tNSnap->Load();
-            if (ImGui::ImageButton(ui_imtex(m_tNSnap), ImVec2(16, ImGui::GetFontSize()), ImVec2(0, 0), ImVec2(0.5f, 1.f)))
+            if (ImGui::ImageButton("##NSnap", ui_imtex(m_tNSnap), ImVec2(16, ImGui::GetFontSize()), ImVec2(0, 0), ImVec2(0.5f, 1.f)))
             {
                 ExecCommand(COMMAND_SET_SETTINGS, etfNormalAlign, !Tools->GetSettings(etfNormalAlign));
             }
@@ -607,7 +607,7 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
         ImGui::SameLine();
 
         m_tZoomSel->Load();
-        if (ImGui::ImageButton(ui_imtex(m_tZoomSel), ImVec2(16, ImGui::GetFontSize()),ImVec2(0,0), ImVec2(0.5f, 1.f)))
+        if (ImGui::ImageButton("##ZoomSelection", ui_imtex(m_tZoomSel), ImVec2(16, ImGui::GetFontSize()), ImVec2(0, 0), ImVec2(0.5f, 1.f)))
 		{
 			ExecCommand(COMMAND_ZOOM_EXTENTS, TRUE);
         }
@@ -628,7 +628,7 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tGrid->Load();
-            if (ImGui::ImageButton(ui_imtex(m_tGrid), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Grid", ui_imtex(m_tGrid), ImVec2(16, ImGui::GetFontSize())))
             {
                 LTools->GetGimzo()->SwitchStep(Gizmo::EType::Move, !LTools->GetGimzo()->IsStepEnable(Gizmo::EType::Move));
             }
@@ -693,7 +693,7 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tScaleGrid->Load();
-            if (ImGui::ImageButton(ui_imtex(m_tScaleGrid), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##ScaleGrid", ui_imtex(m_tScaleGrid), ImVec2(16, ImGui::GetFontSize())))
             {
                 LTools->GetGimzo()->SwitchStep(Gizmo::EType::Scale, !LTools->GetGimzo()->IsStepEnable(Gizmo::EType::Scale));
             }
@@ -758,7 +758,7 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tAngle->Load();
-            if (ImGui::ImageButton(ui_imtex(m_tAngle), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Angle", ui_imtex(m_tAngle), ImVec2(16, ImGui::GetFontSize())))
             {
                 LTools->GetGimzo()->SwitchStep(Gizmo::EType::Rotate, !LTools->GetGimzo()->IsStepEnable(Gizmo::EType::Rotate));
             }

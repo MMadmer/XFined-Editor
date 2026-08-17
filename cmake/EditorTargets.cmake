@@ -14,7 +14,10 @@ target_compile_definitions(FreeMagic PRIVATE FREEMAGIC_EXPORTS _WINDOWS _USRDLL)
 xray_glob(XREUI_SRC "${ED}/XrEUI")
 add_library(XrEUI SHARED ${XREUI_SRC})
 xray_common(XrEUI NO_MBCS)  # Unicode project
-target_compile_definitions(XrEUI PRIVATE XREUI_EXPORTS _WINDOWS _USRDLL _UNICODE UNICODE USE_DX11)
+xray_editor_cxx20(XrEUI)
+target_compile_definitions(XrEUI PRIVATE XREUI_EXPORTS _WINDOWS _USRDLL _UNICODE UNICODE)
+# ImTextureID is exposed by the public editor UI headers, so every consumer must use the same renderer ABI.
+target_compile_definitions(XrEUI PUBLIC USE_DX11)
 target_link_libraries(XrEUI PRIVATE XrCore)
 target_link_options(XrEUI PRIVATE "/NATVIS:${ED}/XrEUI/imgui.natvis")
 
@@ -27,9 +30,10 @@ file(GLOB XREPROPS_SRC CONFIGURE_DEPENDS
     "${ED}/XrEProps/Tree/Properties/*.cpp")
 add_library(XrEProps SHARED ${XREPROPS_SRC})
 xray_common(XrEProps NO_MBCS PCH "${ED}/XrEProps/stdafx.h")  # CharacterSet not set
-# USE_DX11 has to match XrEUI's: ImTextureID is part of the exported ImGui
-# signatures, so a mismatch here is a link error, not a compile one
-target_compile_definitions(XrEProps PRIVATE XREPROPS_EXPORTS _WINDOWS _USRDLL USE_DX11)
+xray_editor_cxx20(XrEProps)
+# ImTextureID also appears in XrEProps' public UI surface.
+target_compile_definitions(XrEProps PRIVATE XREPROPS_EXPORTS _WINDOWS _USRDLL)
+target_compile_definitions(XrEProps PUBLIC USE_DX11)
 target_include_directories(XrEProps PRIVATE "${ED}/XrEProps")
 target_link_libraries(XrEProps PRIVATE XrCore XrEngine XrEUI)
 
@@ -37,6 +41,7 @@ target_link_libraries(XrEProps PRIVATE XrCore XrEngine XrEUI)
 xray_glob(XRETOOLS_SRC "${ED}/XrETools")
 add_library(XrETools SHARED ${XRETOOLS_SRC})
 xray_common(XrETools NO_MBCS PCH "${ED}/XrETools/stdafx.h")  # CharacterSet NotSet
+xray_editor_cxx20(XrETools)
 target_compile_definitions(XrETools PRIVATE XRETOOLS_EXPORTS _WINDOWS _USRDLL)
 target_link_libraries(XrETools PRIVATE Ogg Vorbis XrCDB XrCore XrQSlim)
 
@@ -44,6 +49,7 @@ target_link_libraries(XrETools PRIVATE Ogg Vorbis XrCDB XrCore XrQSlim)
 xray_glob(XRDXT_SRC "${ED}/XrDXT" EXCLUDE nvdxt.cpp)
 add_library(XrDXT SHARED ${XRDXT_SRC})
 xray_common(XrDXT PCH "${ED}/XrDXT/stdafx.h")
+xray_editor_cxx20(XrDXT)
 target_compile_definitions(XrDXT PRIVATE XRDXT_EXPORTS _WINDOWS _USRDLL)
 target_link_libraries(XrDXT PRIVATE RedImageTool XrCore)
 
@@ -110,6 +116,7 @@ set(XRECORE_EXTERNAL
 add_library(XrECore SHARED
     ${XRECORE_ROOT} ${XRECORE_EDITOR} ${XRECORE_ENGINE} ${XRECORE_WM} ${XRECORE_EXTERNAL})
 xray_common(XrECore)
+xray_editor_cxx20(XrECore)
 # classic /Yc//Yu: the 90 pulled-in XrRender/XrEngine TUs must have their own
 # `#include "stdafx.h"` line SKIPPED, not resolved to the sibling render PCH
 xray_msvc_pch(XrECore "stdafx.h" "${ED}/XrECore/stdafx.cpp" NOPCH
@@ -142,6 +149,7 @@ set(LE_EXTERNAL
     "${SRC}/XrRender/Private/stats_manager.cpp")
 add_executable(LevelEditor WIN32 ${LE_SRC} ${LE_EXTERNAL} "${ED}/LevelEditor/LevelEditor.rc")
 xray_common(LevelEditor)
+xray_editor_cxx20(LevelEditor)
 xray_msvc_pch(LevelEditor "stdafx.h" "${ED}/LevelEditor/stdafx.cpp")
 target_compile_definitions(LevelEditor PRIVATE _WINDOWS USE_DX11)
 target_include_directories(LevelEditor PRIVATE

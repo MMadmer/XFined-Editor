@@ -375,7 +375,7 @@ void UIImagePreview::DrawImage()
 		IM_COL32(  0,255,  0,255),	// G
 		IM_COL32(  0,  0,255,255),	// B
 	};
-	dl->AddImage((ImTextureID)m_View, a, b, ImVec2(0,0), ImVec2(1,1), kTint[m_Channels & 3]);
+	dl->AddImage(m_View, a, b, ImVec2(0, 0), ImVec2(1, 1), kTint[m_Channels & 3]);
 	dl->AddRect (a, b, IM_COL32(90, 90, 90, 255));
 
 	// the wheel zooms, like every image viewer

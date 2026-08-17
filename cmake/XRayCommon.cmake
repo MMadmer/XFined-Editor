@@ -80,6 +80,22 @@ function(xray_common target)
     endif()
 endfunction()
 
+# Raises first-party editor modules without changing the legacy runtime or vendor targets.
+function(xray_editor_cxx20 target)
+    set_target_properties(${target} PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+    )
+    target_compile_definitions(${target} PRIVATE
+        _HAS_DEPRECATED_ALLOCATOR_VOID=1
+        _HAS_DEPRECATED_ALLOCATOR_MEMBERS=1
+    )
+    # /std:c++20 implies /permissive- in current MSVC, so restore the established parser mode explicitly.
+    target_compile_options(${target} PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:/permissive>
+    )
+endfunction()
+
 # glob helper: "all .cpp under DIR except EXCLUDE names" (case-insensitive,
 # the source tree mixes OccRasterizer/occRasterizer spellings freely)
 function(xray_glob out_var dir)

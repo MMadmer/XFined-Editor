@@ -19,14 +19,6 @@ struct ISE_Abstract;
 class ILevelGraph;
 class IGameLevelCrossTable;
 
-template <
-	typename _data_type = Loki::EmptyType,
-	typename _edge_weight_type = float,
-	typename _vertex_id_type = u32,
-	typename _edge_data_type = Loki::EmptyType
->
-class CGraphAbstract;
-
 namespace GameGraph 
 {
 	struct CVertex;

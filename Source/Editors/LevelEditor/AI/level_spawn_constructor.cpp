@@ -636,7 +636,7 @@ void CLevelSpawnConstructor::generate_artefact_spawn_positions_worker()
 			),
 			l_tpaStack.end()
 		);
-		std::random_shuffle(l_tpaStack.begin(), l_tpaStack.end());
+		std::shuffle(l_tpaStack.begin(), l_tpaStack.end(), xray::legacy_rand_urbg{});
 		zone->m_artefact_position_offset = m_level_points.size();
 		m_level_points.resize(zone->m_artefact_position_offset + zone->m_artefact_spawn_count);
 

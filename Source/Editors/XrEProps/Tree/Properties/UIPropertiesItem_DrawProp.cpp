@@ -74,7 +74,7 @@ BOOL TokenOnEdit(PropItem* prop, bool& change)
 			index = cnt;
 		}
 	}
-	if (ImGui::Combo("##value", &index, [](void* data, int idx, const char** out_text)->bool {*out_text = reinterpret_cast<xr_token*>(data)[idx].name;return true;},reinterpret_cast<void*>(token_list),cnt))
+	if (ImGui::Combo("##value", &index, [](void* data, int idx)->const char* { return reinterpret_cast<xr_token*>(data)[idx].name; }, reinterpret_cast<void*>(token_list), cnt))
 	{
 		T new_val = token_list[index].id;
 		if (prop->AfterEdit<TokenValue<T>, T>(new_val))
@@ -102,7 +102,7 @@ BOOL RTokenOnEdit(PropItem* prop, bool& change)
 			index = cnt;
 		}
 	}
-	if (ImGui::Combo("##value", &index, [](void* data, int idx, const char** out_text)->bool {*out_text = reinterpret_cast<xr_rtoken*>(data)[idx].name.c_str(); return true; }, reinterpret_cast<void*>(token_list), V->token_count))
+	if (ImGui::Combo("##value", &index, [](void* data, int idx)->const char* { return reinterpret_cast<xr_rtoken*>(data)[idx].name.c_str(); }, reinterpret_cast<void*>(token_list), V->token_count))
 	{
 		T new_val = token_list[index].id;
 		if (prop->AfterEdit<RTokenValue<T>, T>(new_val))
@@ -409,7 +409,7 @@ void UIPropertiesItem::DrawProp()
 				index = i;
 			}
 		}
-		if (ImGui::Combo("##value", &index, [](void* data, int idx, const char** out_text)->bool {*out_text = reinterpret_cast<xr_string*>(data)[idx].c_str(); return true; }, reinterpret_cast<void*>(V->items), i))
+		if (ImGui::Combo("##value", &index, [](void* data, int idx)->const char* { return reinterpret_cast<xr_string*>(data)[idx].c_str(); }, reinterpret_cast<void*>(V->items), i))
 		{
 			if (PItem->AfterEdit<CListValue, xr_string>(V->items[index]))
 				if (PItem->ApplyValue<CListValue, LPCSTR>(V->items[index].c_str()))PropertiesFrom->Modified();
@@ -429,7 +429,7 @@ void UIPropertiesItem::DrawProp()
 				index = i;
 			}
 		}
-		if (ImGui::Combo("##value", &index, [](void* data, int idx, const char** out_text)->bool {*out_text = reinterpret_cast<shared_str*>(data)[idx].c_str(); return true; }, reinterpret_cast<void*>(V->items), i))
+		if (ImGui::Combo("##value", &index, [](void* data, int idx)->const char* { return reinterpret_cast<shared_str*>(data)[idx].c_str(); }, reinterpret_cast<void*>(V->items), i))
 		{
 			if (PItem->AfterEdit<RListValue, shared_str>(V->items[index]))
 				if (PItem->ApplyValue<RListValue, shared_str>(V->items[index]))PropertiesFrom->Modified();

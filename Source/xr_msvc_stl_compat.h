@@ -12,8 +12,22 @@
 
 #if defined(_MSC_VER)
 
+#include <cstdlib>
 #include <memory>
 #include <functional>
+
+namespace xray
+{
+	// Keeps std::shuffle on the rand() stream used by MSVC's removed random_shuffle.
+	struct legacy_rand_urbg
+	{
+		using result_type = unsigned int;
+
+		static constexpr result_type min() noexcept { return 0; }
+		static constexpr result_type max() noexcept { return RAND_MAX; }
+		result_type operator()() const noexcept { return static_cast<result_type>(std::rand()); }
+	};
+}
 
 #if !defined(_HAS_AUTO_PTR_ETC) || (_HAS_AUTO_PTR_ETC == 0)
 

@@ -415,7 +415,7 @@ void Draw()
 			ImGui::TableSetColumnIndex(0);
 			ImGui::PushID(index);
 			if (ImGui::Selectable(result.category.c_str(), index == g_State.selected,
-				ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowItemOverlap))
+				ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
 			{
 				g_State.selected = index;
 				execute_index = index;

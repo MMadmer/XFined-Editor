@@ -84,7 +84,7 @@ void UIItemListFormItem::Draw()
 		ImGuiTreeNodeFlags Flags = ImGuiTreeNodeFlags_OpenOnArrow;
 		if (Form->m_Flags.test(cfMultiSelect))
 		{
-			ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, m_bIsMixed);
+			ImGui::PushMixedValue(m_bIsMixed);
 			bool CheckChange = ImGui::Checkbox("##checkbox", &bIsFavorite);
 			ImGui::PopItemFlag();
 			if (CheckChange)

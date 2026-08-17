@@ -1,12 +1,12 @@
-#include "stdafx.h"
 #ifndef IMGUI_DEFINE_MATH_OPERATORS
 #define IMGUI_DEFINE_MATH_OPERATORS
 #endif
+#include "stdafx.h"
 #include "imgui_internal.h"
 float ImGui::GetWindowBarHeight()
 {
     ImGuiWindow* window = GImGui->CurrentWindow;
-    return window->MenuBarHeight();
+    return window->MenuBarHeight;
 }
 bool ImGui::OpenPopupOnItemClick2(const char* str_id, ImGuiPopupFlags popup_flags)
 {
@@ -21,6 +21,23 @@ bool ImGui::OpenPopupOnItemClick2(const char* str_id, ImGuiPopupFlags popup_flag
         return true;
     }
     return false;
+}
+
+bool ImGui::ImageButton(const char* str_id, ImTextureRef tex_ref, const ImVec2& image_size,
+    const ImVec2& uv0, const ImVec2& uv1, int frame_padding,
+    const ImVec4& bg_col, const ImVec4& tint_col)
+{
+    if (frame_padding >= 0)
+        PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(float(frame_padding), float(frame_padding)));
+    const bool pressed = ImageButton(str_id, tex_ref, image_size, uv0, uv1, bg_col, tint_col);
+    if (frame_padding >= 0)
+        PopStyleVar();
+    return pressed;
+}
+
+void ImGui::PushMixedValue(bool mixed)
+{
+    PushItemFlag(ImGuiItemFlags_MixedValue, mixed);
 }
 
 bool ImGui::InputFloat(const char* label, float* v, float step, float step_fast, int dec, ImGuiInputTextFlags flags)

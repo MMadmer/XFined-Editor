@@ -782,7 +782,7 @@ bool EditorProject::DrawBrowser()
 
 			bool clicked;
 			if (r.preview)
-				clicked = ImGui::ImageButton((ImTextureID)r.preview, ImVec2(tile_w, tile_h - 30));
+				clicked = ImGui::ImageButton("##Preview", r.preview, ImVec2(tile_w, tile_h - 30));
 			else
 				clicked = ImGui::Button(r.name, ImVec2(tile_w + 8, tile_h - 22));
 
