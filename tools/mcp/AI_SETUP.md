@@ -122,6 +122,7 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_list_commands` | the editor's own command registry: every action the menus and shortcuts can perform, as `{id, name, menu, presets}` — the editor's full control surface, and commands added in future builds appear here automatically |
 | `xfined_exec_command` | execute ANY registry command — the same dispatch menus and shortcuts use. Address by `id`, `COMMAND_*` `name` or menu path; `p1s`/`p2s` pass strings, `p1i`/`p2i` integers. Prefer a dedicated tool when one exists; this is the escape hatch for everything else |
 | `xfined_theme` | read (`action=get`), persist (`action=set`, `preset=xfined-purple` or `graphite`) or reset the live editor theme; omitting `action` reads it |
+| `xfined_frame_pacing` | read live requested/effective frame interval, wait reason/counters and active mode; persist `active_idle_fps` 30..240 (`action=set`) or reset it to 120. PIE/realtime and explicit work are never delayed, and messages/MCP wake the wait immediately |
 | `xfined_command_palette` | query the ranked Ctrl+Shift+P catalog, open/close the palette, inspect its state, or execute an exact returned command/subcommand pair |
 | `xfined_viewport_navigation` | read/control the viewport orientation widget: six canonical axis views, perspective reset, and frame all/selection |
 | `xfined_progress` | read active nested editor tasks with percentage/detail/elapsed time, or request cooperative cancellation for tasks that yield UI frames; blocking legacy jobs keep live feedback in the progress console |

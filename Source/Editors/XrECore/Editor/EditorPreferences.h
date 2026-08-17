@@ -7,6 +7,10 @@
 class UIPropertiesForm;
 class PropValue;
 
+inline constexpr u32 kEditorIdleFpsDefault = 120;
+inline constexpr u32 kEditorIdleFpsMinimum = 30;
+inline constexpr u32 kEditorIdleFpsMaximum = 240;
+
 //---------------------------------------------------------------------------
 enum{
     epoDrawPivot		= (1<<0),
@@ -31,6 +35,7 @@ public:
     u32             start_h;
     u32             start_maximized;
 	u32				ui_theme_preset;
+	u32				active_idle_fps;
 	// view
     float 			view_np;
     float 			view_fp;

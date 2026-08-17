@@ -1321,6 +1321,32 @@ static void RespondThemeJson(xr_string& out)
 	out += "]}";
 }
 
+static void RespondFramePacingJson(xr_string& out)
+{
+	SFramePacingStats stats;
+	UI->GetFramePacingStats(stats);
+	LPCSTR mode = stats.play_in_editor ? "play_in_editor"
+		: stats.realtime_render ? "realtime_render"
+		: !stats.app_active ? "background"
+		: stats.idle_cap_active ? "idle_cap"
+		: "explicit_work";
+	char values[768];
+	sprintf_s(values,
+		"{\"ok\":true,\"active_idle_fps\":%u,\"background_poll_ms\":%u,"
+		"\"measured_fps\":%.3f,\"measured_frame_ms\":%.3f,\"mode\":\"%s\","
+		"\"last_wait_reason\":\"%s\",\"app_active\":%s,\"play_in_editor\":%s,"
+		"\"realtime_render\":%s,\"redraw_pending\":%s,\"idle_cap_active\":%s,"
+		"\"frames\":%llu,\"waits\":%llu,\"waited_ms\":%.3f}",
+		stats.active_idle_fps, stats.background_poll_ms, stats.measured_fps,
+		stats.measured_frame_ms, mode, stats.last_wait_reason,
+		stats.app_active ? "true" : "false", stats.play_in_editor ? "true" : "false",
+		stats.realtime_render ? "true" : "false", stats.redraw_pending ? "true" : "false",
+		stats.idle_cap_active ? "true" : "false",
+		static_cast<unsigned long long>(stats.frames), static_cast<unsigned long long>(stats.waits),
+		double(stats.waited_us) / 1000.0);
+	out = values;
+}
+
 static void RespondCommandPaletteJson(xr_string& out, LPCSTR query, int limit)
 {
 	xr_vector<CommandPalette::SResult> results;
@@ -1573,6 +1599,45 @@ static void RespondObjectJson(xr_string& out, CCustomObject* obj)
 
 bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
 {
+	if (0 == xr_strcmp(cmd, "frame_pacing"))
+	{
+		if (!EPrefs)
+		{
+			out = "{\"ok\":false,\"error\":\"editor preferences are not ready\"}";
+			return true;
+		}
+
+		char action[32] = {};
+		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
+		const int requested = GetArgInt(raw, "active_idle_fps", -1);
+		if (!action[0])
+			xr_strcpy(action, requested >= 0 ? "set" : "get");
+
+		if (0 == _stricmp(action, "set"))
+		{
+			if (requested < int(kEditorIdleFpsMinimum) || requested > int(kEditorIdleFpsMaximum))
+			{
+				out = "{\"ok\":false,\"error\":\"active_idle_fps must be between 30 and 240\"}";
+				return true;
+			}
+			EPrefs->active_idle_fps = u32(requested);
+			EPrefs->Save();
+		}
+		else if (0 == _stricmp(action, "reset"))
+		{
+			EPrefs->active_idle_fps = kEditorIdleFpsDefault;
+			EPrefs->Save();
+		}
+		else if (0 != _stricmp(action, "get") && 0 != _stricmp(action, "stats"))
+		{
+			out = "{\"ok\":false,\"error\":\"action must be get, stats, set, or reset\"}";
+			return true;
+		}
+
+		RespondFramePacingJson(out);
+		return true;
+	}
+
 	if (0 == xr_strcmp(cmd, "theme"))
 	{
 		if (!EPrefs)

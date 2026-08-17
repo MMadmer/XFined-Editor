@@ -206,6 +206,19 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_frame_pacing",
+        "description": "Read live editor frame-pacing statistics or persist the active idle cap. The idle cap only "
+                       "applies outside Play In Editor and realtime rendering; window messages, redraw work, and MCP "
+                       "requests wake it immediately. action='set' accepts active_idle_fps=30..240, reset restores 120.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["get", "stats", "set", "reset"]},
+                "active_idle_fps": {"type": "integer", "minimum": 30, "maximum": 240},
+            },
+        },
+    },
+    {
         "name": "xfined_command_palette",
         "description": "Search, open, close, inspect, or execute the editor command palette. action='query' returns "
                        "the same ranked results shown by Ctrl+Shift+P. action='execute' accepts the returned numeric "
@@ -1036,6 +1049,7 @@ CMD_MAP = {
     "xfined_preview_model": "preview_model",
     "xfined_reset_layout": "reset_layout",
     "xfined_theme": "theme",
+    "xfined_frame_pacing": "frame_pacing",
     "xfined_command_palette": "command_palette",
     "xfined_viewport_navigation": "viewport_navigation",
     "xfined_progress": "progress",

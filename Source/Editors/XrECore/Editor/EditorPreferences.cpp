@@ -12,6 +12,7 @@ CCustomPreferences::CCustomPreferences()
 {
     bOpen = false;
 	ui_theme_preset = u32(XFinedTheme::Default());
+	active_idle_fps = kEditorIdleFpsDefault;
 	// view
     view_np				= 0.1f;
     view_fp				= 1500.f;
@@ -145,6 +146,8 @@ void CCustomPreferences::FillProp(PropItemVec& props)
 	};
 	Token32Value* theme = PHelper().CreateToken32(props, "Appearance\\Theme", &ui_theme_preset, theme_presets);
 	theme->OnChangeEvent.bind(this, &CCustomPreferences::OnThemeChanged);
+	PHelper().CreateU32(props, "Performance\\Active idle frame rate", &active_idle_fps,
+		kEditorIdleFpsMinimum, kEditorIdleFpsMaximum);
 
     PHelper().CreateFlag32	(props,"Objects\\Library\\Discard Instance",	&object_flags, 	epoDiscardInstance);
     PHelper().CreateFlag32	(props,"Objects\\Skeleton\\Draw Joints",		&object_flags, 	epoDrawJoints);
@@ -228,6 +231,8 @@ void CCustomPreferences::Load(CInifile* I)
 	ui_theme_preset		= R_U32_SAFE	("editor_prefs", "ui_theme_preset", u32(XFinedTheme::Default()));
 	if (!XFinedTheme::IsValid(ui_theme_preset))
 		ui_theme_preset = u32(XFinedTheme::Default());
+	active_idle_fps = R_U32_SAFE("editor_prefs", "active_idle_fps", kEditorIdleFpsDefault);
+	active_idle_fps = clampr(active_idle_fps, kEditorIdleFpsMinimum, kEditorIdleFpsMaximum);
 
     psDeviceFlags.flags		= R_U32_SAFE	("editor_prefs","device_flags",	psDeviceFlags.flags);
     psSoundFlags.flags		= R_U32_SAFE	("editor_prefs","sound_flags",	psSoundFlags.flags)
@@ -303,6 +308,15 @@ void CCustomPreferences::Save(CInifile* I)
 	else
 	{
 		I->w_u32("editor_prefs", "ui_theme_preset", ui_theme_preset);
+	}
+	if (active_idle_fps == kEditorIdleFpsDefault)
+	{
+		if (I->line_exist("editor_prefs", "active_idle_fps"))
+			I->remove_line("editor_prefs", "active_idle_fps");
+	}
+	else
+	{
+		I->w_u32("editor_prefs", "active_idle_fps", active_idle_fps);
 	}
 
     I->w_u32("editor_prefs", "device_flags", psDeviceFlags.flags);

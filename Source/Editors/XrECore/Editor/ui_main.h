@@ -46,10 +46,40 @@ private:
 typedef xr_vector<EEditorState> EStateList;
 typedef EStateList::iterator EStateIt;
 
+struct SFramePacingStats
+{
+	u32 active_idle_fps;
+	u32 background_poll_ms;
+	float measured_fps;
+	float measured_frame_ms;
+	LPCSTR last_wait_reason;
+	bool app_active;
+	bool play_in_editor;
+	bool realtime_render;
+	bool redraw_pending;
+	bool idle_cap_active;
+	u64 frames;
+	u64 waits;
+	u64 waited_us;
+};
+
 class ECORE_API TUI: public IInputReceiver,public XrUIManager
 {
     bool m_AppClosed;
     inline void	RealQuit() { m_AppClosed = true; }
+	HANDLE m_FrameWaitTimer;
+	HANDLE m_FrameWakeEvent;
+	u64 m_FrameClockFrequency;
+	u64 m_LastFrameStartedAt;
+	u64 m_LastFrameIntervalTicks;
+	u64 m_FramePacingFrames;
+	u64 m_FramePacingWaits;
+	u64 m_FramePacingWaitTicks;
+	u32 m_LastFramePacingReason;
+	void WaitForFramePacing();
+	// Main-thread flags remain authoritative; the event only interrupts a wait
+	// when work is posted from outside the current idle iteration.
+	void WakeFramePacing() { if (m_FrameWakeEvent) ::SetEvent(m_FrameWakeEvent); }
 protected:
     Ivector2    m_Size;
     bool        m_Size_Maximize;
@@ -135,7 +165,7 @@ public:
     				TUI				();
     virtual 		~TUI			();
 
-    void			Quit			()	{	m_Flags.set(flNeedQuit,TRUE); }
+    void			Quit			()	{	m_Flags.set(flNeedQuit,TRUE); WakeFramePacing(); }
     
     u32 			&GetRenderWidth	()	{   return EDevice->dwWidth; }
     u32&GetRenderHeight	()	{   return EDevice->dwHeight; }
@@ -153,18 +183,18 @@ public:
     bool 			IsModified		();
 
     bool  Idle			();
-    void 			Resize(int x, int y, bool maximize = false, bool bForced = false) { m_Size.set(x, y); m_Size_Maximize = maximize;   m_Flags.set(flResize | flRedraw, TRUE); if (bForced) RealResize(); }
-    void 			Resize(bool bForced = false) { m_Flags.set(flResize | flRedraw, TRUE); if (bForced) RealResize(); }
+    void 			Resize(int x, int y, bool maximize = false, bool bForced = false) { m_Size.set(x, y); m_Size_Maximize = maximize;   m_Flags.set(flResize | flRedraw, TRUE); WakeFramePacing(); if (bForced) RealResize(); }
+    void 			Resize(bool bForced = false) { m_Flags.set(flResize | flRedraw, TRUE); WakeFramePacing(); if (bForced) RealResize(); }
 
     // add, remove, changing objects/scene
-    void 			UpdateScene			(bool bForced=false){	m_Flags.set(flUpdateScene,TRUE); 	if (bForced) RealUpdateScene();}
+    void 			UpdateScene			(bool bForced=false){	m_Flags.set(flUpdateScene,TRUE); WakeFramePacing();	if (bForced) RealUpdateScene();}
     // Only redraw scene. A forced redraw runs a WHOLE frame, ImGui pass and
     // all - so panel code asking for one while it is itself being drawn would
     // nest an ImGui frame inside the live one. That kills the outer frame's
     // window stack and the caller dies on its next ImGui call, which is how a
     // plain click in the outliner took the editor down. The flag alone is
     // enough there: the next Idle tick redraws anyway.
-    void 			RedrawScene			(bool bForced=false){   m_Flags.set(flRedraw,TRUE); 		if (bForced && !InUIPass()) RealRedrawScene();}
+    void 			RedrawScene			(bool bForced=false){   m_Flags.set(flRedraw,TRUE); WakeFramePacing();		if (bForced && !InUIPass()) RealRedrawScene();}
 
     void 			SetRenderQuality	(float q)      {   EDevice->m_ScreenQuality = q;}
 // mouse action
@@ -254,6 +284,7 @@ public:
     virtual void	ProgressDraw();
     SPBItem*		ProgressLast		(){return m_ProgressItems.empty()?0:m_ProgressItems.back();}
 	void			GetProgressSnapshot	(SProgressTaskInfoVec& result) const;
+	void			GetFramePacingStats	(SFramePacingStats& result);
 
 	void ShowConsole();
     void WriteConsole(TMsgDlgType mt, const char* txt);
@@ -267,7 +298,7 @@ protected:
     void RealResetUI();
     HANDLE m_HConsole;
 public:
-   IC  void ResetUI(bool bForced=false)  { if (!bForced)m_Flags.set(flResetUI, TRUE); if (bForced) RealResetUI(); }
+   IC  void ResetUI(bool bForced=false)  { if (!bForced){ m_Flags.set(flResetUI, TRUE); WakeFramePacing(); } if (bForced) RealResetUI(); }
    virtual Ivector2 GetRenderMousePosition()const { return Ivector2().set(0, 0); }
    virtual void	OnStats(CGameFont* font);
 };

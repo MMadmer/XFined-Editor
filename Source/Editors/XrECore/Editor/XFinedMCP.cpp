@@ -464,6 +464,7 @@ static xr_vector<SMCPClient*>	s_Clients;
 static SOCKET					s_Listen = INVALID_SOCKET;
 static HANDLE					s_AcceptThread = 0;
 static HANDLE					s_StopEvent = 0;
+static HANDLE					s_QueueEvent = 0;
 static volatile LONG			s_Run = 0;
 static bool					s_WsaReady = false;
 static DWORD					s_RequestTimeoutMs = kDefaultRequestTimeoutMs;
@@ -970,6 +971,8 @@ static bool QueueRequest(SMCPRequest* request)
 		queued = true;
 	}
 	::LeaveCriticalSection(&s_Lock);
+	if (queued && s_QueueEvent)
+		::SetEvent(s_QueueEvent);
 	return queued;
 }
 
@@ -1186,6 +1189,11 @@ static void CleanupStartupFailure()
 		::CloseHandle(s_StopEvent);
 		s_StopEvent = 0;
 	}
+	if (s_QueueEvent)
+	{
+		::CloseHandle(s_QueueEvent);
+		s_QueueEvent = 0;
+	}
 	if (s_WsaReady)
 	{
 		::WSACleanup();
@@ -1225,6 +1233,15 @@ void XFinedMCP::Start()
 	s_WsaReady = true;
 	s_StopEvent = ::CreateEventA(NULL, TRUE, FALSE, NULL);
 	if (!s_StopEvent)
+	{
+		CleanupStartupFailure();
+		return;
+	}
+	// Auto-reset is intentional: one wake drains the entire queue. A request
+	// arriving before or during the wait leaves the event signalled, so there is
+	// no queue-check-to-wait race.
+	s_QueueEvent = ::CreateEventA(NULL, FALSE, FALSE, NULL);
+	if (!s_QueueEvent)
 	{
 		CleanupStartupFailure();
 		return;
@@ -1316,6 +1333,11 @@ void XFinedMCP::Stop()
 		::CloseHandle(s_StopEvent);
 		s_StopEvent = 0;
 	}
+	if (s_QueueEvent)
+	{
+		::CloseHandle(s_QueueEvent);
+		s_QueueEvent = 0;
+	}
 	if (s_WsaReady)
 	{
 		::WSACleanup();
@@ -1323,4 +1345,9 @@ void XFinedMCP::Stop()
 	}
 	::DeleteCriticalSection(&s_Lock);
 	s_LockReady = false;
+}
+
+HANDLE XFinedMCP::WakeEvent()
+{
+	return s_QueueEvent;
 }

@@ -26,6 +26,10 @@ public:
 	static void		Start		();		// spins up the listener thread
 	static void		Stop		();
 	static void		Pump		();		// main thread: execute queued requests
+	// Auto-reset event set after a socket worker queues main-thread work. The
+	// editor owns the only waiter; this keeps an idle message loop responsive
+	// without polling the request vector.
+	static HANDLE	WakeEvent	();
 	static void		SetHandler	(TXFinedMCPHandler handler);
 
 	// Extracts one exact top-level string field. Missing, malformed, duplicate,

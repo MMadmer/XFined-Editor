@@ -8,6 +8,7 @@
 #include "UI_ToolsCustom.h"
 
 #include "UI_Main.h"
+#include "EditorPreferences.h"
 #include "EditorProject.h"
 #include "XFinedMCP.h"
 #include "EThumbnailVisual.h"
@@ -29,6 +30,30 @@ TUI* 	UI			= 0;
 
 TUI::TUI()
 {
+	m_FrameWaitTimer = 0;
+	m_FrameWakeEvent = ::CreateEventW(NULL, FALSE, FALSE, NULL);
+	m_FrameClockFrequency = 1000;
+	m_LastFrameStartedAt = 0;
+	m_LastFrameIntervalTicks = 0;
+	m_FramePacingFrames = 0;
+	m_FramePacingWaits = 0;
+	m_FramePacingWaitTicks = 0;
+	m_LastFramePacingReason = 0;
+	LARGE_INTEGER clock_frequency;
+	if (::QueryPerformanceFrequency(&clock_frequency))
+		m_FrameClockFrequency = u64(clock_frequency.QuadPart);
+
+	// Windows 10's high-resolution timer keeps a 120 Hz cap precise without
+	// raising the process-wide timer resolution. Older systems use the regular
+	// waitable timer through the fallback below.
+	using TCreateWaitableTimerExW = HANDLE(WINAPI*)(LPSECURITY_ATTRIBUTES, LPCWSTR, DWORD, DWORD);
+	if (HMODULE kernel = ::GetModuleHandleW(L"kernel32.dll"))
+		if (TCreateWaitableTimerExW create_timer = reinterpret_cast<TCreateWaitableTimerExW>(
+			::GetProcAddress(kernel, "CreateWaitableTimerExW")))
+			m_FrameWaitTimer = create_timer(NULL, NULL, 0x00000002, TIMER_MODIFY_STATE | SYNCHRONIZE);
+	if (!m_FrameWaitTimer)
+		m_FrameWaitTimer = ::CreateWaitableTimerW(NULL, FALSE, NULL);
+
     m_HConsole = 0;
 	m_ProgressOwnsConsole = false;
 	UI				= this;
@@ -58,6 +83,16 @@ TUI::~TUI()
 {
 	VERIFY(m_ProgressItems.size()==0);
     VERIFY(m_EditorState.size()==0);
+	if (m_FrameWaitTimer)
+	{
+		::CloseHandle(m_FrameWaitTimer);
+		m_FrameWaitTimer = 0;
+	}
+	if (m_FrameWakeEvent)
+	{
+		::CloseHandle(m_FrameWakeEvent);
+		m_FrameWakeEvent = 0;
+	}
 }
 
 void TUI::OnDeviceCreate()
@@ -642,32 +677,204 @@ void TUI::OnFrame()
     // Progress
     ProgressDraw		();
 }
+
+namespace
+{
+constexpr u32 kBackgroundPollMs = 50;
+
+enum EFramePacingReason
+{
+	FramePacingStartup,
+	FramePacingIdleDeadline,
+	FramePacingBackgroundDeadline,
+	FramePacingMessage,
+	FramePacingMcpRequest,
+	FramePacingExplicitWake,
+	FramePacingExplicitWork,
+	FramePacingPlayInEditor,
+	FramePacingRealtime,
+	FramePacingWaitFailed,
+};
+
+LPCSTR FramePacingReasonName(u32 reason)
+{
+	switch (reason)
+	{
+	case FramePacingIdleDeadline:			return "idle_deadline";
+	case FramePacingBackgroundDeadline:	return "background_deadline";
+	case FramePacingMessage:				return "window_message";
+	case FramePacingMcpRequest:			return "mcp_request";
+	case FramePacingExplicitWake:			return "explicit_wake";
+	case FramePacingExplicitWork:			return "explicit_work";
+	case FramePacingPlayInEditor:			return "play_in_editor";
+	case FramePacingRealtime:				return "realtime_render";
+	case FramePacingWaitFailed:			return "wait_failed";
+	default:							return "startup";
+	}
+}
+
+void PumpEditorMessages()
+{
+	MSG msg;
+	while (::PeekMessageW(&msg, NULL, 0U, 0U, PM_REMOVE))
+	{
+		::TranslateMessage(&msg);
+		::DispatchMessageW(&msg);
+		if (WM_QUIT == msg.message && UI)
+			UI->Quit();
+	}
+}
+}
+
+void TUI::WaitForFramePacing()
+{
+	const bool explicit_work = m_Flags.is(flUpdateScene) || m_Flags.is(flNeedQuit) ||
+		m_Flags.is(flResetUI) || (m_bAppActive && (m_Flags.is(flRedraw) || m_Flags.is(flResize)));
+	if (explicit_work)
+	{
+		if (m_FrameWakeEvent)
+			::WaitForSingleObject(m_FrameWakeEvent, 0);
+		m_LastFramePacingReason = FramePacingExplicitWork;
+		return;
+	}
+	if (IsPlayInEditor())
+	{
+		m_LastFramePacingReason = FramePacingPlayInEditor;
+		return;
+	}
+	if (psDeviceFlags.is(rsRenderRealTime))
+	{
+		m_LastFramePacingReason = FramePacingRealtime;
+		return;
+	}
+
+	LARGE_INTEGER now;
+	::QueryPerformanceCounter(&now);
+	u64 wait_ticks = 0;
+	const bool background = !m_bAppActive;
+	if (background)
+	{
+		wait_ticks = (m_FrameClockFrequency * kBackgroundPollMs + 999) / 1000;
+	}
+	else
+	{
+		const u32 limit = EPrefs
+			? clampr(EPrefs->active_idle_fps, kEditorIdleFpsMinimum, kEditorIdleFpsMaximum)
+			: kEditorIdleFpsDefault;
+		const u64 interval = (m_FrameClockFrequency + limit - 1) / limit;
+		if (m_LastFrameStartedAt)
+		{
+			const u64 elapsed = u64(now.QuadPart) - m_LastFrameStartedAt;
+			if (elapsed < interval)
+				wait_ticks = interval - elapsed;
+		}
+		if (!wait_ticks)
+		{
+			m_LastFramePacingReason = FramePacingIdleDeadline;
+			return;
+		}
+	}
+
+	HANDLE handles[3] = {};
+	DWORD handle_count = 0;
+	const DWORD wake_index = m_FrameWakeEvent ? handle_count : DWORD(-1);
+	if (m_FrameWakeEvent)
+		handles[handle_count++] = m_FrameWakeEvent;
+	const HANDLE mcp_event = XFinedMCP::WakeEvent();
+	const DWORD mcp_index = mcp_event ? handle_count : DWORD(-1);
+	if (mcp_event)
+		handles[handle_count++] = mcp_event;
+
+	DWORD timer_index = DWORD(-1);
+	DWORD timeout = INFINITE;
+	bool timer_armed = false;
+	if (m_FrameWaitTimer)
+	{
+		const u64 hundred_ns = _max<u64>(1,
+			(wait_ticks * 10000000ull + m_FrameClockFrequency - 1) / m_FrameClockFrequency);
+		LARGE_INTEGER due;
+		due.QuadPart = -LONGLONG(hundred_ns);
+		if (::SetWaitableTimer(m_FrameWaitTimer, &due, 0, NULL, NULL, FALSE))
+		{
+			timer_index = handle_count;
+			handles[handle_count++] = m_FrameWaitTimer;
+			timer_armed = true;
+		}
+	}
+	if (!timer_armed)
+		timeout = DWORD(_max<u64>(1,
+			(wait_ticks * 1000ull + m_FrameClockFrequency - 1) / m_FrameClockFrequency));
+
+	LARGE_INTEGER wait_started;
+	::QueryPerformanceCounter(&wait_started);
+	const DWORD result = ::MsgWaitForMultipleObjectsEx(handle_count, handles, timeout,
+		QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+	LARGE_INTEGER wait_finished;
+	::QueryPerformanceCounter(&wait_finished);
+	++m_FramePacingWaits;
+	m_FramePacingWaitTicks += u64(wait_finished.QuadPart - wait_started.QuadPart);
+
+	if (timer_armed)
+	{
+		::CancelWaitableTimer(m_FrameWaitTimer);
+		::WaitForSingleObject(m_FrameWaitTimer, 0);
+	}
+
+	if (wake_index != DWORD(-1) && result == WAIT_OBJECT_0 + wake_index)
+		m_LastFramePacingReason = FramePacingExplicitWake;
+	else if (mcp_index != DWORD(-1) && result == WAIT_OBJECT_0 + mcp_index)
+		m_LastFramePacingReason = FramePacingMcpRequest;
+	else if (timer_index != DWORD(-1) && result == WAIT_OBJECT_0 + timer_index)
+		m_LastFramePacingReason = background ? FramePacingBackgroundDeadline : FramePacingIdleDeadline;
+	else if (result == WAIT_OBJECT_0 + handle_count)
+		m_LastFramePacingReason = FramePacingMessage;
+	else if (WAIT_TIMEOUT == result)
+		m_LastFramePacingReason = background ? FramePacingBackgroundDeadline : FramePacingIdleDeadline;
+	else
+		m_LastFramePacingReason = FramePacingWaitFailed;
+}
+
+void TUI::GetFramePacingStats(SFramePacingStats& result)
+{
+	result.active_idle_fps = EPrefs
+		? clampr(EPrefs->active_idle_fps, kEditorIdleFpsMinimum, kEditorIdleFpsMaximum)
+		: kEditorIdleFpsDefault;
+	result.background_poll_ms = kBackgroundPollMs;
+	result.measured_frame_ms = m_LastFrameIntervalTicks
+		? float(double(m_LastFrameIntervalTicks) * 1000.0 / double(m_FrameClockFrequency))
+		: 0.f;
+	result.measured_fps = result.measured_frame_ms > EPS_S ? 1000.f / result.measured_frame_ms : 0.f;
+	result.last_wait_reason = FramePacingReasonName(m_LastFramePacingReason);
+	result.app_active = m_bAppActive;
+	result.play_in_editor = IsPlayInEditor();
+	result.realtime_render = psDeviceFlags.is(rsRenderRealTime);
+	result.redraw_pending = m_Flags.is(flRedraw);
+	result.idle_cap_active = result.app_active && !result.play_in_editor &&
+		!result.realtime_render && !result.redraw_pending;
+	result.frames = m_FramePacingFrames;
+	result.waits = m_FramePacingWaits;
+	result.waited_us = m_FrameClockFrequency
+		? u64(double(m_FramePacingWaitTicks) * 1000000.0 / double(m_FrameClockFrequency))
+		: 0;
+}
+
 bool TUI::Idle()         
 {
 	VERIFY(m_bReady);
-   // EDevice->b_is_Active  = Application->Active;
-	// input
-    MSG msg;
-    do
-    {
-        ZeroMemory(&msg, sizeof(msg));
-        // Wide pump: TranslateMessage emits WM_CHAR in the character set of the
-        // call that fetched the keystroke, so an ANSI PeekMessage would squash
-        // the character through the system codepage before ImGui ever sees it.
-        if (::PeekMessageW(&msg, NULL, 0U, 0U, PM_REMOVE))
-        {
-            ::TranslateMessage(&msg);
-            ::DispatchMessageW(&msg);
-            if (msg.message == WM_QUIT)
-            {
-                UI->Quit();
-            }
-            continue;
-        }
+	// Drain first so commands generated by input can mark explicit work. The
+	// interruptible wait then reacts to either the next message or an MCP request.
+	PumpEditorMessages();
+	if (m_Flags.is(flResetUI)) RealResetUI();
+	WaitForFramePacing();
+	PumpEditorMessages();
+	if (m_Flags.is(flResetUI)) RealResetUI();
 
-    } while (msg.message);
-    if (m_Flags.is(flResetUI))RealResetUI();
-    Sleep(1);
+	LARGE_INTEGER frame_started;
+	::QueryPerformanceCounter(&frame_started);
+	if (m_LastFrameStartedAt)
+		m_LastFrameIntervalTicks = u64(frame_started.QuadPart) - m_LastFrameStartedAt;
+	m_LastFrameStartedAt = u64(frame_started.QuadPart);
+	++m_FramePacingFrames;
 
     OnFrame			();
     // MCP requests must be served even when the window is inactive — the
@@ -682,6 +889,10 @@ bool TUI::Idle()
         Device->seqParallel.clear_not_free();
         Device->seqFrameMT.Process(rp_Frame);
     }
+	// Notifications produced during this iteration are represented by their
+	// flags; draining the event avoids a stale wake on the next iteration.
+	if (m_FrameWakeEvent)
+		::WaitForSingleObject(m_FrameWakeEvent, 0);
     // test quit
     if (m_Flags.is(flNeedQuit))	RealQuit();
     return !m_AppClosed;
