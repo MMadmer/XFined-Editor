@@ -827,14 +827,21 @@ TOOLS = [
                        "'text' uses the Unreal search grammar: every space-separated word has to match, "
                        "-word excludes, \"two words\" match together. 'types' is a ';'-separated list of the "
                        "object classes to SHOW (empty string shows all; see scene_tree for the names). "
-                       "'selected_only' limits the tree to the current selection. Omitted arguments keep "
-                       "their current value. Returns text, selected_only, hidden_types, shown and total.",
+                       "'selected_only' limits the tree to the current selection; 'visibility' is all, visible, "
+                       "or hidden. Omitted arguments keep their current value. Invalid types or visibility leave "
+                       "the previous filter intact. Returns text, selected_only, hidden_types, visibility, shown "
+                       "and total.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "text": {"type": "string", "description": "search terms; empty string clears the search"},
                 "types": {"type": "string", "description": "';'-separated classes to show, e.g. 'way;spawn'"},
                 "selected_only": {"type": "boolean", "description": "show only selected objects"},
+                "visibility": {
+                    "type": "string",
+                    "enum": ["all", "visible", "hidden"],
+                    "description": "visibility filter; omitted keeps the current mode",
+                },
             },
         },
     },

@@ -111,7 +111,7 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_save_scene` | save the opened scene (its current file, or an explicit `file`) |
 | `xfined_outliner_show` | open (`open=true`, default) or close the World Outliner panel |
 | `xfined_game_modes` | game modes a module can target, scanned from the LINKED game: campaigns only (rule options like "one life" are excluded, so are checkboxes the game comments out), each with `id`, `caption` (what the player sees), `key` and `source`. A module's target is set in the manifest and the module export refuses to run without one |
-| `xfined_outliner_filter` | drive the outliner's search box and type funnel: `text` (Unreal grammar - every word must match, `-word` excludes, `"two words"` match together), `types` (`;`-separated classes to show, empty shows all), `selected_only`; returns `shown`/`total` |
+| `xfined_outliner_filter` | drive the outliner's search box and funnels: `text` (Unreal grammar - every word must match, `-word` excludes, `"two words"` match together), `types` (`;`-separated classes to show, empty shows all), `selected_only`, `visibility` (`all`/`visible`/`hidden`); omitted fields keep their state and an invalid type/mode changes nothing; returns the complete filter state plus `shown`/`total` |
 | `xfined_scene_tree` | the World Outliner's data: groups per object tool class sorted by class name, each with `count`/`total` and `objects` (name, selected, visible); filters `filter`, `class`, `limit` (default 200) |
 | `xfined_content_browser_open` | reveal an asset **or a folder** in the Content Browser: opens the panel, switches `source` (`project`/`editor`/`darf`), navigates there and selects it; a folder path (`levels`, `levels\l07_military`) is how the grid is walked into a folder without a mouse; `open=true` also opens an asset's viewer (the double-click action) |
 | `xfined_content_browser_selection` | read the browser's open/source/folder/ordered selection state, or use `action=select` / `toggle` / `range` / `clear` on an exact entry in the complete current view (offscreen virtualized rows included; `select` establishes the range anchor) |
@@ -151,6 +151,22 @@ Replace `<repo>` with the folder the editor is installed in.
 
 Everything that writes is clamped to the project folder: the linked game install
 and the shared SDK library are sources you copy **out of**, never into.
+
+### World Outliner UI
+
+The Outliner is a virtualized table, so large object classes only submit visible
+rows. Its Visible, Name, Type and Owner columns can be resized and reordered;
+Name, Type and Owner can also be hidden from the header menu while Visible stays
+pinned. ImGui's existing layout settings retain those choices. Owner exposes the
+scene's existing group relationship without adding a
+new hierarchy or changing scene serialization. Clicking Name cycles natural
+A-Z, Z-A and original scene order.
+
+Rename and Delete stay disabled for read-only tools and non-editable group
+members. Rename resolves the object by its stable original name when the modal
+is accepted. Delete names the object in a confirmation modal, defaults to
+Cancel, and remains undoable. MCP uses the existing non-modal
+`xfined_rename_object` and `xfined_delete_selected` paths.
 
 ## Quest workflow for AI (NQ quest graphs)
 

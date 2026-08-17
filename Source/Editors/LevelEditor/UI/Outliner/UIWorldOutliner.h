@@ -31,10 +31,12 @@ public:
 	// null keeps the funnel - an empty string shows every type, otherwise it is
 	// a ';'-separated list of the tool class names to SHOW. Unknown names are
 	// reported rather than silently dropped.
-	static bool		McpSetFilter		(LPCSTR text, int selected_only, LPCSTR types, xr_string& err);
+	static bool		McpSetFilter		(LPCSTR text, int selected_only, LPCSTR types,
+										 LPCSTR visibility, xr_string& err);
 	// MCP: what the panel is filtering by right now, and how much survives it
 	static void		McpGetFilter		(xr_string& text, bool& selected_only,
-										 xr_string& hidden, int& shown, int& total);
+										 xr_string& hidden, xr_string& visibility,
+										 int& shown, int& total);
 
 private:
 	struct SGroup
@@ -56,9 +58,15 @@ private:
 	// filter state the `shown` lists were built with
 	xr_string						m_FilterApplied;
 	bool							m_SelectedOnlyApplied;
+	int								m_VisibilityApplied;
+	int								m_SortApplied;
 
 	char							m_Filter[128];
 	bool							m_SelectedOnly;
+	// Visibility is a view-only IXRay filter: 0 = all, 1 = visible, 2 = hidden.
+	int								m_Visibility;
+	// The ImGui table owns persistence; 0 = scene order, 1 = A-Z, 2 = Z-A.
+	int								m_Sort;
 
 	// Unreal's search-box grammar (FTextFilterExpressionEvaluator in its basic
 	// mode): spaces separate terms, EVERY plain term has to match, a term
@@ -75,7 +83,7 @@ private:
 
 	// shift-range anchor, the last plainly clicked row
 	ObjClassID						m_AnchorClass;
-	int								m_AnchorRow;
+	shared_str						m_AnchorName;
 
 	// auto-scroll: a selection change that did NOT come from this panel brings
 	// the last selected row into view - last in scene order, since nothing
@@ -87,8 +95,10 @@ private:
 	bool							m_SkipNextScroll;
 
 	// scene edits are deferred: the tree must not mutate while it iterates
-	CCustomObject*					m_PendingDelete;
-	CCustomObject*					m_PendingRename;
+	shared_str						m_DeleteName;
+	shared_str						m_PendingDeleteName;
+	shared_str						m_RenameOriginal;
+	bool							m_OpenDeletePopup;
 	bool							m_OpenRenamePopup;
 	char							m_RenameBuf[256];
 	char							m_RenameError[128];
@@ -102,7 +112,7 @@ private:
 	bool			ClassHidden			(ObjClassID cls) const;
 	// the funnel popup: which object types the tree shows
 	void			DrawFilterMenu		();
-	bool			Filtering			() const { return !m_Terms.empty() || m_SelectedOnly; }
+	bool			Filtering			() const { return !m_Terms.empty() || m_SelectedOnly || m_Visibility; }
 	void			DrawGroup			(SGroup& g);
 	void			DrawRow				(SGroup& g, int row, CCustomObject* obj);
 	// Unreal's SListView::ScrollIntoView rule: a row already on screen is left
@@ -111,6 +121,7 @@ private:
 	// Takes the row's content-space top, so a clipped row needs no drawing.
 	static void		ScrollRowIntoView	(float row_top, float row_h);
 	void			DrawRenamePopup		();
+	void			DrawDeletePopup		();
 	bool			ApplyRename			();
 	void			RunPending			();
 	// one scene walk per frame: count, change signature, last selected object
@@ -119,4 +130,5 @@ private:
 	// plain viewport-pick semantics: drop the selection, take this object
 	static void		PickObject			(CCustomObject* obj);
 	static void		FocusObject			(CCustomObject* obj);
+	static int		NaturalCompare		(LPCSTR lhs, LPCSTR rhs);
 };

@@ -13,13 +13,15 @@ UIWorldOutliner::UIWorldOutliner()
 	m_Dirty					= true;
 	m_SelectedOnly			= false;
 	m_SelectedOnlyApplied	= false;
+	m_Visibility				= 0;
+	m_VisibilityApplied		= 0;
+	m_Sort						= 0;
+	m_SortApplied				= 0;
 	m_AnchorClass			= OBJCLASS_DUMMY;
-	m_AnchorRow				= -1;
 	m_SelSignature			= 0;
 	m_ScrollTarget			= nullptr;
 	m_SkipNextScroll		= false;
-	m_PendingDelete			= nullptr;
-	m_PendingRename			= nullptr;
+	m_OpenDeletePopup		= false;
 	m_OpenRenamePopup		= false;
 	m_Filter[0]				= 0;
 	m_RenameBuf[0]			= 0;
@@ -182,6 +184,45 @@ bool UIWorldOutliner::ClassHidden(ObjClassID cls) const
 	return false;
 }
 
+int UIWorldOutliner::NaturalCompare(LPCSTR lhs, LPCSTR rhs)
+{
+	while (*lhs && *rhs)
+	{
+		if (isdigit(static_cast<unsigned char>(*lhs)) && isdigit(static_cast<unsigned char>(*rhs)))
+		{
+			const char* lhs_begin = lhs;
+			const char* rhs_begin = rhs;
+			while (*lhs == '0') ++lhs;
+			while (*rhs == '0') ++rhs;
+
+			const char* lhs_end = lhs;
+			const char* rhs_end = rhs;
+			while (isdigit(static_cast<unsigned char>(*lhs_end))) ++lhs_end;
+			while (isdigit(static_cast<unsigned char>(*rhs_end))) ++rhs_end;
+
+			const size_t lhs_digits = lhs_end - lhs;
+			const size_t rhs_digits = rhs_end - rhs;
+			if (lhs_digits != rhs_digits) return lhs_digits < rhs_digits ? -1 : 1;
+			const int number_cmp = strncmp(lhs, rhs, lhs_digits);
+			if (number_cmp) return number_cmp;
+
+			const size_t lhs_width = lhs_end - lhs_begin;
+			const size_t rhs_width = rhs_end - rhs_begin;
+			if (lhs_width != rhs_width) return lhs_width < rhs_width ? -1 : 1;
+			lhs = lhs_end;
+			rhs = rhs_end;
+			continue;
+		}
+
+		const int lhs_char = tolower(static_cast<unsigned char>(*lhs));
+		const int rhs_char = tolower(static_cast<unsigned char>(*rhs));
+		if (lhs_char != rhs_char) return lhs_char < rhs_char ? -1 : 1;
+		++lhs;
+		++rhs;
+	}
+	return *lhs ? 1 : (*rhs ? -1 : 0);
+}
+
 void UIWorldOutliner::ApplyFilter()
 {
 	for (u32 i = 0; i < m_Groups.size(); ++i)
@@ -192,13 +233,26 @@ void UIWorldOutliner::ApplyFilter()
 		{
 			CCustomObject* o = g.objects[k];
 			if (m_SelectedOnly && !o->Selected())	continue;
+			if (1 == m_Visibility && !o->Visible())	continue;
+			if (2 == m_Visibility && o->Visible())	continue;
 			if (!NameMatches(o->GetName()))			continue;
 			g.shown.push_back(k);
+		}
+
+		if (m_Sort)
+		{
+			std::stable_sort(g.shown.begin(), g.shown.end(), [this, &g](int lhs, int rhs)
+			{
+				const int cmp = NaturalCompare(g.objects[lhs]->GetName(), g.objects[rhs]->GetName());
+				return 1 == m_Sort ? cmp < 0 : cmp > 0;
+			});
 		}
 	}
 
 	m_FilterApplied			= m_Filter;
 	m_SelectedOnlyApplied	= m_SelectedOnly;
+	m_VisibilityApplied		= m_Visibility;
+	m_SortApplied				= m_Sort;
 }
 
 int UIWorldOutliner::ScanSelection(u32& sig, CCustomObject*& last) const
@@ -227,20 +281,31 @@ int UIWorldOutliner::ScanSelection(u32& sig, CCustomObject*& last) const
 //------------------------------------------------------------------------------
 // MCP surface
 //------------------------------------------------------------------------------
-bool UIWorldOutliner::McpSetFilter(LPCSTR text, int selected_only, LPCSTR types, xr_string& err)
+bool UIWorldOutliner::McpSetFilter(LPCSTR text, int selected_only, LPCSTR types,
+	LPCSTR visibility, xr_string& err)
 {
 	Show();									// filtering a closed panel helps nobody
 	if (!Form)	{ err = "outliner unavailable"; return false; }
 
-	if (text)					strncpy_s(Form->m_Filter, sizeof(Form->m_Filter), text, _TRUNCATE);
-	if (selected_only >= 0)		Form->m_SelectedOnly = !!selected_only;
+	int next_visibility = Form->m_Visibility;
+	if (visibility)
+	{
+		if (0 == _stricmp(visibility, "all"))			next_visibility = 0;
+		else if (0 == _stricmp(visibility, "visible"))	next_visibility = 1;
+		else if (0 == _stricmp(visibility, "hidden"))	next_visibility = 2;
+		else
+		{
+			err = "visibility must be all, visible, or hidden";
+			return false;
+		}
+	}
 
+	xr_vector<ObjClassID> hide;
 	if (types)
 	{
 		// class names are matched against the cache, which may not exist yet
 		if (Form->m_Groups.empty()) Form->Rebuild();
 
-		xr_vector<ObjClassID> hide;
 		if (types[0])
 		{
 			xr_string unknown;
@@ -289,24 +354,30 @@ bool UIWorldOutliner::McpSetFilter(LPCSTR text, int selected_only, LPCSTR types,
 				if (!shown) hide.push_back(Form->m_Groups[i].cls);
 			}
 		}
-		Form->m_HiddenClasses = hide;
 	}
 
+	// A rejected request must not leave half of its filter applied.
+	if (text)					strncpy_s(Form->m_Filter, sizeof(Form->m_Filter), text, _TRUNCATE);
+	if (selected_only >= 0)		Form->m_SelectedOnly = !!selected_only;
+	if (types)					Form->m_HiddenClasses = hide;
+	Form->m_Visibility = next_visibility;
 	Form->ParseFilter();
 	Form->ApplyFilter();
 	return true;
 }
 
 void UIWorldOutliner::McpGetFilter(xr_string& text, bool& selected_only,
-								   xr_string& hidden, int& shown, int& total)
+								   xr_string& hidden, xr_string& visibility,
+								   int& shown, int& total)
 {
-	text.clear(); hidden.clear();
+	text.clear(); hidden.clear(); visibility = "all";
 	selected_only	= false;
 	shown = total	= 0;
 	if (!Form) return;
 
 	text			= Form->m_Filter;
 	selected_only	= Form->m_SelectedOnly;
+	visibility		= 1 == Form->m_Visibility ? "visible" : (2 == Form->m_Visibility ? "hidden" : "all");
 	total			= Form->m_TotalObjects;
 	for (u32 i = 0; i < Form->m_Groups.size(); ++i)
 	{
@@ -352,14 +423,16 @@ void UIWorldOutliner::FocusObject(CCustomObject* obj)
 //------------------------------------------------------------------------------
 void UIWorldOutliner::RunPending()
 {
-	if (!Scene || !m_PendingDelete) return;
+	if (!Scene || !m_PendingDeleteName.size()) return;
 
-	CCustomObject* obj	= m_PendingDelete;
-	m_PendingDelete		= nullptr;
+	const shared_str name = m_PendingDeleteName;
+	m_PendingDeleteName = "";
+	CCustomObject* obj = Scene->FindObjectByName(name.c_str(), static_cast<CCustomObject*>(nullptr));
+	if (!obj) return;
 
-	if (Scene->locked())
+	if (Scene->locked() || !obj->FParentTools || !obj->FParentTools->IsEditable() || !obj->Editable())
 	{
-		ELog.DlgMsg(mtError, "Scene sharing violation");
+		ELog.DlgMsg(mtError, "Object '%s' is read only", obj->GetName());
 		return;
 	}
 
@@ -389,7 +462,19 @@ void UIWorldOutliner::RunPending()
 bool UIWorldOutliner::ApplyRename()
 {
 	m_RenameError[0] = 0;
-	if (!m_PendingRename) return true;
+	if (!m_RenameOriginal.size()) return true;
+	CCustomObject* obj = Scene
+		? Scene->FindObjectByName(m_RenameOriginal.c_str(), static_cast<CCustomObject*>(nullptr)) : nullptr;
+	if (!obj)
+	{
+		strcpy_s(m_RenameError, "object no longer exists");
+		return false;
+	}
+	if (Scene->locked() || !obj->FParentTools || !obj->FParentTools->IsEditable() || !obj->Editable())
+	{
+		strcpy_s(m_RenameError, "object is read only");
+		return false;
+	}
 
 	char low[sizeof(m_RenameBuf)];
 	strncpy_s(low, sizeof(low), m_RenameBuf, _TRUNCATE);
@@ -400,13 +485,14 @@ bool UIWorldOutliner::ApplyRename()
 		return false;
 	}
 	// the pass_object overload ignores the object being renamed
-	if (Scene->FindObjectByName(low, m_PendingRename))
+	if (Scene->FindObjectByName(low, obj))
 	{
 		strcpy_s(m_RenameError, "name already used");
 		return false;
 	}
 
-	m_PendingRename->SetName(low);
+	if (m_AnchorName.equal(m_RenameOriginal)) m_AnchorName = low;
+	obj->SetName(low);
 	Scene->UndoSave();
 	ExecCommand(COMMAND_UPDATE_PROPERTIES);
 	m_Dirty = true;
@@ -418,9 +504,11 @@ bool UIWorldOutliner::ApplyRename()
 //------------------------------------------------------------------------------
 void UIWorldOutliner::DrawRow(SGroup& g, int row, CCustomObject* obj)
 {
+	ImGui::TableNextRow();
 	ImGui::PushID(row);
 
 	// visibility toggle; the ##id keeps the widget id stable across the label flip
+	ImGui::TableSetColumnIndex(0);
 	const bool vis = !!obj->Visible();
 	if (ImGui::Button(vis ? "O##vis" : "-##vis", ImVec2(kEyeWidth, 0.f)))
 	{
@@ -428,11 +516,12 @@ void UIWorldOutliner::DrawRow(SGroup& g, int row, CCustomObject* obj)
 		UI->RedrawScene(true);
 	}
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip(vis ? "Visible" : "Hidden");
-	ImGui::SameLine();
 
 	// selection is read from the scene every frame, so viewport picks show here
+	ImGui::TableSetColumnIndex(1);
 	const bool sel = !!obj->Selected();
-	if (ImGui::Selectable(obj->GetName(), sel, ImGuiSelectableFlags_AllowDoubleClick,
+	if (ImGui::Selectable(obj->GetName(), sel,
+		ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_SpanAllColumns,
 		ImVec2(0.f, ImGui::GetFrameHeight())))
 	{
 		const ImGuiIO& io = ImGui::GetIO();
@@ -440,29 +529,39 @@ void UIWorldOutliner::DrawRow(SGroup& g, int row, CCustomObject* obj)
 		{
 			PickObject(obj);
 			FocusObject(obj);
-			m_AnchorClass = g.cls; m_AnchorRow = row;
+			m_AnchorClass = g.cls; m_AnchorName = obj->GetName();
 		}
-		else if (io.KeyShift && m_AnchorClass == g.cls &&
-			m_AnchorRow >= 0 && m_AnchorRow < int(g.shown.size()))
+		else if (io.KeyShift && m_AnchorClass == g.cls && m_AnchorName.size())
 		{
-			const int a = _min(m_AnchorRow, row);
-			const int b = _max(m_AnchorRow, row);
-			for (int i = a; i <= b && i < int(g.shown.size()); ++i)
-				g.objects[g.shown[i]]->Select(TRUE);
-			m_SkipNextScroll = true;
-			UI->RedrawScene(true);
+			int anchor = -1;
+			for (int i = 0; i < int(g.shown.size()); ++i)
+				if (m_AnchorName.equal(g.objects[g.shown[i]]->GetName())) { anchor = i; break; }
+			if (anchor >= 0)
+			{
+				const int a = _min(anchor, row);
+				const int b = _max(anchor, row);
+				for (int i = a; i <= b; ++i)
+					g.objects[g.shown[i]]->Select(TRUE);
+				m_SkipNextScroll = true;
+				UI->RedrawScene(true);
+			}
+			else
+			{
+				PickObject(obj);
+				m_AnchorName = obj->GetName();
+			}
 		}
 		else if (io.KeyCtrl)
 		{
 			obj->Select(sel ? FALSE : TRUE);
-			m_AnchorClass = g.cls; m_AnchorRow = row;
+			m_AnchorClass = g.cls; m_AnchorName = obj->GetName();
 			m_SkipNextScroll = true;
 			UI->RedrawScene(true);
 		}
 		else
 		{
 			PickObject(obj);
-			m_AnchorClass = g.cls; m_AnchorRow = row;
+			m_AnchorClass = g.cls; m_AnchorName = obj->GetName();
 		}
 	}
 
@@ -489,17 +588,30 @@ void UIWorldOutliner::DrawRow(SGroup& g, int row, CCustomObject* obj)
 			UI->RedrawScene(true);
 		}
 		ImGui::Separator();
+		const bool can_edit = !Scene->locked() && obj->Editable() && obj->FParentTools &&
+			!!obj->FParentTools->IsEditable();
+		ImGui::BeginDisabled(!can_edit);
 		if (ImGui::MenuItem("Rename..."))
 		{
-			m_PendingRename = obj;
+			m_RenameOriginal = obj->GetName();
 			strncpy_s(m_RenameBuf, sizeof(m_RenameBuf), obj->GetName(), _TRUNCATE);
 			m_RenameError[0]	= 0;
 			m_OpenRenamePopup	= true;
 		}
 		if (ImGui::MenuItem("Delete"))
-			m_PendingDelete = obj;
+		{
+			m_DeleteName = obj->GetName();
+			m_OpenDeletePopup = true;
+		}
+		ImGui::EndDisabled();
 		ImGui::EndPopup();
 	}
+
+	ImGui::TableSetColumnIndex(2);
+	ImGui::TextUnformatted(g.name.c_str());
+	ImGui::TableSetColumnIndex(3);
+	CCustomObject* owner = obj->GetOwner();
+	if (owner) ImGui::TextUnformatted(owner->GetName());
 
 	ImGui::PopID();
 }
@@ -538,7 +650,10 @@ void UIWorldOutliner::DrawGroup(SGroup& g)
 	ImGui::PushID(int(g.cls));
 	if (filtering || target_row >= 0) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
 
-	int flags = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen;
+	ImGui::TableNextRow();
+	ImGui::TableSetColumnIndex(1);
+	int flags = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_SpanAllColumns |
+		ImGuiTreeNodeFlags_DefaultOpen;
 	const bool open = filtering
 		? ImGui::TreeNodeEx("##group", flags, "%s (%d/%d)", g.name.c_str(), int(g.shown.size()), int(g.objects.size()))
 		: ImGui::TreeNodeEx("##group", flags, "%s (%d)", g.name.c_str(), int(g.objects.size()));
@@ -570,6 +685,12 @@ void UIWorldOutliner::DrawGroup(SGroup& g)
 void UIWorldOutliner::DrawFilterMenu()
 {
 	if (!ImGui::BeginPopup("outliner_filters")) return;
+
+	ImGui::TextDisabled("Visibility");
+	const char* visibility[] = { "All", "Visible", "Hidden" };
+	ImGui::SetNextItemWidth(150.f);
+	ImGui::Combo("##visibility", &m_Visibility, visibility, IM_ARRAYSIZE(visibility));
+	ImGui::Separator();
 
 	ImGui::TextDisabled("Object types");
 	ImGui::Separator();
@@ -625,13 +746,41 @@ void UIWorldOutliner::DrawRenamePopup()
 	{
 		if (ApplyRename())
 		{
-			m_PendingRename = nullptr;
+			m_RenameOriginal = "";
 			ImGui::CloseCurrentPopup();
 		}
 	}
 	else if (cancel)
 	{
-		m_PendingRename = nullptr;
+		m_RenameOriginal = "";
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndPopup();
+}
+
+void UIWorldOutliner::DrawDeletePopup()
+{
+	if (!ImGui::BeginPopupModal("Delete Object", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+
+	ImGui::Text("Delete '%s'?", m_DeleteName.size() ? m_DeleteName.c_str() : "missing object");
+	ImGui::TextDisabled("The operation can be undone from the editor.");
+	ImGui::Separator();
+
+	const bool cancel = ImGui::Button("Cancel", ImVec2(100.f, 0.f)) ||
+		ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+	ImGui::SetItemDefaultFocus();
+	ImGui::SameLine();
+	const bool remove = ImGui::Button("Delete", ImVec2(100.f, 0.f));
+
+	if (cancel)
+	{
+		m_DeleteName = "";
+		ImGui::CloseCurrentPopup();
+	}
+	else if (remove)
+	{
+		m_PendingDeleteName = m_DeleteName;
+		m_DeleteName = "";
 		ImGui::CloseCurrentPopup();
 	}
 	ImGui::EndPopup();
@@ -667,7 +816,8 @@ void UIWorldOutliner::Draw()
 	// frame; a plain text filter only when the text itself changed
 	const bool text_changed = (0 != xr_strcmp(m_FilterApplied.c_str(), m_Filter));
 	if (text_changed) ParseFilter();
-	if (m_SelectedOnly || m_SelectedOnlyApplied != m_SelectedOnly || text_changed)
+	if (m_SelectedOnly || m_Visibility || m_SelectedOnlyApplied != m_SelectedOnly ||
+		m_VisibilityApplied != m_Visibility || m_SortApplied != m_Sort || text_changed)
 		ApplyFilter();
 
 	// selection changes made OUTSIDE this panel (viewport picks, MCP) scroll
@@ -703,14 +853,46 @@ void UIWorldOutliner::Draw()
 
 	ImGui::Separator();
 
-	if (ImGui::BeginChild("tree", ImVec2(0.f, -ImGui::GetFrameHeightWithSpacing()), false))
+	const ImGuiTableFlags table_flags = ImGuiTableFlags_BordersV | ImGuiTableFlags_RowBg |
+		ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable |
+		ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate | ImGuiTableFlags_ScrollY;
+	if (ImGui::BeginTable("tree", 4, table_flags,
+		ImVec2(0.f, -ImGui::GetFrameHeightWithSpacing())))
 	{
+		ImGui::TableSetupScrollFreeze(0, 1);
+		ImGui::TableSetupColumn("Visible", ImGuiTableColumnFlags_WidthFixed |
+			ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_NoHide, 48.f);
+		ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.6f, 1);
+		ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed |
+			ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_DefaultHide, 90.f);
+		ImGui::TableSetupColumn("Owner", ImGuiTableColumnFlags_WidthStretch |
+			ImGuiTableColumnFlags_NoSort, 0.4f);
+		ImGui::TableHeadersRow();
+
+		int sort = 0;
+		const ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs();
+		if (specs && specs->SpecsCount)
+		{
+			const ImGuiSortDirection direction = specs->Specs[0].SortDirection;
+			if (ImGuiSortDirection_Ascending == direction) sort = 1;
+			else if (ImGuiSortDirection_Descending == direction) sort = 2;
+		}
+		if (sort != m_Sort)
+		{
+			m_Sort = sort;
+			ApplyFilter();
+		}
+
 		if (m_Groups.empty())
+		{
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(1);
 			ImGui::TextDisabled("scene is empty");
+		}
 		for (u32 i = 0; i < m_Groups.size(); ++i)
 			DrawGroup(m_Groups[i]);
+		ImGui::EndTable();
 	}
-	ImGui::EndChild();
 	// a target the filter hid never reaches DrawRow - one frame is its lifetime
 	m_ScrollTarget = nullptr;
 
@@ -730,6 +912,12 @@ void UIWorldOutliner::Draw()
 		m_OpenRenamePopup = false;
 	}
 	DrawRenamePopup();
+	if (m_OpenDeletePopup)
+	{
+		ImGui::OpenPopup("Delete Object");
+		m_OpenDeletePopup = false;
+	}
+	DrawDeletePopup();
 
 	ImGui::PopStyleVar(1);
 	ImGui::End();
