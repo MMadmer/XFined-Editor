@@ -1,331 +1,402 @@
-﻿// StalkerFontGenerate.cpp : Этот файл содержит функцию "main". Здесь начинается и заканчивается выполнение программы.
-//
-#include "..\..\BearBundle\BearCore\BearCore.hpp"
-#include "..\..\BearBundle\BearGraphics\BearGraphics.hpp"
+#include "RedImageTool/RedImage.hpp"
+
+#include <Windows.h>
+
 #include <ft2build.h>
+#include FT_BITMAP_H
 #include FT_FREETYPE_H
 #include FT_GLYPH_H
 #include FT_OUTLINE_H
-#include FT_BITMAP_H
-bool shoc_format = false;
-bool GenerateFont(const bchar* file, bsize size, bsize&real_size, bsize width, bsize height, BearImage& Image,BearVector< BearVector3<float>>&OutVector)
+
+#include <algorithm>
+#include <array>
+#include <cerrno>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace
 {
-	const bsize chars_size = 256;
-	BearImage ImageList[256];
-	BearVector2<float> SizeList[256];
-	{
-		BearFileStream font_file;
-		if (!font_file.Open(file))
-			return false;
+constexpr size_t CharacterCount = 256;
+constexpr size_t FirstPrintableCharacter = 32;
+constexpr uint32_t DefaultFontHeight = 24;
 
-		BearMemoryStream font(font_file);
-
-		FT_Library library = 0;
-		FT_Face     face = 0;
-		if (FT_Init_FreeType(&library))
-		{
-			FT_Done_FreeType(library);
-			return false;
-		}
-		if (FT_New_Memory_Face(library, reinterpret_cast<const FT_Byte*>(font.Begin()), static_cast<FT_Long>(font.Size()), 0, &face))
-		{
-			FT_Done_Face(face);
-			FT_Done_FreeType(library);
-			return false;
-		}
-
-		FT_Select_Charmap(face, FT_ENCODING_UNICODE);
-		FT_Set_Char_Size(face, 0, static_cast<FT_F26Dot6>(size * 64), static_cast<FT_UInt>(width), static_cast<FT_UInt>(height));
-		FT_Set_Pixel_Sizes(face, 0, static_cast<FT_UInt>(size));;
-
-		
-		OutVector.resize(chars_size);
-
-		real_size = static_cast<bsize>(face->size->metrics.height) / static_cast<bsize>(1 << 6);
-		for (bsize i = 32; i < chars_size; i++) {
-
-			bchar16 id = chars_size == i + 1 ? L' ' : BearEncoding::ToUTF16((char)i);
-			if (id == L'\r' || id == L'\n' || id == L'	')continue;
-			if (FT_Load_Char(face, id, FT_LOAD_TARGET_NORMAL | FT_LOAD_FORCE_AUTOHINT | FT_LOAD_RENDER) != 0)
-			{
-				continue;
-			}
-			FT_Glyph glyphDesc;
-			FT_Get_Glyph(face->glyph, &glyphDesc);
-
-			FT_Glyph_To_Bitmap(&glyphDesc, FT_RENDER_MODE_NORMAL, 0, 1);
-			FT_Bitmap& bitmap = reinterpret_cast<FT_BitmapGlyph>(glyphDesc)->bitmap;
-			unsigned char* data = bitmap.buffer;
-			uint32 width_char = bitmap.width;
-			uint32 height_char = bitmap.rows;
-			if (width_char == 0 || height_char == 0)continue;
-
-			
-			if (shoc_format)
-				ImageList[i].Create(width_char, height_char, 1, 1, BearTexturePixelFormat::R8G8B8A8);
-			else
-				ImageList[i].Create(width_char, height_char, 1, 1, BearTexturePixelFormat::R8);
-			if (shoc_format)
-				ImageList[i].Fill(BearColor::Transparent);
-			else
-				ImageList[i].Fill(BearColor::Black);
-
-
-			if (shoc_format)
-			{
-				for (uint32 y = 0; y < height_char; ++y)
-				{
-					for (uint32 x = 0; x < width_char; ++x)
-					{
-						{
-							bsize index = static_cast<bsize> (4 * (x + y * width_char));
-							((uint8*)*ImageList[i])[index] = 255;
-							((uint8*)*ImageList[i])[index + 1] = 255;
-							((uint8*)*ImageList[i])[index + 2] = 255;
-						}
-						bsize index = static_cast<bsize> (4 * (x + y * width_char) + 3);
-						((uint8*)*ImageList[i])[index] = data[x];
-					}
-					data += bitmap.pitch;
-				}
-
-			}
-			else
-			{
-				for (uint32 y = 0; y < height_char; ++y)
-				{
-					for (uint32 x = 0; x < width_char; ++x)
-					{
-
-						bsize index = static_cast<bsize> (x + y * width_char);
-						((uint8*)*ImageList[i])[index] = data[x];
-					}
-					data += bitmap.pitch;
-				}
-
-			}
-			SizeList[i].set(static_cast<float>(face->glyph->metrics.horiAdvance) / static_cast<float>(1 << 6), (static_cast<bint>(face->glyph->metrics.horiBearingY) / static_cast<bint>(1 << 6)));
-			
-		}
-		FT_Done_Face(face);
-		FT_Done_FreeType(library);
-	}
-	{
-		bsize ShiftY = real_size - size;
-		for (bsize i = 0; i < chars_size; i++)
-		{
-			SizeList[i].y = size - (SizeList[i].y+ ShiftY);
-		}
-	
-	}
-	{
-		uint32 size_texture = static_cast<uint32>(bear_recommended_size(static_cast<bsize>(sqrtf(static_cast<float>((chars_size - 32) * (size ) * (real_size))))));
-
-		Image.Create(size_texture, size_texture, 1, 1, BearTexturePixelFormat::R8G8B8A8);
-		if (shoc_format)
-			Image.Fill(BearColor::Transparent);
-		else
-			Image.Fill(BearColor::Black);
-		bsize x_t = 0, y_t = 0;
-		for (bsize i = 32; i < chars_size; i++)
-		{
-			if (ImageList[i].Empty())continue;
-			if (x_t + ImageList[i].GetSize().x + 4 > size_texture)
-			{
-				x_t = 0; y_t += real_size;
-			}
-			Image.Append(x_t, y_t +static_cast<bsize>( SizeList[i].y), ImageList[i], 0, 0);
-
-
-			OutVector[i].set(static_cast<float>(x_t), static_cast<float>(y_t), SizeList[i].x+ static_cast<float>(x_t));
-			x_t += ImageList[i].GetSize().x + 4;
-		}
-	}
-
-	Image.GenerateMipmap();
-	return true;
-}
-void GenerateFont(const bchar* name,uint32 height=16)
+struct LibraryHandle
 {
-	bsize RealSize;
-	{
-		BearStringPath NameDDS,NameINI;
-		BearString::Copy(NameDDS, name);
-		if (BearString::ToCharWithEnd(NameDDS, '.'))
-		{
-			BearString::ToCharWithEnd(NameDDS, '.')[0] = 0;
-		}
-		BearString::Contact(NameDDS, "_800.dds");
-		BearString::Copy(NameINI, name);
-		if (BearString::ToCharWithEnd(NameINI, '.'))
-		{
-			BearString::ToCharWithEnd(NameINI, '.')[0] = 0;
-		}
-		BearString::Contact(NameINI, "_800.ini");
+    FT_Library value{};
 
-		BearImage img;
-		BearVector< BearVector3<float>> OutVector;
-		if (GenerateFont(name, height, RealSize,800, 600, img, OutVector))
-		{
-			if (shoc_format)
-			{
-				img.Convert(BearTexturePixelFormat::BC3);
-			}
-			img.SaveToDds(NameDDS);
-			BearString INI;
-			INI.append(TEXT("[symbol_coords]\n"));
-			INI.append_printf(TEXT("height=%d\n"), uint32(RealSize));
-			for (int i = 0; i < 256; i++)
-			{
-				INI.append_printf(TEXT("%03d = %f,%f,%f\n"), i, OutVector[i].x, OutVector[i].y-1, OutVector[i].z);
-			}
-			BearFileStream FileINI;
-			if (FileINI.Open(NameINI, FileINI.M_Write))
-			{
-				FileINI.WriteString(INI, BearEncoding::ANSI, false);
-				FileINI.Close();
-			}
-		}
-		else
-		{
-			BearCore::GetLog()->Printf(TEXT("Error:Genarate %s[%d]"), name, 800);
-		}
-		
-	}
-	{
-		BearStringPath NameDDS, NameINI;
+    ~LibraryHandle()
+    {
+        if (value)
+            FT_Done_FreeType(value);
+    }
+};
 
-		BearString::Copy(NameDDS, name);
-		if (BearString::ToCharWithEnd(NameDDS, '.'))
-		{
-			BearString::ToCharWithEnd(NameDDS, '.')[0] = 0;
-		}
-		BearString::Contact(NameDDS, "_1024.dds");
-		BearString::Copy(NameINI, name);
-		if (BearString::ToCharWithEnd(NameINI, '.'))
-		{
-			BearString::ToCharWithEnd(NameINI, '.')[0] = 0;
-		}
-		BearString::Contact(NameINI, "_1024.ini");
-
-		BearImage img;
-		BearVector< BearVector3<float>> OutVector;
-		if (GenerateFont(name, height, RealSize, 1024, 768, img, OutVector))
-		{
-			if (shoc_format)
-			{
-				img.Convert(BearTexturePixelFormat::BC3);
-			}
-			img.SaveToDds(NameDDS);
-			BearString INI;
-			INI.append(TEXT("[symbol_coords]\n"));
-			INI.append_printf(TEXT("height=%d\n"), uint32(RealSize ));
-			for (int i = 0; i < 256; i++)
-			{
-				INI.append_printf(TEXT("%03d = %f,%f,%f\n"), i, OutVector[i].x, OutVector[i].y-1, OutVector[i].z);
-			}
-			BearFileStream FileINI;
-			if (FileINI.Open(NameINI, FileINI.M_Write))
-			{
-				FileINI.WriteString(INI, BearEncoding::ANSI, false);
-				FileINI.Close();
-			}
-		}
-		else
-		{
-			BearCore::GetLog()->Printf(TEXT("Error:Genarate %s[%d]"), name, 1024);
-		}
-	}
-	{
-		BearStringPath NameDDS, NameINI;
-
-		BearString::Copy(NameDDS, name);
-		if (BearString::ToCharWithEnd(NameDDS, '.'))
-		{
-			BearString::ToCharWithEnd(NameDDS, '.')[0] = 0;
-		}
-		BearString::Contact(NameDDS, "_1600.dds");
-		BearString::Copy(NameINI, name);
-		if (BearString::ToCharWithEnd(NameINI, '.'))
-		{
-			BearString::ToCharWithEnd(NameINI, '.')[0] = 0;
-		}
-		BearString::Contact(NameINI, "_1600.ini");
-
-		BearImage img;
-		BearVector< BearVector3<float>> OutVector;
-		if (GenerateFont(name, height, RealSize, 1600, 900, img, OutVector))
-		{
-			if (shoc_format)
-			{
-				img.Convert(BearTexturePixelFormat::BC3);
-			}
-			img.SaveToDds(NameDDS);
-			BearString INI;
-			INI.append(TEXT("[symbol_coords]\n"));
-			INI.append_printf(TEXT("height=%d\n"), uint32(RealSize));
-			for (int i = 0; i < 256; i++)
-			{
-				INI.append_printf(TEXT("%03d = %f,%f,%f\n"), i, OutVector[i].x, OutVector[i].y-1, OutVector[i].z);
-			}
-			BearFileStream FileINI;
-			if (FileINI.Open(NameINI, FileINI.M_Write))
-			{
-				FileINI.WriteString(INI, BearEncoding::ANSI, false);
-				FileINI.Close();
-			}
-		}
-		else
-		{
-			BearCore::GetLog()->Printf(TEXT("Error:Genarate %s[%d]"), name, 1600);
-		}
-	}
-}
-int main(int argc, char* argv[])
+struct FaceHandle
 {
-	if (argc == 0)return -1;
-	BearCore::Initialize();
-	{
-		uint32 Height = 24;
-		if(argc>2)
-		for (int i = 0; i < argc - 2; i++)
-		{
-			if (BearString::CompareWithoutCase(argv[i], "-height")==0)
-			{
-				if (BearString::Scanf(argv[i + 1], "%d", &Height) == 1)
-				{
-					if (Height < 8)Height = 8;
-				}
-			
-			}
-			if (BearString::CompareWithoutCase(argv[i], "-shoc") == 0)
-			{
-				shoc_format = true;
+    FT_Face value{};
 
-			}
-		}
-		BearStringPath Name;
-		BearString::Copy(Name, argv[argc - 1]);
-		if (!BearFileManager::FileExists(Name))
-		{
-			BearCore::GetLog()->Printf(TEXT("Error:No Found %s"), Name);
-		}
-		else
-		{
-			GenerateFont(Name, Height);
-		}
-	}
-	BearCore::Destroy();
-	return 0;
+    ~FaceHandle()
+    {
+        if (value)
+            FT_Done_Face(value);
+    }
+};
+
+struct GlyphHandle
+{
+    FT_Glyph value{};
+
+    ~GlyphHandle()
+    {
+        if (value)
+            FT_Done_Glyph(value);
+    }
+};
+
+struct GlyphPlacement
+{
+    float advance{};
+    float offsetY{};
+};
+
+struct GlyphCoordinates
+{
+    float left{};
+    float top{};
+    float right{};
+};
+
+size_t NextPowerOfTwoStrict(size_t value)
+{
+    size_t result = 1;
+    while (result <= value)
+    {
+        if (result > std::numeric_limits<size_t>::max() / 2)
+            return 0;
+
+        result <<= 1;
+    }
+    return result;
 }
 
-// Запуск программы: CTRL+F5 или меню "Отладка" > "Запуск без отладки"
-// Отладка программы: F5 или меню "Отладка" > "Запустить отладку"
+bool ReadFont(const std::filesystem::path& path, std::vector<FT_Byte>& bytes)
+{
+    std::ifstream stream(path, std::ios::binary | std::ios::ate);
+    if (!stream)
+        return false;
 
-// Советы по началу работы 
-//   1. В окне обозревателя решений можно добавлять файлы и управлять ими.
-//   2. В окне Team Explorer можно подключиться к системе управления версиями.
-//   3. В окне "Выходные данные" можно просматривать выходные данные сборки и другие сообщения.
-//   4. В окне "Список ошибок" можно просматривать ошибки.
-//   5. Последовательно выберите пункты меню "Проект" > "Добавить новый элемент", чтобы создать файлы кода, или "Проект" > "Добавить существующий элемент", чтобы добавить в проект существующие файлы кода.
-//   6. Чтобы снова открыть этот проект позже, выберите пункты меню "Файл" > "Открыть" > "Проект" и выберите SLN-файл.
+    const std::streamoff size = stream.tellg();
+    if (size <= 0 || static_cast<uint64_t>(size) > static_cast<uint64_t>(std::numeric_limits<FT_Long>::max()))
+        return false;
+
+    bytes.resize(static_cast<size_t>(size));
+    stream.seekg(0, std::ios::beg);
+    return static_cast<bool>(
+        stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)));
+}
+
+// Dead Air font slots are CP1251 bytes, while FreeType expects Unicode codepoints.
+FT_ULong ByteToCodepoint(size_t slot)
+{
+    if (slot + 1 == CharacterCount)
+        return L' ';
+
+    const char encoded = static_cast<char>(slot);
+    wchar_t decoded{};
+    if (MultiByteToWideChar(1251, MB_ERR_INVALID_CHARS, &encoded, 1, &decoded, 1) == 1)
+        return static_cast<FT_ULong>(decoded);
+
+    return static_cast<FT_ULong>(static_cast<unsigned char>(encoded));
+}
+
+bool RasterizeGlyph(
+    FT_Face face,
+    size_t slot,
+    bool shocFormat,
+    RedImageTool::RedImage& image,
+    GlyphPlacement& placement)
+{
+    if (FT_Load_Char(face, ByteToCodepoint(slot), FT_LOAD_TARGET_NORMAL | FT_LOAD_FORCE_AUTOHINT | FT_LOAD_RENDER))
+        return false;
+
+    GlyphHandle glyph;
+    if (FT_Get_Glyph(face->glyph, &glyph.value))
+        return false;
+
+    if (FT_Glyph_To_Bitmap(&glyph.value, FT_RENDER_MODE_NORMAL, nullptr, true))
+        return false;
+
+    const auto* bitmapGlyph = reinterpret_cast<FT_BitmapGlyph>(glyph.value);
+    const FT_Bitmap& bitmap = bitmapGlyph->bitmap;
+    if (!bitmap.buffer || !bitmap.width || !bitmap.rows || bitmap.pixel_mode != FT_PIXEL_MODE_GRAY)
+        return false;
+
+    const auto format = shocFormat ? RedImageTool::RedTexturePixelFormat::R8G8B8A8
+                                   : RedImageTool::RedTexturePixelFormat::R8;
+    image.Create(bitmap.width, bitmap.rows, 1, 1, format);
+    auto* pixels = static_cast<uint8_t*>(*image);
+
+    for (uint32_t y = 0; y < bitmap.rows; ++y)
+    {
+        const auto* row = bitmap.buffer + static_cast<ptrdiff_t>(y) * bitmap.pitch;
+        for (uint32_t x = 0; x < bitmap.width; ++x)
+        {
+            if (shocFormat)
+            {
+                const size_t index = 4ull * (x + static_cast<size_t>(y) * bitmap.width);
+                pixels[index] = 255;
+                pixels[index + 1] = 255;
+                pixels[index + 2] = 255;
+                pixels[index + 3] = row[x];
+            }
+            else
+            {
+                pixels[x + static_cast<size_t>(y) * bitmap.width] = row[x];
+            }
+        }
+    }
+
+    placement.advance = static_cast<float>(face->glyph->metrics.horiAdvance) / 64.0f;
+    placement.offsetY = static_cast<float>(face->glyph->metrics.horiBearingY) / 64.0f;
+    return true;
+}
+
+bool BuildAtlas(
+    const std::filesystem::path& fontPath,
+    uint32_t fontHeight,
+    bool shocFormat,
+    RedImageTool::RedImage& atlas,
+    std::array<GlyphCoordinates, CharacterCount>& coordinates,
+    size_t& realHeight)
+{
+    std::vector<FT_Byte> fontBytes;
+    if (!ReadFont(fontPath, fontBytes))
+        return false;
+
+    LibraryHandle library;
+    if (FT_Init_FreeType(&library.value))
+        return false;
+
+    FaceHandle face;
+    if (FT_New_Memory_Face(
+            library.value,
+            fontBytes.data(),
+            static_cast<FT_Long>(fontBytes.size()),
+            0,
+            &face.value))
+    {
+        return false;
+    }
+
+    if (FT_Select_Charmap(face.value, FT_ENCODING_UNICODE) || FT_Set_Pixel_Sizes(face.value, 0, fontHeight))
+        return false;
+
+    realHeight = static_cast<size_t>(face.value->size->metrics.height >> 6);
+    if (!realHeight)
+        return false;
+
+    std::array<RedImageTool::RedImage, CharacterCount> glyphImages;
+    std::array<GlyphPlacement, CharacterCount> placements{};
+    for (size_t slot = FirstPrintableCharacter; slot < CharacterCount; ++slot)
+        RasterizeGlyph(face.value, slot, shocFormat, glyphImages[slot], placements[slot]);
+
+    const int64_t baselineShift = static_cast<int64_t>(realHeight) - fontHeight;
+    for (size_t slot = 0; slot < CharacterCount; ++slot)
+    {
+        placements[slot].offsetY = static_cast<float>(
+            static_cast<int64_t>(fontHeight) -
+            (static_cast<int64_t>(placements[slot].offsetY) + baselineShift));
+    }
+
+    const auto areaEstimate = static_cast<size_t>(std::sqrt(
+        static_cast<double>((CharacterCount - FirstPrintableCharacter) * fontHeight * realHeight)));
+    const size_t textureSize = NextPowerOfTwoStrict(areaEstimate);
+    if (!textureSize)
+        return false;
+
+    atlas.Create(textureSize, textureSize, 1, 1, RedImageTool::RedTexturePixelFormat::R8G8B8A8);
+    atlas.Fill(RedImageTool::RedColor(shocFormat ? 0u : 0xff000000u));
+
+    size_t x = 0;
+    size_t y = 0;
+    for (size_t slot = FirstPrintableCharacter; slot < CharacterCount; ++slot)
+    {
+        const auto& glyph = glyphImages[slot];
+        if (glyph.Empty())
+            continue;
+
+        if (x + glyph.GetWidth() + 4 > textureSize)
+        {
+            x = 0;
+            y += realHeight;
+        }
+
+        const size_t offsetY = placements[slot].offsetY > 0.0f
+            ? static_cast<size_t>(placements[slot].offsetY)
+            : 0;
+        if (y + offsetY + glyph.GetHeight() > textureSize)
+            return false;
+
+        atlas.Append(x, y + offsetY, glyph, 0, 0);
+        coordinates[slot] = {
+            static_cast<float>(x),
+            static_cast<float>(y),
+            static_cast<float>(x) + placements[slot].advance};
+        x += glyph.GetWidth() + 4;
+    }
+
+    atlas.GenerateMipmap();
+    if (shocFormat)
+        atlas.Convert(RedImageTool::RedTexturePixelFormat::BC3);
+
+    return true;
+}
+
+std::filesystem::path OutputPath(
+    const std::filesystem::path& fontPath,
+    uint32_t resolution,
+    std::wstring_view extension)
+{
+    auto result = fontPath;
+    result.replace_extension();
+    result += L"_" + std::to_wstring(resolution) + std::wstring(extension);
+    return result;
+}
+
+bool WriteCoordinates(
+    const std::filesystem::path& path,
+    size_t realHeight,
+    const std::array<GlyphCoordinates, CharacterCount>& coordinates)
+{
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    if (!stream)
+        return false;
+
+    stream << "[symbol_coords]\nheight=" << realHeight << '\n' << std::fixed << std::setprecision(6);
+    for (size_t slot = 0; slot < CharacterCount; ++slot)
+    {
+        stream << std::setfill('0') << std::setw(3) << slot << " = "
+               << coordinates[slot].left << ','
+               << coordinates[slot].top - 1.0f << ','
+               << coordinates[slot].right << '\n';
+    }
+    return static_cast<bool>(stream);
+}
+
+bool GenerateFont(const std::filesystem::path& fontPath, uint32_t fontHeight, bool shocFormat)
+{
+    RedImageTool::RedImage atlas;
+    std::array<GlyphCoordinates, CharacterCount> coordinates{};
+    size_t realHeight{};
+    if (!BuildAtlas(fontPath, fontHeight, shocFormat, atlas, coordinates, realHeight))
+        return false;
+
+    for (const uint32_t resolution : {800u, 1024u, 1600u})
+    {
+        const auto ddsPath = OutputPath(fontPath, resolution, L".dds");
+        const auto iniPath = OutputPath(fontPath, resolution, L".ini");
+        const std::string ddsName = ddsPath.string();
+        if (!atlas.SaveToDds(ddsName.c_str()) || !WriteCoordinates(iniPath, realHeight, coordinates))
+            return false;
+    }
+    return true;
+}
+
+bool PrintFreeTypeVersion()
+{
+    LibraryHandle library;
+    if (FT_Init_FreeType(&library.value))
+        return false;
+
+    FT_Int major{};
+    FT_Int minor{};
+    FT_Int patch{};
+    FT_Library_Version(library.value, &major, &minor, &patch);
+    std::cout << "FreeType " << major << '.' << minor << '.' << patch << '\n';
+    return true;
+}
+
+void PrintUsage()
+{
+    std::wcout << L"Usage: XrFontGenerate [-height N] [-shoc] <font-file>\n"
+                  L"       XrFontGenerate --version\n";
+}
+
+bool ParseHeight(const wchar_t* text, uint32_t& height)
+{
+    wchar_t* end{};
+    errno = 0;
+    const unsigned long parsed = std::wcstoul(text, &end, 10);
+    if (errno || !end || *end || parsed > 4096)
+        return false;
+
+    height = std::max<uint32_t>(8, static_cast<uint32_t>(parsed));
+    return true;
+}
+}
+
+int wmain(int argc, wchar_t* argv[])
+{
+    if (argc == 2 && std::wstring_view(argv[1]) == L"--version")
+        return PrintFreeTypeVersion() ? 0 : 1;
+
+    if (argc == 2 && (std::wstring_view(argv[1]) == L"--help" || std::wstring_view(argv[1]) == L"-h"))
+    {
+        PrintUsage();
+        return 0;
+    }
+
+    if (argc < 2)
+    {
+        PrintUsage();
+        return 2;
+    }
+
+    uint32_t fontHeight = DefaultFontHeight;
+    bool shocFormat = false;
+    for (int index = 1; index < argc - 1; ++index)
+    {
+        const std::wstring_view argument(argv[index]);
+        if (argument == L"-shoc")
+        {
+            shocFormat = true;
+        }
+        else if (argument == L"-height" && index + 1 < argc - 1)
+        {
+            if (!ParseHeight(argv[++index], fontHeight))
+            {
+                std::wcerr << L"Invalid font height.\n";
+                return 2;
+            }
+        }
+        else
+        {
+            std::wcerr << L"Unknown option: " << argument << '\n';
+            return 2;
+        }
+    }
+
+    const std::filesystem::path fontPath(argv[argc - 1]);
+    if (!std::filesystem::is_regular_file(fontPath))
+    {
+        std::wcerr << L"Font file not found: " << fontPath.wstring() << '\n';
+        return 1;
+    }
+
+    if (!GenerateFont(fontPath, fontHeight, shocFormat))
+    {
+        std::wcerr << L"Font generation failed: " << fontPath.wstring() << '\n';
+        return 1;
+    }
+
+    return 0;
+}

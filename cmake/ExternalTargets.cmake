@@ -60,6 +60,72 @@ add_library(OpenAutomate STATIC "${EXT}/OpenAutomate/OpenAutomate.c")
 xray_common(OpenAutomate)
 target_compile_definitions(OpenAutomate PRIVATE _LIB)
 
+#-- FreeType 2.14.3 -----------------------------------------------------------
+set(FREETYPE_ROOT "${EXT}/FreeType")
+
+# Keep the source set aligned with the upstream Windows CMake target.  Each
+# module is an amalgamation entry point, so recursive source globs would emit
+# duplicate symbols from the implementation files they include.
+set(FREETYPE_SRC
+    "${FREETYPE_ROOT}/src/autofit/autofit.c"
+    "${FREETYPE_ROOT}/src/base/ftbase.c"
+    "${FREETYPE_ROOT}/src/base/ftbbox.c"
+    "${FREETYPE_ROOT}/src/base/ftbdf.c"
+    "${FREETYPE_ROOT}/src/base/ftbitmap.c"
+    "${FREETYPE_ROOT}/src/base/ftcid.c"
+    "${FREETYPE_ROOT}/src/base/ftfstype.c"
+    "${FREETYPE_ROOT}/src/base/ftgasp.c"
+    "${FREETYPE_ROOT}/src/base/ftglyph.c"
+    "${FREETYPE_ROOT}/src/base/ftgxval.c"
+    "${FREETYPE_ROOT}/src/base/ftinit.c"
+    "${FREETYPE_ROOT}/src/base/ftmm.c"
+    "${FREETYPE_ROOT}/src/base/ftotval.c"
+    "${FREETYPE_ROOT}/src/base/ftpatent.c"
+    "${FREETYPE_ROOT}/src/base/ftpfr.c"
+    "${FREETYPE_ROOT}/src/base/ftstroke.c"
+    "${FREETYPE_ROOT}/src/base/ftsynth.c"
+    "${FREETYPE_ROOT}/src/base/fttype1.c"
+    "${FREETYPE_ROOT}/src/base/ftwinfnt.c"
+    "${FREETYPE_ROOT}/src/bdf/bdf.c"
+    "${FREETYPE_ROOT}/src/bzip2/ftbzip2.c"
+    "${FREETYPE_ROOT}/src/cache/ftcache.c"
+    "${FREETYPE_ROOT}/src/cff/cff.c"
+    "${FREETYPE_ROOT}/src/cid/type1cid.c"
+    "${FREETYPE_ROOT}/src/gzip/ftgzip.c"
+    "${FREETYPE_ROOT}/src/lzw/ftlzw.c"
+    "${FREETYPE_ROOT}/src/pcf/pcf.c"
+    "${FREETYPE_ROOT}/src/pfr/pfr.c"
+    "${FREETYPE_ROOT}/src/psaux/psaux.c"
+    "${FREETYPE_ROOT}/src/pshinter/pshinter.c"
+    "${FREETYPE_ROOT}/src/psnames/psnames.c"
+    "${FREETYPE_ROOT}/src/raster/raster.c"
+    "${FREETYPE_ROOT}/src/sdf/sdf.c"
+    "${FREETYPE_ROOT}/src/sfnt/sfnt.c"
+    "${FREETYPE_ROOT}/src/smooth/smooth.c"
+    "${FREETYPE_ROOT}/src/svg/svg.c"
+    "${FREETYPE_ROOT}/src/truetype/truetype.c"
+    "${FREETYPE_ROOT}/src/type1/type1.c"
+    "${FREETYPE_ROOT}/src/type42/type42.c"
+    "${FREETYPE_ROOT}/src/winfonts/winfnt.c"
+    "${FREETYPE_ROOT}/builds/windows/ftsystem.c"
+    "${FREETYPE_ROOT}/builds/windows/ftdebug.c"
+    "${FREETYPE_ROOT}/src/base/ftver.rc")
+
+add_library(FreeType STATIC EXCLUDE_FROM_ALL ${FREETYPE_SRC})
+set_target_properties(FreeType PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${XRAY_LIB}")
+target_compile_definitions(FreeType PRIVATE
+    FT2_BUILD_LIBRARY _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_WARNINGS)
+target_include_directories(FreeType PUBLIC "${FREETYPE_ROOT}/include")
+target_compile_options(FreeType PRIVATE /W0 /Oi /Gy)
+if (XRAY_LTO AND CMAKE_BUILD_TYPE STREQUAL "Release")
+    target_compile_options(FreeType PRIVATE /GL)
+endif()
+
+configure_file("${FREETYPE_ROOT}/LICENSE.TXT"
+    "${XRAY_BIN}/FREETYPE_LICENSE_OVERVIEW.txt" COPYONLY)
+configure_file("${FREETYPE_ROOT}/docs/FTL.TXT"
+    "${XRAY_BIN}/FREETYPE_LICENSE.txt" COPYONLY)
+
 # zlib: the one project without /arch:AVX — configured by hand for parity
 set(ZLIB_SRC
     "${EXT}/zlib/adler32.c" "${EXT}/zlib/compress.c" "${EXT}/zlib/crc32.c"

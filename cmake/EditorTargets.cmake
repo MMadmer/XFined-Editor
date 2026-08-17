@@ -10,6 +10,15 @@ add_library(FreeMagic STATIC ${FREEMAGIC_SRC})
 xray_common(FreeMagic NO_MBCS)
 target_compile_definitions(FreeMagic PRIVATE FREEMAGIC_EXPORTS _WINDOWS _USRDLL)
 
+#-- XrFontGenerate (optional command-line tool) --------------------------------
+add_executable(XrFontGenerate EXCLUDE_FROM_ALL "${ED}/XrFontGenerate/Main.cpp")
+xray_common(XrFontGenerate NO_MBCS)
+xray_editor_cxx20(XrFontGenerate)
+target_compile_definitions(XrFontGenerate PRIVATE _CONSOLE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_include_directories(XrFontGenerate BEFORE PRIVATE "${FREETYPE_ROOT}/include")
+target_link_libraries(XrFontGenerate PRIVATE FreeType RedImageTool)
+target_link_options(XrFontGenerate PRIVATE /SUBSYSTEM:CONSOLE)
+
 #-- XrEUI ----------------------------------------------------------------------
 xray_glob(XREUI_SRC "${ED}/XrEUI")
 add_library(XrEUI SHARED ${XREUI_SRC})
