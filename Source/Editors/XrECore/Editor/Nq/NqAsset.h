@@ -159,9 +159,17 @@ struct ECORE_API SNqQuest
 	xr_vector<SNqTask>		tasks;
 	xr_vector<SNqNode>		nodes;
 
-	SNqQuest() : nq(1), activation("auto") {}
+	SNqQuest();
+	SNqQuest(const SNqQuest& other);
+	SNqQuest(SNqQuest&& other) noexcept;
+	SNqQuest& operator=(const SNqQuest& other);
+	SNqQuest& operator=(SNqQuest&& other) noexcept;
 
 	void				Clear();
+	// Public vectors keep the model easy to serialize and edit. Call this after
+	// changing a node/task/variable identifier in place; structural vector
+	// changes are detected from their storage stamp as a second safety net.
+	void				InvalidateLookupIndices();
 
 	SNqNode*			FindNode	(LPCSTR id);
 	const SNqNode*		FindNode	(LPCSTR id) const;
@@ -186,6 +194,50 @@ struct ECORE_API SNqQuest
 	void				TopoOrder	(xr_vector<int>& out) const;
 	// deep equality of the whole quest (undo snapshots, idempotency tests)
 	bool				Equals		(const SNqQuest& o) const;
+
+private:
+	struct SLookupHash
+	{
+		using is_transparent = void;
+
+		size_t operator()(const xr_string& value) const noexcept
+		{
+			return std::hash<std::string_view>{}(std::string_view(value.data(), value.size()));
+		}
+		size_t operator()(LPCSTR value) const noexcept
+		{
+			return std::hash<std::string_view>{}(std::string_view(value));
+		}
+	};
+
+	struct SLookupEqual
+	{
+		using is_transparent = void;
+
+		bool operator()(const xr_string& left, const xr_string& right) const noexcept { return left == right; }
+		bool operator()(const xr_string& left, LPCSTR right) const noexcept { return left == right; }
+		bool operator()(LPCSTR left, const xr_string& right) const noexcept { return right == left; }
+	};
+
+	struct SLookupIndex
+	{
+		xr_flat_hash_map<xr_string, int, SLookupHash, SLookupEqual>	entries;
+		const void*						storage;
+		u32								count;
+		u32								revision;
+
+		SLookupIndex() : storage(nullptr), count(0), revision(0) {}
+	};
+
+	u32								m_LookupRevision;
+	mutable SLookupIndex				m_NodeIndex;
+	mutable SLookupIndex				m_TaskIndex;
+	mutable SLookupIndex				m_VarIndex;
+
+	void				ResetLookupIndices();
+	void				EnsureNodeIndex() const;
+	void				EnsureTaskIndex() const;
+	void				EnsureVarIndex() const;
 };
 
 //------------------------------------------------------------------------------

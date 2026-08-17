@@ -46,6 +46,14 @@ int NqLayout::SanePositions(SNqQuest& q)
 	return fixed;
 }
 
+int NqLayout::EnsurePositions(SNqQuest& q)
+{
+	SanePositions(q);
+	for (const SNqNode& node : q.nodes)
+		if (!node.has_pos) return Run(q, true);
+	return 0;
+}
+
 int NqLayout::Run(SNqQuest& q, bool only_missing)
 {
 	const u32 count = (u32)q.nodes.size();

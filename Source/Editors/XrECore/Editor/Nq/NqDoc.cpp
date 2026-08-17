@@ -47,7 +47,7 @@ bool NqDoc::Load(xr_string& err)
 	m_FileTime = NqLua::FileTime(path.c_str());
 	++revision;
 	// nodes without coordinates get a place right away (par. 4.5 p.2)
-	NqLayout::Run(quest, true);
+	NqLayout::EnsurePositions(quest);
 	Validate();
 	PruneSelection();
 	// shape problems stay visible until the file is fixed; what they describe is
@@ -86,7 +86,7 @@ bool NqDoc::SetFromLua(const xr_string& text, xr_string& err)
 	Snapshot();
 	quest = q;
 	m_Partial = false;
-	NqLayout::Run(quest, true);
+	NqLayout::EnsurePositions(quest);
 	Changed();
 	return true;
 }
@@ -169,9 +169,10 @@ void NqDoc::Changed()
 {
 	dirty = true;
 	++revision;
+	quest.InvalidateLookupIndices();
 	NqLua::CanonicalizePins(quest);
 	// nodes added without coordinates (quest_apply, paste) get a place at once
-	NqLayout::Run(quest, true);
+	NqLayout::EnsurePositions(quest);
 	Validate();
 	PruneSelection();
 }
@@ -218,6 +219,7 @@ bool NqDoc::AddNode(const SNqNode& n, xr_string& err)
 	if (quest.FindNode(n.id.c_str()))	{ err = "node '" + n.id + "' already exists"; return false; }
 	Snapshot();
 	quest.nodes.push_back(n);
+	quest.InvalidateLookupIndices();
 	Changed();
 	return true;
 }
@@ -233,6 +235,7 @@ bool NqDoc::RemoveNodes(const xr_vector<xr_string>& ids, xr_string& err)
 		const int idx = quest.NodeIndex(ids[i].c_str());
 		if (idx < 0) continue;
 		quest.nodes.erase(quest.nodes.begin() + idx);
+		quest.InvalidateLookupIndices();
 		// edges into the removed node go with it
 		for (u32 n = 0; n < quest.nodes.size(); ++n)
 			for (int p = (int)quest.nodes[n].out.size() - 1; p >= 0; --p)
@@ -280,6 +283,7 @@ bool NqDoc::RenameNode(LPCSTR id, LPCSTR new_id, xr_string& err)
 	Snapshot();
 	n = quest.FindNode(id);
 	n->id = new_id;
+	quest.InvalidateLookupIndices();
 	for (u32 i = 0; i < quest.nodes.size(); ++i)
 	{
 		SNqNode& m = quest.nodes[i];
@@ -378,6 +382,7 @@ bool NqDoc::ApplyOne(const SNqValue& op, xr_string& err)
 		if (!NqLua::NodeFromValue(*nv, n, shape) || !shape.empty()) { err = shape.empty() ? "bad node" : shape[0]; return false; }
 		if (quest.FindNode(n.id.c_str())) { err = "node '" + n.id + "' already exists"; return false; }
 		quest.nodes.push_back(n);
+		quest.InvalidateLookupIndices();
 		return true;
 	}
 	if (what == "remove_node")
@@ -388,6 +393,7 @@ bool NqDoc::ApplyOne(const SNqValue& op, xr_string& err)
 		// inline (no snapshot: the caller owns it)
 		const int idx = quest.NodeIndex(id.c_str());
 		quest.nodes.erase(quest.nodes.begin() + idx);
+		quest.InvalidateLookupIndices();
 		for (u32 n = 0; n < quest.nodes.size(); ++n)
 			for (int p = (int)quest.nodes[n].out.size() - 1; p >= 0; --p)
 			{
@@ -406,6 +412,7 @@ bool NqDoc::ApplyOne(const SNqValue& op, xr_string& err)
 		if (id == new_id) return true;
 		if (quest.FindNode(new_id.c_str())) { err = "node '" + new_id + "' already exists"; return false; }
 		n->id = new_id;
+		quest.InvalidateLookupIndices();
 		for (u32 i = 0; i < quest.nodes.size(); ++i)
 		{
 			SNqNode& m = quest.nodes[i];
@@ -562,6 +569,7 @@ bool NqDoc::ApplyOne(const SNqValue& op, xr_string& err)
 			}
 			else { err = "set_quest: unknown field '" + k + "'"; return false; }
 		}
+		quest.InvalidateLookupIndices();
 		return true;
 	}
 	if (what == "set_pos")

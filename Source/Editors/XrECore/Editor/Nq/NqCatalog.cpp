@@ -12,13 +12,13 @@ namespace
 	xr_string					s_Error;
 	int							s_Version	= 0;
 	int							s_Api		= 0;
+	u32							s_Generation = 0;
 	bool						s_Loaded	= false;
 	xr_string					s_LoadedFor;	// game root the load was made for (auto-reload on link change)
 
-	xr_string CurrentKey()
+	LPCSTR CurrentKey()
 	{
-		xr_string k = (EditorProject::Active() && EditorProject::GameLinked()) ? EditorProject::GameRoot() : "";
-		return k;
+		return (EditorProject::Active() && EditorProject::GameLinked()) ? EditorProject::GameRoot() : "";
 	}
 
 	// catalog type names - what tells a parameter definition line apart from a
@@ -280,6 +280,8 @@ namespace
 
 	void Load()
 	{
+		++s_Generation;
+		if (!s_Generation) ++s_Generation;
 		s_Kinds.clear(); s_Files.clear(); s_Source.clear(); s_Error.clear();
 		s_Version = 0; s_Api = 0;
 		s_Loaded = true;
@@ -367,6 +369,7 @@ bool NqCatalog::Ensure()
 LPCSTR	NqCatalog::Source()		{ Ensure(); return s_Source.c_str(); }
 int		NqCatalog::Version()	{ Ensure(); return s_Version; }
 int		NqCatalog::Api()		{ Ensure(); return s_Api; }
+u32		NqCatalog::Generation()	{ Ensure(); return s_Generation; }
 LPCSTR	NqCatalog::LoadError()	{ Ensure(); return s_Error.c_str(); }
 const xr_vector<NqCatalog::SKind>& NqCatalog::Kinds()	{ Ensure(); return s_Kinds; }
 const xr_vector<xr_string>& NqCatalog::Files()			{ Ensure(); return s_Files; }

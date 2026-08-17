@@ -65,6 +65,8 @@ public:
 	static LPCSTR					Source		();		// "game" | "bundled" | "" (not loaded)
 	static int						Version		();
 	static int						Api			();
+	// changes after every catalog reload, including a project-link switch
+	static u32						Generation	();
 	static LPCSTR					LoadError	();
 	static const xr_vector<SKind>&	Kinds		();
 	static const SKind*				Find		(LPCSTR id);

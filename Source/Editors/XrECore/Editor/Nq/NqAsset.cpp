@@ -281,59 +281,187 @@ const xr_vector<SNqAction>* SNqNode::SlotC(LPCSTR slot) const
 //------------------------------------------------------------------------------
 // SNqQuest
 //------------------------------------------------------------------------------
+namespace
+{
+	void SwapValue(SNqValue& left, SNqValue& right) noexcept
+	{
+		std::swap(left.type, right.type);
+		std::swap(left.b, right.b);
+		std::swap(left.n, right.n);
+		left.s.swap(right.s);
+		left.arr.swap(right.arr);
+		left.keys.swap(right.keys);
+		left.vals.swap(right.vals);
+	}
+
+	void SwapQuestPayload(SNqQuest& left, SNqQuest& right) noexcept
+	{
+		std::swap(left.nq, right.nq);
+		left.id.swap(right.id);
+		SwapValue(left.title, right.title);
+		left.activation.swap(right.activation);
+		left.vars.swap(right.vars);
+		left.tasks.swap(right.tasks);
+		left.nodes.swap(right.nodes);
+	}
+}
+
+SNqQuest::SNqQuest() : nq(1), activation("auto"), m_LookupRevision(1)
+{
+}
+
+SNqQuest::SNqQuest(const SNqQuest& other)
+	: nq(other.nq), id(other.id), title(other.title), activation(other.activation), vars(other.vars),
+	  tasks(other.tasks), nodes(other.nodes), m_LookupRevision(1)
+{
+}
+
+SNqQuest::SNqQuest(SNqQuest&& other) noexcept : SNqQuest()
+{
+	SwapQuestPayload(*this, other);
+	other.ResetLookupIndices();
+}
+
+SNqQuest& SNqQuest::operator=(const SNqQuest& other)
+{
+	if (this == &other) return *this;
+	nq = other.nq;
+	id = other.id;
+	title = other.title;
+	activation = other.activation;
+	vars = other.vars;
+	tasks = other.tasks;
+	nodes = other.nodes;
+	ResetLookupIndices();
+	return *this;
+}
+
+SNqQuest& SNqQuest::operator=(SNqQuest&& other) noexcept
+{
+	if (this == &other) return *this;
+	SNqQuest moved(std::move(other));
+	SwapQuestPayload(*this, moved);
+	ResetLookupIndices();
+	return *this;
+}
+
+void SNqQuest::ResetLookupIndices()
+{
+	m_LookupRevision = 1;
+	m_NodeIndex.entries.clear();
+	m_NodeIndex.storage = nullptr;
+	m_NodeIndex.count = m_NodeIndex.revision = 0;
+	m_TaskIndex.entries.clear();
+	m_TaskIndex.storage = nullptr;
+	m_TaskIndex.count = m_TaskIndex.revision = 0;
+	m_VarIndex.entries.clear();
+	m_VarIndex.storage = nullptr;
+	m_VarIndex.count = m_VarIndex.revision = 0;
+}
+
+void SNqQuest::InvalidateLookupIndices()
+{
+	++m_LookupRevision;
+	if (!m_LookupRevision) ResetLookupIndices();
+}
+
+void SNqQuest::EnsureNodeIndex() const
+{
+	const void* storage = nodes.data();
+	if (m_NodeIndex.revision == m_LookupRevision && m_NodeIndex.storage == storage && m_NodeIndex.count == nodes.size()) return;
+	m_NodeIndex.entries.clear();
+	m_NodeIndex.entries.reserve(nodes.size());
+	for (u32 i = 0; i < nodes.size(); ++i) m_NodeIndex.entries.emplace(nodes[i].id, int(i));
+	m_NodeIndex.storage = storage;
+	m_NodeIndex.count = nodes.size();
+	m_NodeIndex.revision = m_LookupRevision;
+}
+
+void SNqQuest::EnsureTaskIndex() const
+{
+	const void* storage = tasks.data();
+	if (m_TaskIndex.revision == m_LookupRevision && m_TaskIndex.storage == storage && m_TaskIndex.count == tasks.size()) return;
+	m_TaskIndex.entries.clear();
+	m_TaskIndex.entries.reserve(tasks.size());
+	for (u32 i = 0; i < tasks.size(); ++i) m_TaskIndex.entries.emplace(tasks[i].id, int(i));
+	m_TaskIndex.storage = storage;
+	m_TaskIndex.count = tasks.size();
+	m_TaskIndex.revision = m_LookupRevision;
+}
+
+void SNqQuest::EnsureVarIndex() const
+{
+	const void* storage = vars.data();
+	if (m_VarIndex.revision == m_LookupRevision && m_VarIndex.storage == storage && m_VarIndex.count == vars.size()) return;
+	m_VarIndex.entries.clear();
+	m_VarIndex.entries.reserve(vars.size());
+	for (u32 i = 0; i < vars.size(); ++i) m_VarIndex.entries.emplace(vars[i].name, int(i));
+	m_VarIndex.storage = storage;
+	m_VarIndex.count = vars.size();
+	m_VarIndex.revision = m_LookupRevision;
+}
+
 void SNqQuest::Clear()
 {
 	nq = 1; id.clear(); title = SNqValue(); activation = "auto";
 	vars.clear(); tasks.clear(); nodes.clear();
+	InvalidateLookupIndices();
 }
 
 SNqNode* SNqQuest::FindNode(LPCSTR id_)
 {
 	if (!id_) return 0;
-	for (u32 i = 0; i < nodes.size(); ++i) if (nodes[i].id == id_) return &nodes[i];
-	return 0;
+	EnsureNodeIndex();
+	const auto found = m_NodeIndex.entries.find(id_);
+	return found != m_NodeIndex.entries.end() ? &nodes[found->second] : nullptr;
 }
 
 const SNqNode* SNqQuest::FindNode(LPCSTR id_) const
 {
 	if (!id_) return 0;
-	for (u32 i = 0; i < nodes.size(); ++i) if (nodes[i].id == id_) return &nodes[i];
-	return 0;
+	EnsureNodeIndex();
+	const auto found = m_NodeIndex.entries.find(id_);
+	return found != m_NodeIndex.entries.end() ? &nodes[found->second] : nullptr;
 }
 
 int SNqQuest::NodeIndex(LPCSTR id_) const
 {
 	if (!id_) return -1;
-	for (u32 i = 0; i < nodes.size(); ++i) if (nodes[i].id == id_) return (int)i;
-	return -1;
+	EnsureNodeIndex();
+	const auto found = m_NodeIndex.entries.find(id_);
+	return found != m_NodeIndex.entries.end() ? found->second : -1;
 }
 
 SNqTask* SNqQuest::FindTask(LPCSTR id_)
 {
 	if (!id_) return 0;
-	for (u32 i = 0; i < tasks.size(); ++i) if (tasks[i].id == id_) return &tasks[i];
-	return 0;
+	EnsureTaskIndex();
+	const auto found = m_TaskIndex.entries.find(id_);
+	return found != m_TaskIndex.entries.end() ? &tasks[found->second] : nullptr;
 }
 
 const SNqTask* SNqQuest::FindTask(LPCSTR id_) const
 {
 	if (!id_) return 0;
-	for (u32 i = 0; i < tasks.size(); ++i) if (tasks[i].id == id_) return &tasks[i];
-	return 0;
+	EnsureTaskIndex();
+	const auto found = m_TaskIndex.entries.find(id_);
+	return found != m_TaskIndex.entries.end() ? &tasks[found->second] : nullptr;
 }
 
 SNqVar* SNqQuest::FindVar(LPCSTR name)
 {
 	if (!name) return 0;
-	for (u32 i = 0; i < vars.size(); ++i) if (vars[i].name == name) return &vars[i];
-	return 0;
+	EnsureVarIndex();
+	const auto found = m_VarIndex.entries.find(name);
+	return found != m_VarIndex.entries.end() ? &vars[found->second] : nullptr;
 }
 
 const SNqVar* SNqQuest::FindVar(LPCSTR name) const
 {
 	if (!name) return 0;
-	for (u32 i = 0; i < vars.size(); ++i) if (vars[i].name == name) return &vars[i];
-	return 0;
+	EnsureVarIndex();
+	const auto found = m_VarIndex.entries.find(name);
+	return found != m_VarIndex.entries.end() ? &vars[found->second] : nullptr;
 }
 
 int SNqQuest::InDegree(LPCSTR id_) const

@@ -24,6 +24,8 @@ namespace NqLayout
 	ECORE_API float		Sane		(float v);
 	// clamps every node position; returns the number of nodes it had to fix
 	ECORE_API int		SanePositions(SNqQuest& q);
+	// clamps positions and runs the graph layout only when a node has no position
+	ECORE_API int		EnsurePositions(SNqQuest& q);
 
 	// estimated size of a node box
 	ECORE_API Fvector2	NodeSize	(const SNqNode& n);

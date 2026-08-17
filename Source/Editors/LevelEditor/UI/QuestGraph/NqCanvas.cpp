@@ -164,6 +164,11 @@ NqCanvas::NqCanvas(NqDoc* doc) : m_Doc(doc)
 	m_WantFrameAll = m_WantFrameSel = m_WantRename = m_WantFocusAction = m_OpenAddAction = false;
 	m_WantZoom = -1;
 	m_ReachRevision = u32(-1);
+	m_GeomRevision = m_GeomCatalogGeneration = u32(-1);
+	m_LinkRevision = m_LinkCatalogGeneration = u32(-1);
+	m_LinkOrigin = m_LinkSize = ImVec2(FLT_MAX, FLT_MAX);
+	m_LinkViewX = m_LinkViewY = FLT_MAX;
+	m_LinkZoom = -1;
 	m_Filter[0] = 0;
 	m_FilterSel = 0;
 	if (m_Doc->zoom_idx < 0 || m_Doc->zoom_idx >= kZoomCount) m_Doc->zoom_idx = kZoomDefault;
@@ -452,6 +457,9 @@ void NqCanvas::InsertNodes(xr_vector<SNqNode>& in, const ImVec2& place, bool anc
 void NqCanvas::BuildGeometry()
 {
 	const SNqQuest& q = m_Doc->quest;
+	const u32 catalog_generation = NqCatalog::Generation();
+	if (!m_Dragging && m_GeomRevision == m_Doc->revision && m_GeomCatalogGeneration == catalog_generation
+		&& m_Geom.size() == q.nodes.size()) return;
 	m_Geom.resize(q.nodes.size());
 	for (u32 i = 0; i < q.nodes.size(); ++i)
 	{
@@ -492,6 +500,8 @@ void NqCanvas::BuildGeometry()
 			if (!have) g.pins.push_back(n.out[p].first);
 		}
 	}
+	m_GeomRevision = m_Doc->revision;
+	m_GeomCatalogGeneration = catalog_generation;
 }
 
 const NqCanvas::SNodeGeom* NqCanvas::GeomOf(LPCSTR id, int* index) const
@@ -515,8 +525,15 @@ ImVec2 NqCanvas::OutputPin(const SNodeGeom& g, int pin) const
 
 void NqCanvas::BuildLinks()
 {
-	m_Links.clear();
 	const SNqQuest& q = m_Doc->quest;
+	const u32 catalog_generation = NqCatalog::Generation();
+	if (!m_Dragging && m_LinkRevision == m_Doc->revision && m_LinkCatalogGeneration == catalog_generation
+		&& m_LinkOrigin.x == m_Origin.x && m_LinkOrigin.y == m_Origin.y
+		&& m_LinkSize.x == m_Size.x && m_LinkSize.y == m_Size.y
+		&& m_LinkViewX == m_Doc->view_cx && m_LinkViewY == m_Doc->view_cy
+		&& m_LinkZoom == m_Doc->zoom_idx) return;
+
+	m_Links.clear();
 	float z = Zoom();
 	for (u32 i = 0; i < q.nodes.size(); ++i)
 	{
@@ -542,6 +559,13 @@ void NqCanvas::BuildLinks()
 			}
 		}
 	}
+	m_LinkRevision = m_Doc->revision;
+	m_LinkCatalogGeneration = catalog_generation;
+	m_LinkOrigin = m_Origin;
+	m_LinkSize = m_Size;
+	m_LinkViewX = m_Doc->view_cx;
+	m_LinkViewY = m_Doc->view_cy;
+	m_LinkZoom = m_Doc->zoom_idx;
 }
 
 // the editor bakes the monitor DPI into the font (XrUIManager loads it at
@@ -812,6 +836,14 @@ void NqCanvas::DrawLinks(ImDrawList* dl)
 	for (u32 i = 0; i < m_Links.size(); ++i)
 	{
 		const SLinkGeom& l = m_Links[i];
+		// A Bezier curve stays inside the convex hull of its control points, so
+		// this padded control-point bound cannot cull a visible wire.
+		const float pad = _max(th, _max(4.f, 7.f * z));
+		const float min_x = _min(_min(l.p0.x, l.p1.x), _min(l.p2.x, l.p3.x)) - pad;
+		const float min_y = _min(_min(l.p0.y, l.p1.y), _min(l.p2.y, l.p3.y)) - pad;
+		const float max_x = _max(_max(l.p0.x, l.p1.x), _max(l.p2.x, l.p3.x)) + pad;
+		const float max_y = _max(_max(l.p0.y, l.p1.y), _max(l.p2.y, l.p3.y)) + pad;
+		if (max_x < m_Origin.x || max_y < m_Origin.y || min_x > m_Origin.x + m_Size.x || min_y > m_Origin.y + m_Size.y) continue;
 		bool sel = IsSelected(m_Doc->quest.nodes[l.from].id.c_str()) || IsSelected(m_Doc->quest.nodes[l.to].id.c_str());
 		ImU32 col = sel ? Col(255, 220, 120) : Col(200, 200, 205, 200);
 		dl->AddBezierCubic(l.p0, l.p1, l.p2, l.p3, col, th, 24);

@@ -112,9 +112,18 @@ private:
 	u32				m_ReachRevision;
 	xr_vector<bool>	m_Reachable;
 
-	// per-frame caches
+	// render caches
 	xr_vector<SNodeGeom> m_Geom;
 	xr_vector<SLinkGeom> m_Links;
+	u32				m_GeomRevision;
+	u32				m_GeomCatalogGeneration;
+	u32				m_LinkRevision;
+	u32				m_LinkCatalogGeneration;
+	ImVec2				m_LinkOrigin;
+	ImVec2				m_LinkSize;
+	float				m_LinkViewX;
+	float				m_LinkViewY;
+	int					m_LinkZoom;
 
 	void			BuildGeometry	();
 	void			BuildLinks		();
