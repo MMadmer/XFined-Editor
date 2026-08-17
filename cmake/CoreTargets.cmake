@@ -78,10 +78,6 @@ target_link_libraries(XrEngine PRIVATE
     Luabind Ogg OpenAutomate Theora XrAPI XrCDB XrCore XrNetServer XrSound
     lua51 vfw32 Winmm dxguid dinput8)
 xray_no_pch(${XRENGINE_C})
-# stage the prebuilt LuaJIT runtime next to the binaries (was a post-build XCOPY)
-add_custom_command(TARGET XrEngine POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${XRAY_ROOT}/SDK/Bin/x64/lua51.dll" "${XRAY_BIN}/lua51.dll")
 
 #-- XrPhysics ------------------------------------------------------------------
 xray_glob(XRPHYS_SRC  "${SRC}/XrPhysics")

@@ -35,6 +35,7 @@ configure_file(
     COPYONLY
 )
 
+include(cmake/LuaJITTarget.cmake)
 include(cmake/ExternalTargets.cmake)
 include(cmake/LzoTarget.cmake)
 include(cmake/CoreTargets.cmake)

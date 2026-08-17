@@ -197,9 +197,6 @@ function(xray_se_factory name se_dir)
     if (_skip)
         set_source_files_properties(${_skip} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     endif()
-    add_custom_command(TARGET ${name} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${XRAY_ROOT}/SDK/Bin/x64/lua51.dll" "${XRAY_BIN}/lua51.dll")
 endfunction()
 
 set(SE_SCRIPT_COMMON

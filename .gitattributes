@@ -7,3 +7,9 @@
 
 # Preserve the verified upstream LZO bytes, including its intentional EOF layout.
 Source/External/LZO/** -whitespace
+
+# Preserve the verified upstream LuaJIT blobs, including intentional whitespace.
+Source/External/LuaJIT/** -whitespace
+
+# Keep upstream LuaJIT batch files byte-exact; their blobs already use CRLF.
+Source/External/LuaJIT/src/*.bat -text
