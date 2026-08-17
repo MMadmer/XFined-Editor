@@ -695,6 +695,7 @@ bool EScene::ReadObjectsLTX(CInifile& ini,  LPCSTR sect_name_parent, LPCSTR sect
 
         if (pb)
 			pb->Inc();
+		UI->ProgressCheckpoint();
     }
     return bRes;
 }
@@ -755,10 +756,10 @@ bool EScene::ReadObjectsStream(IReader& F, u32 chunk_id, TAppendObject on_append
             	bRes = false;
 
             O->close	();
-            O 			= OBJ->open_chunk(count);
-
             if (pb)
-            pb->Inc();
+				pb->Inc();
+			UI->ProgressCheckpoint();
+			O = OBJ->open_chunk(count);
         }
         OBJ->close();
     }

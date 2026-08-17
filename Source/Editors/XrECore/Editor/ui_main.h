@@ -63,6 +63,23 @@ struct SFramePacingStats
 	u64 waited_us;
 };
 
+struct SDeferredEditorCommand
+{
+	u32 command;
+	CCommandVar p1;
+	CCommandVar p2;
+};
+
+struct SDeferredWindowMessage
+{
+	HWND window;
+	UINT message;
+	WPARAM wparam;
+	LPARAM lparam;
+};
+
+using TDeferredUIWork = void(*)();
+
 class ECORE_API TUI: public IInputReceiver,public XrUIManager
 {
     bool m_AppClosed;
@@ -76,8 +93,11 @@ class ECORE_API TUI: public IInputReceiver,public XrUIManager
 	u64 m_FramePacingWaits;
 	u64 m_FramePacingWaitTicks;
 	u32 m_LastFramePacingReason;
+	xr_vector<SDeferredEditorCommand> m_DeferredCommands;
+	xr_vector<TDeferredUIWork> m_DeferredUIWork;
 	void SyncAppActivation();
 	void WaitForFramePacing();
+	void ProcessDeferredWork();
 	// Main-thread flags remain authoritative; the event only interrupts a wait
 	// when work is posted from outside the current idle iteration.
 	void WakeFramePacing() { if (m_FrameWakeEvent) ::SetEvent(m_FrameWakeEvent); }
@@ -94,6 +114,19 @@ protected:
 protected:
     EStateList m_EditorState;
     bool bNeedAbort;
+	u32 m_ProgressOperationDepth;
+	bool m_ProgressCancelable;
+	bool m_ProgressImplicitOperation;
+	bool m_ProgressDeferredQuit;
+	u64 m_LastProgressMessagePumpMs;
+	u64 m_LastProgressPaintMs;
+	xr_vector<SDeferredWindowMessage> m_DeferredWindowMessages;
+	void BeginProgressOperation(bool cancelable);
+	void EndProgressOperation();
+	void PumpProgressMessages();
+	void ReplayDeferredWindowMessages();
+	void DrawProgressFrame();
+	friend class SProgressOperation;
 public:
 	bool m_bReady;
 protected:
@@ -240,11 +273,14 @@ public:
     void 			OnAppDeactivate     ();
 
     bool    		NeedAbort           (){ return bNeedAbort;}
-    void 			NeedBreak			(){bNeedAbort = true;}
+    bool 			NeedBreak			(){ return RequestProgressCancel(); }
     void 			ResetBreak			(){bNeedAbort = false;}
 
     virtual bool 	ApplyShortCut		(DWORD Key, TShiftState Shift)=0;
     virtual bool 	ApplyGlobalShortCut	(DWORD Key, TShiftState Shift)=0;
+	virtual bool	ShouldDeferCommand	(u32 command) const;
+	bool			DeferCommand		(u32 command, CCommandVar p1, CCommandVar p2);
+	bool			DeferUIWork		(TDeferredUIWork work);
 
     void			SetGradient			(u32 color){;}
 
@@ -285,6 +321,10 @@ public:
     virtual void	ProgressDraw();
     SPBItem*		ProgressLast		(){return m_ProgressItems.empty()?0:m_ProgressItems.back();}
 	void			GetProgressSnapshot	(SProgressTaskInfoVec& result) const;
+	bool			ProgressOperationActive() const { return m_ProgressOperationDepth != 0; }
+	bool			ProgressCancelable	() const { return ProgressOperationActive() && m_ProgressCancelable; }
+	bool			RequestProgressCancel();
+	void			ProgressCheckpoint	();
 	void			GetFramePacingStats	(SFramePacingStats& result);
 
 	void ShowConsole();
@@ -296,12 +336,23 @@ public:
     _vector2<u32>            RTSize;
 protected:
     virtual void OnDrawUI();
+	virtual void OnDrawProgressUI();
     void RealResetUI();
     HANDLE m_HConsole;
 public:
    IC  void ResetUI(bool bForced=false)  { if (!bForced){ m_Flags.set(flResetUI, TRUE); WakeFramePacing(); } if (bForced) RealResetUI(); }
    virtual Ivector2 GetRenderMousePosition()const { return Ivector2().set(0, 0); }
    virtual void	OnStats(CGameFont* font);
+};
+
+class ECORE_API SProgressOperation
+{
+	TUI* m_UI;
+public:
+	explicit SProgressOperation(TUI& ui, bool cancelable);
+	~SProgressOperation();
+	SProgressOperation(const SProgressOperation&) = delete;
+	SProgressOperation& operator=(const SProgressOperation&) = delete;
 };
 //---------------------------------------------------------------------------
 extern ECORE_API TUI* UI;  

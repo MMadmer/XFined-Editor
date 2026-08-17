@@ -287,12 +287,6 @@ void CSoundManager::SynchronizeSounds(bool sync_thm, bool sync_game, bool bForce
 		if (THM)
         	xr_delete(THM);
 
-		if (UI->NeedAbort())
-        	break;
-
-        if (bProgress)
-		    pb->Inc		(bUpdated?xr_string(base_name+" - UPDATED.").c_str():"",bUpdated);
-
         if (bUpdated)
         {
             string_path				wav_fn,thm_fn,ogg_fn;
@@ -303,6 +297,11 @@ void CSoundManager::SynchronizeSounds(bool sync_thm, bool sync_game, bool bForce
             FS.set_file_age			(thm_fn,m_age);
             FS.set_file_age			(ogg_fn,m_age);
         }
+        if (bProgress)
+            pb->Inc(bUpdated?xr_string(base_name+" - UPDATED.").c_str():"",bUpdated);
+        UI->ProgressCheckpoint();
+        if (UI->NeedAbort())
+            break;
     }
     if (bProgress)
     	UI->ProgressEnd(pb);
@@ -353,7 +352,7 @@ void CSoundManager::CleanupSounds()
     it							= M_GAME_DEL.begin();
 	it_e 						= M_GAME_DEL.end();
 
-	for (; it!=it_e; ++it)
+	for (; it!=it_e && !UI->NeedAbort(); ++it)
     {
         xr_string base_name		= EFS.ChangeFileExt(it->name,"");
         xr_strlwr				(base_name);
@@ -361,11 +360,14 @@ void CSoundManager::CleanupSounds()
         FS.update_path			(fn,_game_sounds_,EFS.ChangeFileExt(base_name,".ogg").c_str());
         EFS.MarkFile			(fn,true);
         pb->Inc					();
+        UI->ProgressCheckpoint();
+        if (UI->NeedAbort())
+            break;
     }
     // mark thm sounds
     it							= M_THM_DEL.begin();
 	it_e 						= M_THM_DEL.end();
-	for (; it!=it_e; ++it)
+	for (; it!=it_e && !UI->NeedAbort(); ++it)
     {
         xr_string base_name		= EFS.ChangeFileExt(it->name,"");
         xr_strlwr				(base_name);
@@ -373,6 +375,9 @@ void CSoundManager::CleanupSounds()
         FS.update_path			(fn,_sounds_,EFS.ChangeFileExt(base_name,".thm").c_str());
         EFS.MarkFile			(fn,true);
         pb->Inc					();
+        UI->ProgressCheckpoint();
+        if (UI->NeedAbort())
+            break;
     }
     UI->ProgressEnd				(pb);
 }
@@ -416,9 +421,11 @@ void CSoundManager::RefreshSounds(bool bSync)
         UI->SetStatus("Refresh sounds...");
         if (bSync){
             SynchronizeSounds	(true,true,false,0,0);
-            CleanupSounds		();
+            if (!UI->NeedAbort())
+                CleanupSounds		();
         }
-        Sound->refresh_sources();
+        if (!UI->NeedAbort())
+            Sound->refresh_sources();
         UI->SetStatus("");
     }else{
         Log("#!You don't have permisions to modify sounds.");

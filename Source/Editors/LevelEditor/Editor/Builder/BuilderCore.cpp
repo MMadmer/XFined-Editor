@@ -31,6 +31,7 @@ bool SceneBuilder::EvictResource()
     ObjectIt _E = Scene->LastObj(OBJCLASS_SCENEOBJECT);
     for(;_F!=_E;_F++){
     	CSceneObject* O = (CSceneObject*)(*_F);
+		UI->ProgressCheckpoint();
         if (UI->NeedAbort()) break; // break building
         O->EvictObject();
         pb->Inc();
@@ -53,23 +54,30 @@ bool SceneBuilder::GetBounding()
 
 bool SceneBuilder::RenumerateSectors()
 {
-	m_iDefaultSectorNum	= -1;
-
 	SPBItem* pb = UI->ProgressStart(Scene->ObjCount(OBJCLASS_SECTOR), "Renumerate sectors...");
 
-	int sector_num = 0;
-    ObjectIt _F = Scene->FirstObj(OBJCLASS_SECTOR);
-    ObjectIt _E = Scene->LastObj(OBJCLASS_SECTOR);
-    for(;_F!=_E;_F++,sector_num++){
-    	CSector* _S=(CSector*)(*_F);
-        _S->m_sector_num = sector_num;
-        if (_S->IsDefault()) m_iDefaultSectorNum=sector_num;
-        pb->Inc();
+	xr_vector<CSector*> sectors;
+	sectors.reserve(Scene->ObjCount(OBJCLASS_SECTOR));
+	int default_sector_num = -1;
+	ObjectIt _F = Scene->FirstObj(OBJCLASS_SECTOR);
+	ObjectIt _E = Scene->LastObj(OBJCLASS_SECTOR);
+	for (; _F != _E; ++_F) {
+		CSector* _S=(CSector*)(*_F);
+		sectors.push_back(_S);
+		if (_S->IsDefault()) default_sector_num = int(sectors.size()) - 1;
+		pb->Inc();
+		UI->ProgressCheckpoint();
+		if (UI->NeedAbort()) {
+			UI->ProgressEnd(pb);
+			return false;
+		}
 	}
 
 	UI->ProgressEnd(pb);
 
-	if (m_iDefaultSectorNum<0) m_iDefaultSectorNum=Scene->ObjCount(OBJCLASS_SECTOR);
+	for (u32 sector_num = 0; sector_num < sectors.size(); ++sector_num)
+		sectors[sector_num]->m_sector_num = sector_num;
+	m_iDefaultSectorNum = default_sector_num >= 0 ? default_sector_num : int(sectors.size());
 	return true;
 }
 

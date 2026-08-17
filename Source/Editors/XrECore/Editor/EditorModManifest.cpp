@@ -4,6 +4,7 @@
 #include "EditorModManifest.h"
 #include "EditorProject.h"
 #include "XFinedMCP.h"
+#include "ui_main.h"
 #include "Nq/NqExport.h"
 #include "Nq/NqDoc.h"
 
@@ -1149,6 +1150,10 @@ void EditorMod::RequestExportFlat()		{ PrepareExport(true); }
 // it did not put there.
 //------------------------------------------------------------------------------
 static bool					s_WantBuild		= false;
+static bool					s_BuildQueued		= false;
+static bool					s_ExportQueued		= false;
+static bool					s_DeferredExportFlat = false;
+static char					s_DeferredExportTarget[MAX_PATH] = {};
 static EditorMod::TPreBuildBake	s_PreBuildBake	= 0;
 
 void EditorMod::SetPreBuildBake(TPreBuildBake fn)	{ s_PreBuildBake = fn; }
@@ -1179,11 +1184,12 @@ void EditorMod::RequestBuildIntoGame()
 	s_WantMessage = true;
 }
 
-// runs inside the ImGui frame (from DrawUI), like the export modal's Export
 static void RunBuildIntoGame()
 {
+	s_BuildQueued = false;
 	if (!s_WantBuild) return;
 	s_WantBuild = false;
+	SProgressOperation progress(*UI, false);
 
 	EditorMod::SManifest m;
 	if (!EditorMod::Load(EditorProject::Root(), m) || !EditorMod::ValidateId(m.id.c_str()))
@@ -1460,6 +1466,44 @@ static void DrawManifestModal()
 	ImGui::EndPopup();
 }
 
+static void RunDeferredExport()
+{
+	s_ExportQueued = false;
+	SProgressOperation progress(*UI, false);
+	xr_string bake_note;
+	EditorMod::RunPreBuildBake(bake_note);
+	int files = 0;
+	xr_string path, err;
+	bool ok = EditorMod::Export(EditorProject::Root(), s_DeferredExportTarget,
+		s_DeferredExportFlat, files, path, err);
+	if (!ok && 0 == strncmp(err.c_str(), "target already holds a module", 29))
+	{
+		if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
+			"%s\n\n%s\n\nThose files will be DELETED. Continue?", err.c_str(), path.c_str()))
+		{
+			ok = EditorMod::Export(EditorProject::Root(), s_DeferredExportTarget,
+				s_DeferredExportFlat, files, path, err, true);
+		}
+		else
+		{
+			sprintf_s(s_Message, "Export cancelled.");
+			s_WantMessage = true;
+			return;
+		}
+	}
+	if (ok)
+	{
+		char ini[MAX_PATH];
+		ProjectIni(ini, sizeof(ini));
+		::WritePrivateProfileStringA("xms", "export_target", s_DeferredExportTarget, ini);
+		sprintf_s(s_Message, "%s%sExport complete: %d file(s) copied to\n%s",
+			bake_note.c_str(), bake_note.empty() ? "" : "\n", files, path.c_str());
+	}
+	else
+		sprintf_s(s_Message, "Export failed: %s", err.c_str());
+	s_WantMessage = true;
+}
+
 static void DrawExportModal(bool flat)
 {
 	bool& want = flat ? s_WantFlat : s_WantExport;
@@ -1482,43 +1526,12 @@ static void DrawExportModal(bool flat)
 	}
 	ImGui::Separator();
 
-	ImGui::BeginDisabled(!s_Target[0]);
+	ImGui::BeginDisabled(!s_Target[0] || s_ExportQueued);
 	if (ImGui::Button("Export", ImVec2(120, 0)))
 	{
-		xr_string bake_note;
-		EditorMod::RunPreBuildBake(bake_note);
-		int files = 0;
-		xr_string path, err;
-		bool ok = EditorMod::Export(EditorProject::Root(), s_Target, flat, files, path, err);
-		// the refusal above is a question, not a failure: name what would be
-		// deleted and let the user decide
-		if (!ok && 0 == strncmp(err.c_str(), "target already holds a module", 29))
-		{
-			if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
-				"%s\n\n%s\n\nThose files will be DELETED. Continue?", err.c_str(), path.c_str()))
-				ok = EditorMod::Export(EditorProject::Root(), s_Target, flat, files, path, err, true);
-			else
-			{
-				sprintf_s(s_Message, "Export cancelled.");
-				s_WantMessage = true;
-				want = false;
-				ImGui::CloseCurrentPopup();
-				ImGui::EndDisabled();	// balances the BeginDisabled above
-				ImGui::EndPopup();
-				return;
-			}
-		}
-		if (ok)
-		{
-			char ini[MAX_PATH];
-			ProjectIni(ini, sizeof(ini));
-			::WritePrivateProfileStringA("xms", "export_target", s_Target, ini);
-			sprintf_s(s_Message, "%s%sExport complete: %d file(s) copied to\n%s",
-				bake_note.c_str(), bake_note.empty() ? "" : "\n", files, path.c_str());
-		}
-		else
-			sprintf_s(s_Message, "Export failed: %s", err.c_str());
-		s_WantMessage = true;
+		strncpy_s(s_DeferredExportTarget, sizeof(s_DeferredExportTarget), s_Target, _TRUNCATE);
+		s_DeferredExportFlat = flat;
+		s_ExportQueued = UI->DeferUIWork(&RunDeferredExport);
 		want = false;
 		ImGui::CloseCurrentPopup();
 	}
@@ -1550,7 +1563,8 @@ static void DrawMessageModal()
 void EditorMod::DrawUI()
 {
 	if (!EditorProject::Active()) return;
-	RunBuildIntoGame();
+	if (s_WantBuild && !s_BuildQueued)
+		s_BuildQueued = UI->DeferUIWork(&RunBuildIntoGame);
 	DrawManifestModal();
 	DrawExportModal(false);
 	DrawExportModal(true);

@@ -27,6 +27,19 @@
 ECommandVec 		ECommands;
 BOOL 				bAllowReceiveCommand	= FALSE;
 bool 				bAllowLogCommands		= false;
+static int			s_CommandExecutionDepth = 0;
+
+struct SCommandExecutionScope
+{
+	int& depth;
+
+	explicit SCommandExecutionScope(int& value) : depth(value) { ++depth; }
+	~SCommandExecutionScope()
+	{
+		VERIFY(depth > 0);
+		--depth;
+	}
+};
 //TfrmText*			frmEditCommandList		= 0;
 xr_string			sCommandListText;
 
@@ -101,13 +114,14 @@ CCommandVar 	ExecCommand	(u32 cmd, CCommandVar p1, CCommandVar p2)
 	if (!bAllowReceiveCommand)	return 0;
 
 	VERIFY				(cmd<ECommands.size());
+	if (UI && UI->InUIPass() && !s_CommandExecutionDepth && UI->ShouldDeferCommand(cmd))
+		return UI->DeferCommand(cmd, p1, p2) ? u32(1) : u32(0);
     CCommandVar	res;
 	SECommand*	CMD 	= ECommands[cmd];
     VERIFY				(CMD&&!CMD->command.empty());
-    static int exec_level= 0;
     if (bAllowLogCommands){
-    	string128 level;strcpy(level,exec_level==0?"":";");
-        for(int k=0; k<exec_level; ++k) strcat(level,".");
+		string128 level;strcpy(level,s_CommandExecutionDepth==0?"":";");
+        for(int k=0; k<s_CommandExecutionDepth; ++k) strcat(level,".");
         xr_string sp1	= p1.IsString()?xr_string(p1):xr_string("");
         xr_string sp2	= p2.IsString()?xr_string(p2):xr_string("");
         if (p1.IsString()) sp1 = ((sp1.find("\n")==sp1.npos)&&(sp1.find("\r")==sp1.npos))?sp1:xr_string("..."); 
@@ -117,9 +131,8 @@ CCommandVar 	ExecCommand	(u32 cmd, CCommandVar p1, CCommandVar p2)
         else if (p1.IsInteger()&&p2.IsString()) Msg("%s%s (%d,\"%s\")",		level,CMD->Name(),u32(p1),sp2.c_str());
         else if (p1.IsString()&&p2.IsInteger()) Msg("%s%s (\"%s\",%d)",		level,CMD->Name(),sp1.c_str(),u32(p2));*/
     }
-    exec_level++;
+	SCommandExecutionScope execution_scope(s_CommandExecutionDepth);
     res 	 			= CMD->command(p1,p2);
-    exec_level--; 		VERIFY(exec_level>=0);
     return res;
 }
 void	RegisterCommand (u32 cmd, SECommand* cmd_impl)
@@ -206,11 +219,26 @@ CCommandVar	TUI::CommandRenderFocus(CCommandVar p1, CCommandVar p2)
 }
 CCommandVar	TUI::CommandBreakLastOperation(CCommandVar p1, CCommandVar p2)
 {
-    if (mrYes==ELog.DlgMsg(mtConfirmation,TMsgDlgButtons() << mbYes << mbNo,"Are you sure to break current action?")){
-        NeedBreak	();
-        ELog.Msg	(mtInformation,"Execution canceled.");
-    }
-    return 1;
+	if (!ProgressOperationActive())
+	{
+		ELog.DlgMsg(mtInformation, "There is no active operation to cancel.");
+		return 0;
+	}
+	if (!ProgressCancelable())
+	{
+		ELog.DlgMsg(mtInformation, "The active operation cannot be cancelled safely.");
+		return 0;
+	}
+	if (mrYes != ELog.DlgMsg(mtConfirmation, TMsgDlgButtons() << mbYes << mbNo,
+		"Are you sure to cancel the current operation?"))
+		return 0;
+	if (!NeedBreak())
+	{
+		ELog.DlgMsg(mtInformation, "The cancellation request was not accepted.");
+		return 0;
+	}
+	ELog.Msg(mtInformation, "Cancellation requested.");
+	return 1;
 }
 CCommandVar 	TUI::CommandRenderResize(CCommandVar p1, CCommandVar p2)
 {
@@ -382,8 +410,11 @@ CCommandVar 	CommandSoundEditor(CCommandVar p1, CCommandVar p2)
 CCommandVar 	CommandSyncSounds(CCommandVar p1, CCommandVar p2)
 {
    
-    if (ELog.DlgMsg(mtConfirmation,TMsgDlgButtons() << mbYes << mbNo,"Are you sure to synchronize sounds?")==mrYes)
+    if (ELog.DlgMsg(mtConfirmation,TMsgDlgButtons() << mbYes << mbNo,"Are you sure to synchronize sounds?")==mrYes) {
+		SProgressOperation progress(*UI, true);
         SndLib->RefreshSounds(true);
+		return !UI->NeedAbort();
+	}
     return				TRUE;
 }
 CCommandVar 	CommandImageEditor(CCommandVar p1, CCommandVar p2)
@@ -411,8 +442,11 @@ CCommandVar 	CommandCheckTextures(CCommandVar p1, CCommandVar p2)
 }
 CCommandVar 	CommandRefreshTextures(CCommandVar p1, CCommandVar p2)
 {
-    if (ELog.DlgMsg(mtConfirmation,TMsgDlgButtons() << mbYes << mbNo,"Are you sure to synchronize textures?")==mrYes)
+    if (ELog.DlgMsg(mtConfirmation,TMsgDlgButtons() << mbYes << mbNo,"Are you sure to synchronize textures?")==mrYes) {
+		SProgressOperation progress(*UI, true);
         ImageLib.RefreshTextures(0);
+		return !UI->NeedAbort();
+	}
     return				TRUE;
 }
 CCommandVar 	CommandReloadTextures(CCommandVar p1, CCommandVar p2)

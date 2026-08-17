@@ -199,6 +199,7 @@ CCommandVar CommandLoad(CCommandVar p1, CCommandVar p2)
             if (!Scene->IfModified())
             	return FALSE;
 
+			SProgressOperation operation(*UI, false);
             UI->SetStatus			("Level loading...");
             ExecCommand				(COMMAND_CLEAR);
 
@@ -1384,7 +1385,11 @@ static void RespondProgressJson(xr_string& out)
 	SProgressTaskInfoVec tasks;
 	UI->GetProgressSnapshot(tasks);
 	out = "{\"ok\":true,\"active\":";
-	out += tasks.empty() ? "false" : "true";
+	out += UI->ProgressOperationActive() ? "true" : "false";
+	out += ",\"cancelable\":";
+	out += UI->ProgressCancelable() ? "true" : "false";
+	out += ",\"cancel_requested\":";
+	out += UI->NeedAbort() ? "true" : "false";
 	out += ",\"tasks\":[";
 	for (u32 i = 0; i < tasks.size(); ++i)
 	{
@@ -1394,9 +1399,10 @@ static void RespondProgressJson(xr_string& out)
 		char values[256];
 		sprintf_s(values,
 			"\",\"current\":%.3f,\"total\":%.3f,\"fraction\":%.6f,\"elapsed_ms\":%llu,"
-			"\"depth\":%u,\"determinate\":%s,\"cancel_requested\":%s}",
+			"\"depth\":%u,\"determinate\":%s,\"cancelable\":%s,\"cancel_requested\":%s}",
 			task.current, task.total, task.fraction, task.elapsed_ms, task.depth,
-			task.determinate ? "true" : "false", task.cancel_requested ? "true" : "false");
+			task.determinate ? "true" : "false", task.cancelable ? "true" : "false",
+			task.cancel_requested ? "true" : "false");
 		out += "{\"text\":\"";
 		out += JsonStr(task.text.c_str());
 		out += "\",\"detail\":\"";
@@ -1765,13 +1771,18 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
 			xr_strcpy(action, "get");
 		if (0 == _stricmp(action, "cancel"))
 		{
-			if (!UI->ProgressLast())
+			if (!UI->ProgressOperationActive())
 			{
 				out = "{\"ok\":false,\"error\":\"no active operation\"}";
 				return true;
 			}
-			UI->NeedBreak();
-			ELog.Msg(mtInformation, "Cancellation requested through MCP.");
+			if (!UI->ProgressCancelable())
+			{
+				out = "{\"ok\":false,\"error\":\"active operation cannot be cancelled safely\"}";
+				return true;
+			}
+			if (UI->NeedBreak())
+				ELog.Msg(mtInformation, "Cancellation requested through MCP.");
 		}
 		else if (0 != _stricmp(action, "get"))
 		{
@@ -3585,6 +3596,29 @@ void CLevelMain::BuildDefaultDockLayout(unsigned int dockspace_id)
     DockLayoutPlace("Properties",       DockRightBottom);
     DockLayoutPlace("World Properties", DockRightBottom);
     DockLayoutEnd();
+}
+
+bool CLevelMain::ShouldDeferCommand(u32 command) const
+{
+	switch (command)
+	{
+	case COMMAND_LOAD_SELECTION:
+	case COMMAND_LOAD_LEVEL_PART:
+	case COMMAND_VALIDATE_SCENE:
+	case COMMAND_RELOAD_OBJECTS:
+	case COMMAND_CLEAN_LIBRARY:
+	case COMMAND_COLLECT_SCENE_SUMMARY:
+	case COMMAND_REFRESH_SOUND_ENV_GEOMETRY:
+	case COMMAND_BUILD:
+	case COMMAND_MAKE_GAME:
+	case COMMAND_MAKE_DETAILS:
+	case COMMAND_MAKE_HOM:
+	case COMMAND_MAKE_SOM:
+	case COMMAND_MAKE_AIMAP:
+		return true;
+	default:
+		return inherited::ShouldDeferCommand(command);
+	}
 }
 
 bool  CLevelMain::ApplyShortCut(DWORD Key, TShiftState Shift)

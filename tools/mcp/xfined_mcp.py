@@ -253,8 +253,8 @@ TOOLS = [
     {
         "name": "xfined_progress",
         "description": "Read the editor's non-modal task center, including nested task progress and elapsed time, "
-                       "or request cooperative cancellation for a task that yields UI frames. Blocking legacy jobs "
-                       "continue reporting in the progress console. Omitting action reads state.",
+                       "or request cooperative cancellation when cancelable=true. Scene loading stays live but "
+                       "non-cancelable because it has no rollback transaction. Omitting action reads state.",
         "inputSchema": {
             "type": "object",
             "properties": {

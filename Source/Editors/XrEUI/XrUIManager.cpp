@@ -311,6 +311,40 @@ void XrUIManager::Draw()
 		}
 	}
 }
+
+void XrUIManager::DrawProgressOnly()
+{
+	if (m_InUIPass)
+		return;
+
+	m_InUIPass = true;
+	try
+	{
+#if defined(USE_DX11)
+		ImGui_ImplDX11_NewFrame();
+#else
+		ImGui_ImplDX9_NewFrame();
+#endif
+		ImGui_ImplWin32_NewFrame();
+		ImGui::NewFrame();
+		OnDrawProgressUI();
+		ImGui::EndFrame();
+		ImGui::Render();
+#if defined(USE_DX11)
+		ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+#else
+		ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+#endif
+		// Platform windows stay frozen until the operation ends; processing their
+		// close/resize requests here would re-enter normal editor window state.
+	}
+	catch (...)
+	{
+		m_InUIPass = false;
+		throw;
+	}
+	m_InUIPass = false;
+}
 static bool ImGui_ImplWin32_UpdateMouseCursor()
 {
     ImGuiIO& io = ImGui::GetIO();
@@ -352,6 +386,30 @@ static bool ImGui_ImplWin32_UpdateMouseCursor()
 IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT XrUIManager::WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+	if (m_ProgressOnlyInput)
+	{
+		switch (msg)
+		{
+		case WM_CLOSE:
+		case WM_SIZE:
+		case WM_SIZING:
+		case WM_ENTERSIZEMOVE:
+		case WM_EXITSIZEMOVE:
+		case WM_NCLBUTTONDOWN:
+		case WM_NCLBUTTONDBLCLK:
+		case WM_SYSCOMMAND:
+			return 1;
+		case WM_KEYDOWN:
+		case WM_KEYUP:
+		case WM_SYSKEYDOWN:
+		case WM_SYSKEYUP:
+		case WM_CHAR:
+			ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
+			return 1;
+		default:
+			break;
+		}
+	}
     switch (msg)
     {
     case WM_DESTROY:

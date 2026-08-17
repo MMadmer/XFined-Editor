@@ -1289,7 +1289,8 @@ BOOL SceneBuilder::ParseStaticObjects(ObjectList& lst, LPCSTR prefix, bool b_sel
     for(ObjectIt _F = lst.begin();_F!=lst.end();_F++)
 	{
         pb->Inc((*_F)->GetName());
-        if (UI->NeedAbort()) break;
+		UI->ProgressCheckpoint();
+        if (UI->NeedAbort()) { bResult = FALSE; break; }
 		if(b_selected_only && !(*_F)->Selected())
 			continue;
 
@@ -1410,6 +1411,8 @@ BOOL SceneBuilder::CompileStatic(bool b_selected_only)
         t_end 				= Scene->LastTool();
         for (; t_it!=t_end; ++t_it)
         {
+			UI->ProgressCheckpoint();
+			if (UI->NeedAbort()) { bResult = FALSE; break; }
             ESceneToolBase* mt = t_it->second;
             if (mt)
                 if (!mt->ExportStatic(this,b_selected_only))
@@ -1436,34 +1439,40 @@ BOOL SceneBuilder::CompileStatic(bool b_selected_only)
             I.w				= LOD_IMAGE_SIZE*LOD_SAMPLE_COUNT;
             I.h				= LOD_IMAGE_SIZE;
 	        pb->Inc();
+			UI->ProgressCheckpoint();
+			if (UI->NeedAbort()) { bResult = FALSE; break; }
         }
 
         SSimpleImage merged_image;
         xr_string fn_color	= ChangeFileExt	(MakeLevelPath(LEVEL_LODS_TEX_NAME).c_str(),".dds").c_str();
         xr_string fn_normal	= ChangeFileExt	(MakeLevelPath(LEVEL_LODS_NRM_NAME).c_str(),".dds").c_str();
-        if (1==ImageLib.CreateMergedTexture	(2,images,merged_image,512,4096,64,4096,offsets,scales,rotated,remap)){
-            // all right, make texture
-            STextureParams 		tp;
-            tp.width			= merged_image.w;
-            tp.height			= merged_image.h;
-            tp.fmt				= STextureParams::tfRGBA;
-            tp.type				= STextureParams::ttImage;
-            tp.mip_filter		= STextureParams::kMIPFilterAdvanced;
-            tp.flags.assign		(STextureParams::flDitherColor|STextureParams::flGenerateMipMaps);
-            ImageLib.MakeGameTexture		(fn_color.c_str(),merged_image.layers[0].data(), tp);
-            ImageLib.MakeGameTexture		(fn_normal.c_str(),merged_image.layers[1].data(),tp);
-	        for (int k=0; k<(int)l_lods.size(); k++){        
-	            e_b_lod& l	= l_lods[k];         
-                for (u32 f=0; f<8; f++){
-                	for (u32 t=0; t<4; t++){
-                    	Fvector2& uv = l.lod.faces[f].t[t];
-                        u32 id 		 = remap[k];
-                    	ImageLib.MergedTextureRemapUV(uv.x,uv.y,uv.x,uv.y,offsets[id],scales[id],rotated[id]);
+        if (bResult && 1==ImageLib.CreateMergedTexture	(2,images,merged_image,512,4096,64,4096,offsets,scales,rotated,remap)){
+            UI->ProgressCheckpoint();
+            if (UI->NeedAbort()) bResult = FALSE;
+            if (bResult) {
+                // all right, make texture
+                STextureParams 		tp;
+                tp.width			= merged_image.w;
+                tp.height			= merged_image.h;
+                tp.fmt				= STextureParams::tfRGBA;
+                tp.type				= STextureParams::ttImage;
+                tp.mip_filter		= STextureParams::kMIPFilterAdvanced;
+                tp.flags.assign		(STextureParams::flDitherColor|STextureParams::flGenerateMipMaps);
+                ImageLib.MakeGameTexture		(fn_color.c_str(),merged_image.layers[0].data(), tp);
+                ImageLib.MakeGameTexture		(fn_normal.c_str(),merged_image.layers[1].data(),tp);
+                for (int k=0; k<(int)l_lods.size(); k++){
+                    e_b_lod& l	= l_lods[k];
+                    for (u32 f=0; f<8; f++){
+                        for (u32 t=0; t<4; t++){
+                            Fvector2& uv = l.lod.faces[f].t[t];
+                            u32 id 		 = remap[k];
+                            ImageLib.MergedTextureRemapUV(uv.x,uv.y,uv.x,uv.y,offsets[id],scales[id],rotated[id]);
+                        }
                     }
+                    pb->Inc();
                 }
-		        pb->Inc();
-			}
-        }else{
+            }
+        }else if (bResult){
             ELog.DlgMsg		(mtError,"Failed to build merged LOD texture. Merged texture more than [4096x4096].");
         	bResult			= FALSE;
         }

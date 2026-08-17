@@ -2,6 +2,7 @@
 #include "stdafx.h"
 #include "UIImageEditorForm.h"
 #include "EThumbnail.h"
+#include "ui_main.h"
 UIImageEditorForm* UIImageEditorForm::Form = nullptr;
 UIImageEditorForm::UIImageEditorForm()
 {
@@ -16,6 +17,8 @@ UIImageEditorForm::UIImageEditorForm()
     m_bFilterNormal = true;
     m_bFilterTerrain = true;
     m_TextureRemove = nullptr;
+	m_UpdateQueued = false;
+	m_CloseAfterUpdate = false;
 }
 
 UIImageEditorForm::~UIImageEditorForm()
@@ -27,6 +30,13 @@ UIImageEditorForm::~UIImageEditorForm()
 
 void UIImageEditorForm::Draw()
 {
+	if (m_CloseAfterUpdate)
+	{
+		m_CloseAfterUpdate = false;
+		HideLib();
+		return;
+	}
+
     if (m_TextureRemove)
     {
         m_TextureRemove->Release();
@@ -40,7 +50,7 @@ void UIImageEditorForm::Draw()
     ImGui::SameLine();
     ImGui::BeginChild("Right", ImVec2(300, 400));
     {
-        if (m_Texture == nullptr)
+        if (!m_Texture)
         {
             u32 mem = 0;
 #if defined(USE_DX11)
@@ -71,6 +81,7 @@ void UIImageEditorForm::Draw()
         if (ImGui::Checkbox("Terrain", &m_bFilterTerrain))FilterUpdate();
         ImGui::Separator();
     }
+    ImGui::BeginDisabled(m_UpdateQueued);
     if (ImGui::Button("Close"))
     {
         HideLib();
@@ -78,8 +89,7 @@ void UIImageEditorForm::Draw()
     ImGui::SameLine();
     if (ImGui::Button("Ok"))
     {
-        UpdateLib();
-        HideLib();
+		m_UpdateQueued = UI->DeferUIWork(&UIImageEditorForm::UpdateLibDeferred);
     }
     if (!bImportMode)
     {
@@ -89,6 +99,12 @@ void UIImageEditorForm::Draw()
         //    m_ItemList->RemoveSelectItem();
         }
     }
+	ImGui::EndDisabled();
+	if (m_UpdateQueued)
+	{
+		ImGui::SameLine();
+		ImGui::TextDisabled("Queued...");
+	}
 
 }
 
@@ -114,7 +130,7 @@ void UIImageEditorForm::Update()
 
 void UIImageEditorForm::Show(bool bImport)
 {
-    if(Form==nullptr)Form = xr_new< UIImageEditorForm>();
+    if (!Form) Form = xr_new<UIImageEditorForm>();
     Form->bImportMode = bImport;
     //.        form->ebRebuildAssociation->Enabled = !bImport;
     Form->bReadonlyMode = !FS.can_write_to_alias(_textures_);
@@ -250,7 +266,19 @@ void UIImageEditorForm::HideLib()
     ImGui::CloseCurrentPopup();
 }
 
-void UIImageEditorForm::UpdateLib()
+void UIImageEditorForm::UpdateLibDeferred()
+{
+	if (!Form)
+		return;
+
+	SProgressOperation progress(*UI, true);
+	const bool completed = Form->UpdateLib();
+	Form->m_UpdateQueued = false;
+	if (completed)
+		Form->m_CloseAfterUpdate = true;
+}
+
+bool UIImageEditorForm::UpdateLib()
 {
     VERIFY(!bReadonlyMode);
     RegisterModifiedTHM();
@@ -276,6 +304,8 @@ void UIImageEditorForm::UpdateLib()
         }
         // sync
         ImageLib.SynchronizeTextures(true, true, true, &texture_map, &modif);
+		if (UI->NeedAbort())
+			return false;
         ImageLib.RefreshTextures(&modif);
     }
     else
@@ -285,9 +315,12 @@ void UIImageEditorForm::UpdateLib()
         {
             AStringVec modif;
             ImageLib.SynchronizeTextures(true, true, true, &modif_map, &modif);
+			if (UI->NeedAbort())
+				return false;
             ImageLib.RefreshTextures(&modif);
         }
     }
+	return true;
 }
 
 void UIImageEditorForm::OnItemsFocused(ListItem* item)

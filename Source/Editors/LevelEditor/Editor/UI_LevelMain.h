@@ -106,6 +106,7 @@ public:
 
     virtual bool 	ApplyShortCut			(DWORD Key, TShiftState Shift);
     virtual bool 	ApplyGlobalShortCut		(DWORD Key, TShiftState Shift);
+	virtual bool	ShouldDeferCommand		(u32 command) const;
 
     // commands
 	virtual	void	RegisterCommands		(); 

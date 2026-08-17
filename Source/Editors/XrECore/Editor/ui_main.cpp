@@ -39,6 +39,12 @@ TUI::TUI()
 	m_FramePacingWaits = 0;
 	m_FramePacingWaitTicks = 0;
 	m_LastFramePacingReason = 0;
+	m_ProgressOperationDepth = 0;
+	m_ProgressCancelable = false;
+	m_ProgressImplicitOperation = false;
+	m_ProgressDeferredQuit = false;
+	m_LastProgressMessagePumpMs = 0;
+	m_LastProgressPaintMs = 0;
 	LARGE_INTEGER clock_frequency;
 	if (::QueryPerformanceFrequency(&clock_frequency))
 		m_FrameClockFrequency = u64(clock_frequency.QuadPart);
@@ -657,8 +663,6 @@ void TUI::OnFrame()
 
 	// show hint
     ShowObjectHint		();
-	if (m_ProgressItems.empty())
-		ResetBreak();
 #if 0
 	// check mail
     CheckMailslot		();
@@ -891,6 +895,64 @@ void TUI::GetFramePacingStats(SFramePacingStats& result)
 		: 0;
 }
 
+bool TUI::ShouldDeferCommand(u32 command) const
+{
+	switch (command)
+	{
+	case COMMAND_LOAD:
+	case COMMAND_SAVE:
+	case COMMAND_SAVE_BACKUP:
+	case COMMAND_CHECK_TEXTURES:
+	case COMMAND_REFRESH_TEXTURES:
+	case COMMAND_RELOAD_TEXTURES:
+	case COMMAND_UNLOAD_TEXTURES:
+	case COMMAND_EVICT_OBJECTS:
+	case COMMAND_EVICT_TEXTURES:
+	case COMMAND_CREATE_SOUND_LIB:
+	case COMMAND_SYNC_SOUNDS:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool TUI::DeferCommand(u32 command, CCommandVar p1, CCommandVar p2)
+{
+	m_DeferredCommands.push_back({ command, p1, p2 });
+	WakeFramePacing();
+	return true;
+}
+
+bool TUI::DeferUIWork(TDeferredUIWork work)
+{
+	if (!work)
+		return false;
+	m_DeferredUIWork.push_back(work);
+	WakeFramePacing();
+	return true;
+}
+
+void TUI::ProcessDeferredWork()
+{
+	if (ProgressOperationActive())
+		return;
+
+	if (!m_DeferredCommands.empty())
+	{
+		const SDeferredEditorCommand command = m_DeferredCommands.front();
+		m_DeferredCommands.erase(m_DeferredCommands.begin());
+		ExecCommand(command.command, command.p1, command.p2);
+		return;
+	}
+
+	if (!m_DeferredUIWork.empty())
+	{
+		const TDeferredUIWork work = m_DeferredUIWork.front();
+		m_DeferredUIWork.erase(m_DeferredUIWork.begin());
+		work();
+	}
+}
+
 bool TUI::Idle()         
 {
 	VERIFY(m_bReady);
@@ -925,6 +987,7 @@ bool TUI::Idle()
         Device->seqParallel.clear_not_free();
         Device->seqFrameMT.Process(rp_Frame);
     }
+	ProcessDeferredWork();
 	// Notifications produced during this iteration are represented by their
 	// flags; draining the event avoids a stale wake on the next iteration.
 	if (m_FrameWakeEvent)
@@ -1028,45 +1091,217 @@ static void XFinedBrandConsole()
 	if (small_)	::SendMessageA(con, WM_SETICON, ICON_SMALL, (LPARAM)small_);
 }
 
-SPBItem* TUI::ProgressStart		(float max_val, LPCSTR text)
+void TUI::BeginProgressOperation(bool cancelable)
 {
-	VERIFY(m_bReady);
-	if (m_ProgressItems.empty())
+	if (!m_ProgressOperationDepth)
 	{
 		ResetBreak();
+		m_ProgressCancelable = cancelable;
+		m_ProgressImplicitOperation = false;
 		m_ProgressOwnsConsole = !m_HConsole;
-		if (m_ProgressOwnsConsole)
-			ShowConsole();
+		m_LastProgressMessagePumpMs = 0;
+		m_LastProgressPaintMs = 0;
+		SetProgressOnlyInput(true);
 	}
-	SPBItem* item 				= xr_new<SPBItem>(text,"",max_val);
-    m_ProgressItems.push_back	(item);
-    ELog.Msg					(mtInformation, "%s", item->text.c_str());
-    ProgressDraw				();
-	return item;
+	++m_ProgressOperationDepth;
 }
-void TUI::ProgressEnd			(SPBItem*& pbi)
+
+void TUI::EndProgressOperation()
+{
+	VERIFY(m_ProgressOperationDepth);
+	if (--m_ProgressOperationDepth)
+		return;
+
+	SetProgressOnlyInput(false);
+	ResetBreak();
+	m_ProgressCancelable = false;
+	m_ProgressImplicitOperation = false;
+	if (m_ProgressOwnsConsole)
+		CloseConsole();
+	m_ProgressOwnsConsole = false;
+	ReplayDeferredWindowMessages();
+}
+
+bool TUI::RequestProgressCancel()
+{
+	if (!ProgressCancelable() || bNeedAbort)
+		return false;
+	bNeedAbort = true;
+	return true;
+}
+
+void TUI::PumpProgressMessages()
+{
+	MSG msg;
+	while (::PeekMessageW(&msg, NULL, 0U, 0U, PM_REMOVE))
+	{
+		if (WM_QUIT == msg.message)
+		{
+			m_ProgressDeferredQuit = true;
+			continue;
+		}
+
+		const bool main_window = msg.hwnd == EDevice->m_hWnd;
+		const bool close_request = WM_CLOSE == msg.message ||
+			(WM_SYSCOMMAND == msg.message && SC_CLOSE == (msg.wParam & 0xfff0)) ||
+			(WM_SYSKEYDOWN == msg.message && VK_F4 == msg.wParam);
+		if (close_request)
+		{
+			if (main_window)
+			{
+				const bool already_deferred = std::find_if(m_DeferredWindowMessages.begin(),
+					m_DeferredWindowMessages.end(), [](const SDeferredWindowMessage& deferred)
+					{
+						return WM_CLOSE == deferred.message;
+					}) != m_DeferredWindowMessages.end();
+				if (!already_deferred)
+					m_DeferredWindowMessages.push_back({ msg.hwnd, WM_CLOSE, 0, 0 });
+			}
+			continue;
+		}
+
+		if (WM_SIZE == msg.message)
+		{
+			if (main_window)
+			{
+				auto deferred = std::find_if(m_DeferredWindowMessages.begin(),
+					m_DeferredWindowMessages.end(), [](const SDeferredWindowMessage& item)
+					{
+						return WM_SIZE == item.message;
+					});
+				if (deferred == m_DeferredWindowMessages.end())
+					m_DeferredWindowMessages.push_back({ msg.hwnd, msg.message, msg.wParam, msg.lParam });
+				else
+				{
+					deferred->wparam = msg.wParam;
+					deferred->lparam = msg.lParam;
+				}
+			}
+			continue;
+		}
+
+		switch (msg.message)
+		{
+		case WM_SIZING:
+		case WM_ENTERSIZEMOVE:
+		case WM_EXITSIZEMOVE:
+		case WM_NCLBUTTONDOWN:
+		case WM_NCLBUTTONDBLCLK:
+		case WM_WINDOWPOSCHANGING:
+		case WM_WINDOWPOSCHANGED:
+		case WM_DPICHANGED:
+		case WM_SYSCOMMAND:
+			continue;
+		default:
+			break;
+		}
+
+		::TranslateMessage(&msg);
+		::DispatchMessageW(&msg);
+	}
+}
+
+void TUI::ReplayDeferredWindowMessages()
+{
+	for (const SDeferredWindowMessage& deferred : m_DeferredWindowMessages)
+	{
+		if (deferred.window == EDevice->m_hWnd && ::IsWindow(deferred.window))
+			::PostMessageW(deferred.window, deferred.message, deferred.wparam, deferred.lparam);
+	}
+	m_DeferredWindowMessages.clear();
+	if (m_ProgressDeferredQuit)
+	{
+		m_ProgressDeferredQuit = false;
+		::PostQuitMessage(0);
+	}
+}
+
+void TUI::DrawProgressFrame()
+{
+	if (!m_bReady || m_ProgressItems.empty() || InUIPass() || !EDevice->Begin())
+		return;
+
+	try
+	{
+		EDevice->SetRS(D3DRS_FILLMODE, D3DFILL_SOLID);
+		g_bRendering = FALSE;
+#if defined(USE_DX11)
+		HW.pContext->OMSetRenderTargets(1, &HW.pBaseRT, HW.pBaseZB);
+		D3D11_VIEWPORT viewport = {};
+		viewport.Width = float(EDevice->dwRealWidth);
+		viewport.Height = float(EDevice->dwRealHeight);
+		viewport.MaxDepth = 1.f;
+		HW.pContext->RSSetViewports(1, &viewport);
+#endif
+		DrawProgressOnly();
+	}
+	catch (...)
+	{
+		ELog.Msg(mtError, "Progress Center frame failed; the active operation continues.");
+	}
+	EDevice->SetRS(D3DRS_FILLMODE, EDevice->dwFillMode);
+	EDevice->End();
+}
+
+void TUI::ProgressCheckpoint()
+{
+	if (!ProgressOperationActive() || InUIPass())
+		return;
+
+	const u64 now = ::GetTickCount64();
+	if (!m_LastProgressMessagePumpMs || now - m_LastProgressMessagePumpMs >= 50)
+	{
+		m_LastProgressMessagePumpMs = now;
+		PumpProgressMessages();
+		SyncAppActivation();
+		XFinedMCP::PumpProgressRequests();
+	}
+	if (!m_ProgressItems.empty() && m_bAppActive &&
+		(!m_LastProgressPaintMs || now - m_LastProgressPaintMs >= 100))
+	{
+		m_LastProgressPaintMs = now;
+		DrawProgressFrame();
+	}
+}
+
+SPBItem* TUI::ProgressStart(float max_val, LPCSTR text)
 {
 	VERIFY(m_bReady);
-    if (pbi){
-        PBVecIt it=std::find(m_ProgressItems.begin(),m_ProgressItems.end(),pbi); VERIFY(it!=m_ProgressItems.end());
-		const u64 elapsed_ms = ::GetTickCount64() - pbi->started_at_ms;
-		if (elapsed_ms >= 500)
-		{
-			xr_string elapsed;
-			UIProgressCenter::FormatElapsed(elapsed_ms, elapsed);
-			ELog.Msg(mtInformation, "%s finished in %s.", pbi->text.c_str(), elapsed.c_str());
-		}
-        m_ProgressItems.erase	(it);
-        xr_delete				(pbi);
-        ProgressDraw			();
-		if (m_ProgressItems.empty())
-		{
-			ResetBreak();
-			if (m_ProgressOwnsConsole)
-				CloseConsole();
-			m_ProgressOwnsConsole = false;
-		}
-    }
+	if (!ProgressOperationActive())
+	{
+		BeginProgressOperation(false);
+		m_ProgressImplicitOperation = true;
+	}
+	if (m_ProgressImplicitOperation && m_ProgressItems.empty() && m_ProgressOwnsConsole && !m_HConsole)
+		ShowConsole();
+
+	SPBItem* item = xr_new<SPBItem>(text, "", max_val);
+	m_ProgressItems.push_back(item);
+	ELog.Msg(mtInformation, "%s", item->text.c_str());
+	ProgressDraw();
+	return item;
+}
+
+void TUI::ProgressEnd(SPBItem*& pbi)
+{
+	VERIFY(m_bReady);
+	if (!pbi)
+		return;
+
+	PBVecIt it = std::find(m_ProgressItems.begin(), m_ProgressItems.end(), pbi);
+	VERIFY(it != m_ProgressItems.end());
+	const u64 elapsed_ms = ::GetTickCount64() - pbi->started_at_ms;
+	if (elapsed_ms >= 500)
+	{
+		xr_string elapsed;
+		UIProgressCenter::FormatElapsed(elapsed_ms, elapsed);
+		ELog.Msg(mtInformation, "%s finished in %s.", pbi->text.c_str(), elapsed.c_str());
+	}
+	m_ProgressItems.erase(it);
+	xr_delete(pbi);
+	ProgressDraw();
+	if (m_ProgressItems.empty() && m_ProgressImplicitOperation)
+		EndProgressOperation();
 }
 
 void TUI::ProgressDraw()
@@ -1092,7 +1327,8 @@ void TUI::GetProgressSnapshot(SProgressTaskInfoVec& result) const
 		task.fraction = task.determinate ? clampr(item.progress / item.max, 0.f, 1.f) : 0.f;
 		task.elapsed_ms = now - item.started_at_ms;
 		task.depth = i;
-		task.cancel_requested = bNeedAbort;
+		task.cancelable = ProgressCancelable();
+		task.cancel_requested = task.cancelable && bNeedAbort;
 		result.push_back(std::move(task));
 	}
 }
@@ -1153,6 +1389,11 @@ void TUI::OnDrawUI()
     UILogForm::Update();
     EDevice->seqDrawUI.Process(rp_DrawUI);
 	CommandPalette::Draw();
+	UIProgressCenter::Draw(*this);
+}
+
+void TUI::OnDrawProgressUI()
+{
 	UIProgressCenter::Draw(*this);
 }
 
@@ -1259,5 +1500,16 @@ void SPBItem::Publish(bool force, bool warning)
 		last_log_percent = percent;
 		last_logged_info = info;
 	}
+}
+
+SProgressOperation::SProgressOperation(TUI& ui, bool cancelable) : m_UI(&ui)
+{
+	m_UI->BeginProgressOperation(cancelable);
+}
+
+SProgressOperation::~SProgressOperation()
+{
+	if (m_UI)
+		m_UI->EndProgressOperation();
 }
 

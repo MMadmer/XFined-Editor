@@ -16,6 +16,9 @@ private:
 
 	void HideLib();
 	static UISoundEditorForm* Form;
+	bool m_UpdateQueued;
+	bool m_CloseAfterUpdate;
+	static void UpdateLibDeferred();
 
 	void InitItemList();
 	void OnItemsFocused(ListItem* item);
@@ -37,7 +40,7 @@ private:
 	void RegisterModifiedTHM();
 
 	void OnModified();
-	void UpdateLib();
+	bool UpdateLib();
 
 	bool 				bFormLocked;
 	BOOL				bAutoPlay;

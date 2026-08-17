@@ -34,24 +34,26 @@ SceneBuilder::~SceneBuilder()
 }
 
 
-#define CHECK_BREAK     	if (UI->NeedAbort()) break;
+#define CHECK_BREAK     	UI->ProgressCheckpoint(); if (UI->NeedAbort()) break;
 #define VERIFY_COMPILE(x,c1,c2) CHECK_BREAK \
-							if (!x){error_text.sprintf("ERROR: %s %s", c1,c2); break;}
+							if (!x){if (!UI->NeedAbort()) error_text.sprintf("ERROR: %s %s", c1,c2); break;}
 
 BOOL SceneBuilder::Compile(bool b_selected_only, bool show_message )
 {
+	if (UI->ContainEState(esBuildLevel)) return false;
+	SProgressOperation progress(*UI, true);
 	if(m_save_as_object)
 	{
 		EvictResource	();
+		if (UI->NeedAbort()) return FALSE;
         GetBounding		();
         CompileStatic	(b_selected_only);
+		if (UI->NeedAbort()) return FALSE;
         EvictResource	();
-		return TRUE;
+		return UI->NeedAbort() ? FALSE : TRUE;
 	}
 
 	xr_string error_text		= "";
-	UI->ResetBreak				();
-	if(UI->ContainEState(esBuildLevel)) return false;
 	ELog.Msg( mtInformation, "Building started..." );
 
     UI->BeginEState(esBuildLevel);
@@ -107,15 +109,15 @@ BOOL SceneBuilder::Compile(bool b_selected_only, bool show_message )
     }
     UI->EndEState();
 
-	return error_text.empty();
+	return error_text.empty() && !UI->NeedAbort();
 }
 
 
 BOOL SceneBuilder::MakeGame( )
 {
-	xr_string error_text="";
-	UI->ResetBreak();
 	if(UI->ContainEState(esBuildLevel)) return false;
+	SProgressOperation progress(*UI, false);
+	xr_string error_text="";
 	ELog.Msg( mtInformation, "Making started..." );
 
     UI->BeginEState(esBuildLevel);
@@ -142,12 +144,13 @@ BOOL SceneBuilder::MakeGame( )
     }
     UI->EndEState();
 
-	return error_text.empty();
+	return error_text.empty() && !UI->NeedAbort();
 }
 
 
 BOOL SceneBuilder::MakeAIMap()
 {
+	SProgressOperation progress(*UI, false);
 	xr_string error_text;
     do{
 		VERIFY_COMPILE(PreparePath(),				"Failed to prepare level path.","");
@@ -157,12 +160,13 @@ BOOL SceneBuilder::MakeAIMap()
     else if (UI->NeedAbort())	ELog.DlgMsg(mtInformation,"Building terminated.");
     else						ELog.DlgMsg(mtInformation,"AI-Map succesfully exported.");
 
-	return error_text.empty();
+	return error_text.empty() && !UI->NeedAbort();
 }
 
 
 BOOL SceneBuilder::MakeDetails()
 {
+	SProgressOperation progress(*UI, false);
 	xr_string error_text;
     do{
 		VERIFY_COMPILE(PreparePath(),				"Failed to prepare level path.","");
@@ -173,15 +177,15 @@ BOOL SceneBuilder::MakeDetails()
     else if (UI->NeedAbort())	ELog.DlgMsg(mtInformation,"Building terminated.");
     else						ELog.DlgMsg(mtInformation,"Details succesfully exported.");
 
-	return error_text.empty();
+	return error_text.empty() && !UI->NeedAbort();
 }
 
 
 BOOL SceneBuilder::MakeHOM( )
 {
-	xr_string error_text="";
-	UI->ResetBreak();
 	if(UI->ContainEState(esBuildLevel)) return false;
+	SProgressOperation progress(*UI, false);
+	xr_string error_text="";
 	ELog.Msg( mtInformation, "Making started..." );
 
     UI->BeginEState(esBuildLevel);
@@ -201,15 +205,15 @@ BOOL SceneBuilder::MakeHOM( )
     }
     UI->EndEState();
 
-	return error_text.empty();
+	return error_text.empty() && !UI->NeedAbort();
 }
 
 
 BOOL SceneBuilder::MakeSOM( )
 {
-	xr_string error_text="";
-	UI->ResetBreak();
 	if(UI->ContainEState(esBuildLevel)) return false;
+	SProgressOperation progress(*UI, false);
+	xr_string error_text="";
 	ELog.Msg( mtInformation, "Making started..." );
 
     UI->BeginEState(esBuildLevel);
@@ -229,7 +233,7 @@ BOOL SceneBuilder::MakeSOM( )
     }
     UI->EndEState();
 
-	return error_text.empty();
+	return error_text.empty() && !UI->NeedAbort();
 }
 
 #include "../XrECore/Editor/EditObject.h"

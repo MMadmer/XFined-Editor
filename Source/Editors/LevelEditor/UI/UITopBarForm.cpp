@@ -251,18 +251,22 @@ void UITopBarForm::ClickSave()
 }
 void UITopBarForm::ClickReloadConfigs()
 {
-	xr_delete(pSettings);
-	string_path 			si_name;
-	FS.update_path(si_name, "$game_config$", "system.ltx");
-	pSettings = xr_new<CInifile>(si_name, TRUE);// FALSE,TRUE,TRUE);
-	xr_delete(pGameIni);
-	string_path					fname;
-	FS.update_path(fname, "$game_config$", "game.ltx");
-	pGameIni = xr_new<CInifile>(fname, TRUE);
-	g_SEFactoryManager->reload();
-	g_pGamePersistent->OnAppEnd();
-	g_pGamePersistent->OnAppStart();
-	Tools->UpdateProperties();
+	UI->DeferUIWork([]
+	{
+		SProgressOperation progress(*UI, false);
+		xr_delete(pSettings);
+		string_path si_name;
+		FS.update_path(si_name, "$game_config$", "system.ltx");
+		pSettings = xr_new<CInifile>(si_name, TRUE);
+		xr_delete(pGameIni);
+		string_path fname;
+		FS.update_path(fname, "$game_config$", "game.ltx");
+		pGameIni = xr_new<CInifile>(fname, TRUE);
+		g_SEFactoryManager->reload();
+		g_pGamePersistent->OnAppEnd();
+		g_pGamePersistent->OnAppStart();
+		Tools->UpdateProperties();
+	});
 }
 void UITopBarForm::ClickOpenGameData()
 {
@@ -272,29 +276,39 @@ void UITopBarForm::ClickOpenGameData()
 }
 void UITopBarForm::ClickCForm()
 {
-	Scene->BuildCForm();
-
+	UI->DeferUIWork([]
+	{
+		SProgressOperation progress(*UI, false);
+		Scene->BuildCForm();
+	});
 }
 void UITopBarForm::ClickAIMap()
 {
-	Scene->BuildAIMap();
-
+	UI->DeferUIWork([]
+	{
+		SProgressOperation progress(*UI, false);
+		Scene->BuildAIMap();
+	});
 }
 void UITopBarForm::ClickGGraph()
 {
-	Scene->BuildGameGraph();
-
+	UI->DeferUIWork([]
+	{
+		SProgressOperation progress(*UI, false);
+		Scene->BuildGameGraph();
+	});
 }
 void UITopBarForm::ClickPlayInEditor()
 {
-	Scene->Play();
+	UI->DeferUIWork([] { Scene->Play(); });
 }
 void UITopBarForm::ClickBuildAndMake()
 {
-	if (Builder.Compile(false,false))
+	UI->DeferUIWork([]
 	{
-		LTools->RunXrLC();
-	}
+		if (Builder.Compile(false, false))
+			LTools->RunXrLC();
+	});
 }
 void UITopBarForm::ClickTerminated()
 {
@@ -302,10 +316,12 @@ void UITopBarForm::ClickTerminated()
 }
 void UITopBarForm::ClickPlayPC()
 {
-	if (!Scene->BuildForPCPlay())
-		return;
-
-	LTools->RunGame("-editor_scene -start server(editor/single/alife/new) client(localhost) -nointro -noprefetch");
+	UI->DeferUIWork([]
+	{
+		SProgressOperation progress(*UI, false);
+		if (Scene->BuildForPCPlay())
+			LTools->RunGame("-editor_scene -start server(editor/single/alife/new) client(localhost) -nointro -noprefetch");
+	});
 }
 void UITopBarForm::ClickPlayCleanGame()
 {

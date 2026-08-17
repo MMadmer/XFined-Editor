@@ -2,6 +2,7 @@
 #include "stdafx.h"
 #include "UISoundEditorForm.h"
 #include "SoundManager.h"
+#include "ui_main.h"
 #include "../../../xrSound/stdafx.h"
 #include "../../../xrSound/soundrender_source.h"
 UISoundEditorForm *UISoundEditorForm::Form = nullptr;
@@ -13,6 +14,8 @@ UISoundEditorForm::UISoundEditorForm()
     m_ItemList->SetOnItemFocusedEvent(TOnILItemFocused(this, &UISoundEditorForm::OnItemsFocused));
     modif_map.clear();
     m_Flags.zero();
+	m_UpdateQueued = false;
+	m_CloseAfterUpdate = false;
     InitItemList();
     if (!FS.can_write_to_alias(_sounds_))
     {
@@ -30,6 +33,13 @@ UISoundEditorForm::~UISoundEditorForm()
 
 void UISoundEditorForm::Draw()
 {
+	if (m_CloseAfterUpdate)
+	{
+		m_CloseAfterUpdate = false;
+		HideLib();
+		return;
+	}
+
     ImGui::BeginChild("Left", ImVec2(200, 400), true);
     m_ItemList->Draw();
     ImGui::EndChild();
@@ -38,6 +48,7 @@ void UISoundEditorForm::Draw()
     m_ItemProps->Draw();
     ImGui::EndChild();
     ImGui::Separator();
+    ImGui::BeginDisabled(m_UpdateQueued);
     if (ImGui::Button("Close"))
     {
         bOpen = false;
@@ -47,10 +58,14 @@ void UISoundEditorForm::Draw()
     ImGui::SameLine();
     if (ImGui::Button("Ok"))
     {
-        m_Snd.destroy();
-        UpdateLib();
-        HideLib();
+		m_UpdateQueued = UI->DeferUIWork(&UISoundEditorForm::UpdateLibDeferred);
     }
+	ImGui::EndDisabled();
+	if (m_UpdateQueued)
+	{
+		ImGui::SameLine();
+		ImGui::TextDisabled("Queued...");
+	}
 }
 
 void UISoundEditorForm::Update()
@@ -100,7 +115,20 @@ void UISoundEditorForm::OnModified()
 {
 }
 
-void UISoundEditorForm::UpdateLib()
+void UISoundEditorForm::UpdateLibDeferred()
+{
+	if (!Form)
+		return;
+
+	Form->m_Snd.destroy();
+	SProgressOperation progress(*UI, true);
+	const bool completed = Form->UpdateLib();
+	Form->m_UpdateQueued = false;
+	if (completed)
+		Form->m_CloseAfterUpdate = true;
+}
+
+bool UISoundEditorForm::UpdateLib()
 {
     RegisterModifiedTHM();
     SaveUsedTHM();
@@ -108,10 +136,13 @@ void UISoundEditorForm::UpdateLib()
     if (modif_map.size()) {
         AStringVec 			modif;
         SndLib->SynchronizeSounds(true, true, true, &modif_map, 0);
+		if (UI->NeedAbort())
+			return false;
         //		SndLib->ChangeFileAgeTo		(&modif_map,time(NULL));
         SndLib->RefreshSounds(false);
         modif_map.clear();
     }
+	return true;
 }
 
 void UISoundEditorForm::AppendModif(LPCSTR nm)
@@ -209,7 +240,7 @@ void UISoundEditorForm::OnItemsFocused(ListItem* item)
     m_Snd.destroy();
     m_THM_Current.clear();
 
-    if (item != nullptr) 
+    if (item)
     {
         ListItem* prop = item;
         if (prop) 

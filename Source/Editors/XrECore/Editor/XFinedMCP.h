@@ -25,7 +25,10 @@ class ECORE_API XFinedMCP
 public:
 	static void		Start		();		// spins up the listener thread
 	static void		Stop		();
-	static void		Pump		();		// main thread: execute queued requests
+	static void		Pump		();		// main thread: execute one queued request
+	// Guarded long operations may answer status/cancel without allowing a later
+	// scene-mutating request to run against partially loaded state.
+	static void		PumpProgressRequests();
 	// Auto-reset event set after a socket worker queues main-thread work. The
 	// editor owns the only waiter; this keeps an idle message loop responsive
 	// without polling the request vector.

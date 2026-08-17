@@ -93,6 +93,7 @@ void UIProgressCenter::Draw(TUI& ui)
 			ImGui::Separator();
 	}
 
+	const bool cancelable = tasks.front().cancelable;
 	const bool cancel_requested = tasks.front().cancel_requested;
 	if (cancel_requested)
 	{
@@ -100,13 +101,22 @@ void UIProgressCenter::Draw(TUI& ui)
 		ImGui::TextUnformatted("Cancellation requested...");
 		ImGui::PopStyleColor();
 	}
-	else if (ImGui::Button("Cancel operation"))
+	else if (cancelable)
 	{
-		ui.NeedBreak();
-		ELog.Msg(mtInformation, "Cancellation requested by user.");
+		if (ImGui::Button("Cancel operation"))
+		{
+			if (ui.NeedBreak())
+				ELog.Msg(mtInformation, "Cancellation requested by user.");
+		}
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Cancellation is cooperative and is handled when the task yields to the editor UI");
 	}
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("Cancellation is cooperative and is handled when the task yields to the editor UI");
+	else
+	{
+		ImGui::PushStyleColor(ImGuiCol_Text, ThemeColor(XFinedTheme::ColorToken::Muted));
+		ImGui::TextWrapped("This operation cannot be cancelled safely.");
+		ImGui::PopStyleColor();
+	}
 
 	ImGui::End();
 }

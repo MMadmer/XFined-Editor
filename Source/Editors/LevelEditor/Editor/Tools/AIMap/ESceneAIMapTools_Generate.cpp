@@ -453,6 +453,7 @@ int ESceneAIMapTool::BuildNodes(const Fvector& pos, int sz, bool bIC)
                 clamp	(p,0.f,1.f);
                 pb->Update(p);
                 // check need abort && redraw
+				UI->ProgressCheckpoint();
                 if (UI->NeedAbort()) break;
             }
         }
@@ -521,6 +522,7 @@ void ESceneAIMapTool::BuildNodes(bool bFromSelectedOnly)
             pb->Update(p);
             // check need abort && redraw
             if (k%32768==0) UI->RedrawScene(false);
+			UI->ProgressCheckpoint();
             if (UI->NeedAbort()) break;
         }
     }
@@ -627,6 +629,7 @@ bool ESceneAIMapTool::GenerateMap(bool bFromSelectedOnly)
                 for (EditMeshIt m_it=_meshes.begin(); m_it!=_meshes.end(); m_it++)
                 {
                     pb->Inc(xr_string().sprintf("%s [%s]",S->GetName(),(*m_it)->Name().c_str()).c_str());
+					UI->ProgressCheckpoint();
                     const SurfFaces&	_sfaces = (*m_it)->GetSurfFaces();
                     for (SurfFaces::const_iterator sp_it=_sfaces.begin(); sp_it!=_sfaces.end(); sp_it++)
                     {
@@ -1026,6 +1029,7 @@ void ESceneAIMapTool::SmoothNodes()
         int k = it-m_Nodes.begin();
         if (k%128==0) {
             pb->Update(k);
+			UI->ProgressCheckpoint();
             if (UI->NeedAbort()) break;
         }
     }

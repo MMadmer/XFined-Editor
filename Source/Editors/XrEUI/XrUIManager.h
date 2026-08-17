@@ -17,6 +17,7 @@ public:
 	XrUIManager();
 	void Push(XrUI*ui,bool need_deleted =true);
 	void Draw();
+	void DrawProgressOnly();
 		
 	virtual ~XrUIManager();
 
@@ -50,6 +51,7 @@ public:
 	// was mid-draw dies on its next ImGui call. Panel code that asks for a
 	// forced redraw has to be told to wait instead.
 	bool InUIPass() const { return m_InUIPass; }
+	void SetProgressOnlyInput(bool active) { m_ProgressOnlyInput = active; }
 
 	// Where a window goes in the default layout. The right column is cut first
 	// so it spans the full height; the bottom strip therefore stops at it,
@@ -79,6 +81,7 @@ public:
 	void BlockShortCuts();
 protected:
 	virtual void OnDrawUI();
+	virtual void OnDrawProgressUI() {}
 
 	// Default dock layout. Built when the dockspace has no layout yet (fresh
 	// install, no imgui ini) or when the user asks for a reset. The base does
@@ -90,6 +93,7 @@ private:
 	unsigned int m_DockRoot{0};
 	bool m_ResetDockLayout{false};
 	bool m_InUIPass{false};
+	bool m_ProgressOnlyInput{false};
 	float m_MenuBarHeight;
 	void ApplyShortCut(DWORD Key);
 	TShiftState m_ShiftState;

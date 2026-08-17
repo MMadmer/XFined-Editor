@@ -23,6 +23,8 @@ private:
 	FS_FileSet	modif_map;
 	bool bImportMode;
 	bool bReadonlyMode;
+	bool m_UpdateQueued;
+	bool m_CloseAfterUpdate;
 	static UIImageEditorForm* Form;
 	ImTextureID m_Texture;
 	ImTextureID m_TextureRemove;
@@ -33,7 +35,8 @@ private:
 	void OnTypeChange(PropValue* prop);
 	void InitItemList();
 	void HideLib();
-	void UpdateLib();
+	bool UpdateLib();
+	static void UpdateLibDeferred();
 	void OnItemsFocused(ListItem* item);
 	void SaveUsedTHM();
 private:

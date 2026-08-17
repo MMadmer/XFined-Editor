@@ -391,10 +391,6 @@ void CImageManager::SynchronizeTextures(bool sync_thm, bool sync_game, bool bFor
             }
 		}
 		if (THM) xr_delete(THM);
-		if (UI->NeedAbort()) break;
-        
-        if (bProgress) 
-		    pb->Inc(bUpdated?xr_string(base_name+(bFailed?" - FAILED":" - UPDATED.")).c_str():base_name.c_str(),bUpdated);
             
         if (bUpdated){
             string_path             tga_fn,thm_fn,dds_fn;
@@ -412,6 +408,10 @@ void CImageManager::SynchronizeTextures(bool sync_thm, bool sync_game, bool bFor
                 FS.set_file_age			(dds_fn,m_age);
             }
         }
+        if (bProgress)
+            pb->Inc(bUpdated?xr_string(base_name+(bFailed?" - FAILED":" - UPDATED.")).c_str():base_name.c_str(),bUpdated);
+        UI->ProgressCheckpoint();
+        if (UI->NeedAbort()) break;
     }
     if (bProgress) 	UI->ProgressEnd(pb);
 }
@@ -549,6 +549,7 @@ void CImageManager::CheckCompliance(FS_FileSet& files, FS_FileSet& compl)
         FS_File 				F(*it); F.attrib = val;
         compl.insert			(F);
 	    pb->Inc					();
+		UI->ProgressCheckpoint();
 		if (UI->NeedAbort()) break;
     }
 	UI->ProgressEnd(pb);
@@ -698,7 +699,8 @@ void CImageManager::RefreshTextures(AStringVec* modif)
             UI->SetStatus("Refresh textures...");
             AStringVec modif_files;
             ImageLib.SynchronizeTextures(true,true,false,0,&modif_files);
-            EDevice->Resources->ED_UpdateTextures(&modif_files);
+            if (!UI->NeedAbort())
+                EDevice->Resources->ED_UpdateTextures(&modif_files);
             UI->SetStatus("");
         }
     }else{

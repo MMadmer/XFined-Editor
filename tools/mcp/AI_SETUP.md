@@ -125,7 +125,7 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_frame_pacing` | read live requested/effective frame interval, wait reason/counters and active mode; persist `active_idle_fps` 30..240 (`action=set`) or reset it to 120. PIE/realtime and explicit work are never delayed, and messages/MCP wake the wait immediately |
 | `xfined_command_palette` | query the ranked Ctrl+Shift+P catalog, open/close the palette, inspect its state, or execute an exact returned command/subcommand pair |
 | `xfined_viewport_navigation` | read/control the viewport orientation widget: six canonical axis views, perspective reset, and frame all/selection |
-| `xfined_progress` | read active nested editor tasks with percentage/detail/elapsed time, or request cooperative cancellation for tasks that yield UI frames; blocking legacy jobs keep live feedback in the progress console |
+| `xfined_progress` | read live nested tasks with percentage/detail/elapsed time plus truthful `cancelable`/`cancel_requested` state. Scene loading remains responsive to this read but refuses cancellation until it has a rollback transaction. The full SceneBuilder Compile path is cooperatively cancelable; standalone MakeGame/AIMap/Details/HOM/SOM jobs remain non-cancelable until their file stages are transactional |
 | `xfined_property_inspector` | search/filter the selection or world property tree, expand/collapse all, and open/close the corresponding panel |
 | `xfined_content_browser_navigation` | inspect or drive Content Browser Back/Forward/Up/Home, source/category/folder breadcrumbs and process-session Favorites |
 | `xfined_undo` | undo the last scene operation |
@@ -151,6 +151,11 @@ Replace `<repo>` with the folder the editor is installed in.
 
 Everything that writes is clamped to the project folder: the linked game install
 and the shared SDK library are sources you copy **out of**, never into.
+
+While a guarded main-thread operation is running, the editor extracts only
+`xfined_progress` requests from the MCP queue. Scene/object mutations remain queued
+until the operation ends, so a progress poll cannot observe or modify a partially
+loaded scene. Normal MCP dispatch also executes one queued request per frame.
 
 ### World Outliner UI
 

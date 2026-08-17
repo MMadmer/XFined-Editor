@@ -850,33 +850,64 @@ static void Execute(SMCPRequest& r)
 	}
 }
 
-void XFinedMCP::Pump()
+static SMCPRequest* TakeQueuedRequest(bool progress_only)
 {
 	if (!s_LockReady)
-		return;
+		return 0;
 
-	xr_vector<SMCPRequest*> batch;
+	SMCPRequest* request = 0;
+	bool requests_remain = false;
 	::EnterCriticalSection(&s_Lock);
-	batch.swap(s_Queue);
-	::LeaveCriticalSection(&s_Lock);
-	for (u32 i = 0; i < batch.size(); ++i)
+	if (!s_Queue.empty())
 	{
-		SMCPRequest* request = batch[i];
-		if (!IsRunning())
+		u32 index = 0;
+		if (progress_only)
 		{
-			request->Cancel();
-			request->Release();
-			continue;
+			for (; index < s_Queue.size(); ++index)
+				if (s_Queue[index]->cmd == "progress")
+					break;
 		}
-		if (SMCPRequest::Queued == ::InterlockedCompareExchange(
-			&request->state, SMCPRequest::Executing, SMCPRequest::Queued))
+		if (index < s_Queue.size())
 		{
-			Execute(*request);
-			::InterlockedExchange(&request->state, SMCPRequest::Completed);
-			::SetEvent(request->done);
+			request = s_Queue[index];
+			s_Queue.erase(s_Queue.begin() + index);
 		}
-		request->Release();
+		requests_remain = !s_Queue.empty();
 	}
+	::LeaveCriticalSection(&s_Lock);
+	if (requests_remain && s_QueueEvent)
+		::SetEvent(s_QueueEvent);
+	return request;
+}
+
+static void ExecuteQueuedRequest(SMCPRequest* request)
+{
+	if (!request)
+		return;
+	if (!IsRunning())
+	{
+		request->Cancel();
+		request->Release();
+		return;
+	}
+	if (SMCPRequest::Queued == ::InterlockedCompareExchange(
+		&request->state, SMCPRequest::Executing, SMCPRequest::Queued))
+	{
+		Execute(*request);
+		::InterlockedExchange(&request->state, SMCPRequest::Completed);
+		::SetEvent(request->done);
+	}
+	request->Release();
+}
+
+void XFinedMCP::Pump()
+{
+	ExecuteQueuedRequest(TakeQueuedRequest(false));
+}
+
+void XFinedMCP::PumpProgressRequests()
+{
+	ExecuteQueuedRequest(TakeQueuedRequest(true));
 }
 
 //------------------------------------------------------------------------------
@@ -1240,9 +1271,8 @@ void XFinedMCP::Start()
 		CleanupStartupFailure();
 		return;
 	}
-	// Auto-reset is intentional: one wake drains the entire queue. A request
-	// arriving before or during the wait leaves the event signalled, so there is
-	// no queue-check-to-wait race.
+	// Auto-reset is intentional. Pump re-signals while requests remain, so the
+	// frame loop handles one command at a time without a queue-check-to-wait race.
 	s_QueueEvent = ::CreateEventA(NULL, FALSE, FALSE, NULL);
 	if (!s_QueueEvent)
 	{

@@ -10,6 +10,7 @@ struct SProgressTaskInfo
 	u64 elapsed_ms = 0;
 	u32 depth = 0;
 	bool determinate = false;
+	bool cancelable = false;
 	bool cancel_requested = false;
 };
 

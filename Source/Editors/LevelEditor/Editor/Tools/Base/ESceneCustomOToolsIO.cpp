@@ -80,6 +80,7 @@ bool ESceneCustomOTool::LoadLTX(CInifile& ini)
                   xr_delete(obj);
           }
           if (pb) pb->Inc();
+		  UI->ProgressCheckpoint();
       }
 
 	if (pb) UI->ProgressEnd(pb);
