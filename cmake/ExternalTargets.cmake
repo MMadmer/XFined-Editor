@@ -49,12 +49,28 @@ add_library(Ode STATIC ${ODE_SRC})
 xray_common(Ode)
 target_compile_definitions(Ode PRIVATE dSINGLE WINDOWS ODE_EXPORTS _WINDOWS _USRDLL)
 
-file(GLOB CRYPTO_SRC CONFIGURE_DEPENDS "${EXT}/Crypto/*.c" "${EXT}/Crypto/*.cpp"
-    "${EXT}/Crypto/openssl/src/*.c")
+#-- OpenSSL 3.5.7 -------------------------------------------------------------
+set(OPENSSL_ROOT "${EXT}/OpenSSL")
+add_library(OpenSSL3Crypto SHARED IMPORTED GLOBAL)
+set_target_properties(OpenSSL3Crypto PROPERTIES
+    IMPORTED_IMPLIB "${OPENSSL_ROOT}/lib/x64/libcrypto.lib"
+    IMPORTED_LOCATION "${OPENSSL_ROOT}/bin/x64/libcrypto-3-x64.dll"
+    INTERFACE_INCLUDE_DIRECTORIES "${OPENSSL_ROOT}/include")
+
+set(CRYPTO_SRC
+    "${EXT}/Crypto/crypto.cpp"
+    "${EXT}/Crypto/xr_dsa.cpp"
+    "${EXT}/Crypto/xr_sha.cpp")
 add_library(Crypto STATIC ${CRYPTO_SRC})
 xray_common(Crypto)
 target_compile_definitions(Crypto PRIVATE _LIB)
-target_include_directories(Crypto PRIVATE "${EXT}/Crypto/openssl")
+target_include_directories(Crypto PRIVATE "${OPENSSL_ROOT}/include")
+target_link_libraries(Crypto PRIVATE OpenSSL3Crypto)
+
+configure_file("${OPENSSL_ROOT}/bin/x64/libcrypto-3-x64.dll"
+    "${XRAY_BIN}/libcrypto-3-x64.dll" COPYONLY)
+configure_file("${OPENSSL_ROOT}/LICENSE.txt"
+    "${XRAY_BIN}/OPENSSL_LICENSE.txt" COPYONLY)
 
 add_library(OpenAutomate STATIC "${EXT}/OpenAutomate/OpenAutomate.c")
 xray_common(OpenAutomate)

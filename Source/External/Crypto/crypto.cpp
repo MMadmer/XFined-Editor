@@ -1,35 +1,41 @@
-#include "crypto\crypto.h"
-#include <openssl/bn.h>
-#include <openssl/rand.h>
-#include <openssl/dsa.h>
+#include "crypto/crypto.h"
+#include "openssl_runtime.h"
 
+#include <mutex>
+
+#include <openssl/crypto.h>
+#include <openssl/rand.h>
+
+namespace
+{
+std::once_flag initialization_flag;
+bool initialized{};
+
+void initialize_crypto()
+{
+    if (!OPENSSL_init_crypto(OPENSSL_INIT_NO_LOAD_CONFIG, nullptr))
+        return;
+
+    string256 random_seed;
+    xr_sprintf(random_seed, "%I64d_%s", CPU::QPC(), "S.T.A.L.K.E.R. 4ever Rulezz !!!");
+    RAND_add(random_seed, xr_strlen(random_seed), 0.0);
+    initialized = true;
+}
+}
+
+namespace crypto::detail
+{
+bool ensure_crypto_initialized()
+{
+    std::call_once(initialization_flag, initialize_crypto);
+    return initialized;
+}
+}
 
 namespace crypto
 {
-
-static void unsafe_xr_free(void* ptr)
+void xr_crypto_init()
 {
-	xr_free(ptr);
-};
-
-static unsigned char rnd_seed[] = "S.T.A.L.K.E.R. 4ever Rulezz !!!";
-
-CRYPTO_API	void		xr_crypto_init	()
-{
-	string256 random_string;
-	xr_sprintf					(random_string, "%I64d_%s", CPU::QPC(), rnd_seed);
-	//sprintf_s					(random_string, "%s", rnd_seed);
-	CRYPTO_set_mem_functions	(xr_malloc, xr_realloc, unsafe_xr_free);
-	RAND_seed					(random_string, xr_strlen(random_string));
-	//unsigned int siglen;
-	//tmp_dsa_params->flags |= DSA_FLAG_NO_EXP_CONSTTIME;
-	//ZeroMemory(sig, sizeof(sig));
-	//DSA_sign(0, digest, sizeof(digest), sig, &siglen, tmp_dsa_params);
-	//DSA_verify(0, digest, sizeof(digest), sig, siglen, tmp_dsa_params);
-/*#ifdef DEBUG
-	CRYPTO_dbg_set_options		(V_CRYPTO_MDEBUG_ALL);
-	CRYPTO_mem_ctrl				(CRYPTO_MEM_CHECK_ON);
-#endif*/
+    VERIFY(detail::ensure_crypto_initialized());
 }
-
-} //namespace crypto
+}

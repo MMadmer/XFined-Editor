@@ -11,6 +11,20 @@ any later version. The unmodified corresponding source is vendored under
 Source/External/LZO, and the complete license is distributed beside the editor
 as LZO_LICENSE.txt.
 
+OpenSSL 3.5.7
+-------------
+
+Copyright (c) 1998-2026 The OpenSSL Project Authors
+Copyright (c) 1995-1998 Eric A. Young, Tim J. Hudson
+
+XFined Editor dynamically links an unmodified source build of OpenSSL
+libcrypto under the Apache License 2.0. The complete license is distributed
+beside the editor as OPENSSL_LICENSE.txt. Exact source, tool, and artifact
+hashes are recorded in Source/External/OpenSSL/PROVENANCE.md. The source is
+available from:
+
+https://github.com/openssl/openssl/releases/tag/openssl-3.5.7
+
 FreeType 2.14.3
 ---------------
 
