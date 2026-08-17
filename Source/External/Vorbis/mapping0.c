@@ -6,12 +6,11 @@
  * IN 'COPYING'. PLEASE READ THESE TERMS BEFORE DISTRIBUTING.       *
  *                                                                  *
  * THE OggVorbis SOURCE CODE IS (C) COPYRIGHT 1994-2010             *
- * by the Xiph.Org Foundation http://www.xiph.org/                  *
+ * by the Xiph.Org Foundation https://xiph.org/                     *
  *                                                                  *
  ********************************************************************
 
  function: channel mapping 0 implementation
- last mod: $Id: mapping0.c 17022 2010-03-25 03:45:42Z xiphmont $
 
  ********************************************************************/
 
@@ -27,9 +26,7 @@
 #include "registry.h"
 #include "psy.h"
 #include "misc.h"
-#ifdef WINDOWS
-#pragma warning(disable: 4244 )
-#endif
+
 /* simplistic, wasteful way of doing this (unique lookup for each
    mode/submapping); there should be a central repository for
    identical lookups.  That will require minor work, so I'm putting it
@@ -45,16 +42,6 @@ static void mapping0_free_info(vorbis_info_mapping *i){
     memset(info,0,sizeof(*info));
     _ogg_free(info);
   }
-}
-
-static int ilog(unsigned int v){
-  int ret=0;
-  if(v)--v;
-  while(v){
-    ret++;
-    v>>=1;
-  }
-  return(ret);
 }
 
 static void mapping0_pack(vorbis_info *vi,vorbis_info_mapping *vm,
@@ -80,8 +67,8 @@ static void mapping0_pack(vorbis_info *vi,vorbis_info_mapping *vm,
     oggpack_write(opb,info->coupling_steps-1,8);
 
     for(i=0;i<info->coupling_steps;i++){
-      oggpack_write(opb,info->coupling_mag[i],ilog(vi->channels));
-      oggpack_write(opb,info->coupling_ang[i],ilog(vi->channels));
+      oggpack_write(opb,info->coupling_mag[i],ov_ilog(vi->channels-1));
+      oggpack_write(opb,info->coupling_ang[i],ov_ilog(vi->channels-1));
     }
   }else
     oggpack_write(opb,0,1);
@@ -105,7 +92,7 @@ static vorbis_info_mapping *mapping0_unpack(vorbis_info *vi,oggpack_buffer *opb)
   int i,b;
   vorbis_info_mapping0 *info=_ogg_calloc(1,sizeof(*info));
   codec_setup_info     *ci=vi->codec_setup;
-  memset(info,0,sizeof(*info));
+  if(vi->channels<=0)goto err_out;
 
   b=oggpack_read(opb,1);
   if(b<0)goto err_out;
@@ -121,8 +108,11 @@ static vorbis_info_mapping *mapping0_unpack(vorbis_info *vi,oggpack_buffer *opb)
     info->coupling_steps=oggpack_read(opb,8)+1;
     if(info->coupling_steps<=0)goto err_out;
     for(i=0;i<info->coupling_steps;i++){
-      int testM=info->coupling_mag[i]=oggpack_read(opb,ilog(vi->channels));
-      int testA=info->coupling_ang[i]=oggpack_read(opb,ilog(vi->channels));
+      /* vi->channels > 0 is enforced in the caller */
+      int testM=info->coupling_mag[i]=
+        oggpack_read(opb,ov_ilog(vi->channels-1));
+      int testA=info->coupling_ang[i]=
+        oggpack_read(opb,ov_ilog(vi->channels-1));
 
       if(testM<0 ||
          testA<0 ||

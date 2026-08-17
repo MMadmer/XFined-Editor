@@ -1,6 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
-#include "internal.h"
+#include "state.h"
 #include "enquant.h"
 #include "huffenc.h"
 
@@ -62,7 +62,7 @@ int oc_state_flushheader(oc_theora_state *_state,int *_packet_state,
       int vendor_len;
       int i;
       if(_tc==NULL)return TH_EFAULT;
-      vendor_len=(int)strlen(_vendor);
+      vendor_len=strlen(_vendor);
       oggpackB_reset(_opb);
       /*Mark this packet as the comment header.*/
       oggpackB_write(_opb,0x81,8);

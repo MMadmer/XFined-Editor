@@ -6,12 +6,11 @@
  * IN 'COPYING'. PLEASE READ THESE TERMS BEFORE DISTRIBUTING.       *
  *                                                                  *
  * THE OggVorbis SOURCE CODE IS (C) COPYRIGHT 1994-2010             *
- * by the Xiph.Org Foundation http://www.xiph.org/                  *
+ * by the Xiph.Org Foundation https://xiph.org/                     *
  *                                                                  *
  ********************************************************************
 
  function: psychoacoustics not including preecho
- last mod: $Id: psy.c 18077 2011-09-02 02:49:00Z giles $
 
  ********************************************************************/
 
@@ -28,9 +27,7 @@
 #include "smallft.h"
 #include "scales.h"
 #include "misc.h"
-#ifdef WINDOWS
-#pragma warning(disable: 4244 4456 4305)
-#endif
+
 #define NEGINF -9999.f
 static const double stereo_threshholds[]={0.0, .5, 1.0, 1.5, 2.5, 4.5, 8.5, 16.5, 9e10};
 static const double stereo_threshholds_limited[]={0.0, .5, 1.0, 1.5, 2.0, 2.5, 4.5, 8.5, 9e10};
@@ -602,11 +599,12 @@ static void bark_noise_hybridmp(int n,const long *b,
     XY[i] = tXY;
   }
 
-  for (i = 0, x = 0.f;; i++, x += 1.f) {
+  for (i = 0, x = 0.f; i < n; i++, x += 1.f) {
 
     lo = b[i] >> 16;
-    if( lo>=0 ) break;
     hi = b[i] & 0xffff;
+    if( lo>=0 || -lo>=n ) break;
+    if( hi>=n ) break;
 
     tN = N[hi] + N[-lo];
     tX = X[hi] - X[-lo];
@@ -618,17 +616,17 @@ static void bark_noise_hybridmp(int n,const long *b,
     B = tN * tXY - tX * tY;
     D = tN * tXX - tX * tX;
     R = (A + x * B) / D;
-    if (R < 0.f)
-      R = 0.f;
+    if (R < 0.f) R = 0.f;
 
     noise[i] = R - offset;
   }
 
-  for ( ;; i++, x += 1.f) {
+  for ( ; i < n; i++, x += 1.f) {
 
     lo = b[i] >> 16;
     hi = b[i] & 0xffff;
-    if(hi>=n)break;
+    if( lo<0 || lo>=n ) break;
+    if( hi>=n ) break;
 
     tN = N[hi] - N[lo];
     tX = X[hi] - X[lo];
@@ -644,6 +642,7 @@ static void bark_noise_hybridmp(int n,const long *b,
 
     noise[i] = R - offset;
   }
+
   for ( ; i < n; i++, x += 1.f) {
 
     R = (A + x * B) / D;
@@ -654,10 +653,11 @@ static void bark_noise_hybridmp(int n,const long *b,
 
   if (fixed <= 0) return;
 
-  for (i = 0, x = 0.f;; i++, x += 1.f) {
+  for (i = 0, x = 0.f; i < n; i++, x += 1.f) {
     hi = i + fixed / 2;
     lo = hi - fixed;
-    if(lo>=0)break;
+    if ( hi>=n ) break;
+    if ( lo>=0 ) break;
 
     tN = N[hi] + N[-lo];
     tX = X[hi] - X[-lo];
@@ -673,11 +673,12 @@ static void bark_noise_hybridmp(int n,const long *b,
 
     if (R - offset < noise[i]) noise[i] = R - offset;
   }
-  for ( ;; i++, x += 1.f) {
+  for ( ; i < n; i++, x += 1.f) {
 
     hi = i + fixed / 2;
     lo = hi - fixed;
-    if(hi>=n)break;
+    if ( hi>=n ) break;
+    if ( lo<0 ) break;
 
     tN = N[hi] - N[lo];
     tX = X[hi] - X[lo];

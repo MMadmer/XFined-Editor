@@ -26,6 +26,15 @@ endforeach()
 option(XRAY_BUILD_WEATHER_EDITOR "Build the C++/CLI weather editor DLLs" OFF)
 
 include(cmake/XRayCommon.cmake)
+
+# Keep the notices beside every produced editor binary, including targeted builds.
+file(MAKE_DIRECTORY "${XRAY_BIN}")
+configure_file(
+    "${XRAY_SOURCE}/External/THIRD_PARTY_NOTICES.txt"
+    "${XRAY_BIN}/THIRD_PARTY_NOTICES.txt"
+    COPYONLY
+)
+
 include(cmake/ExternalTargets.cmake)
 include(cmake/CoreTargets.cmake)
 include(cmake/EditorTargets.cmake)

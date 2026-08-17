@@ -5,13 +5,12 @@
  * GOVERNED BY A BSD-STYLE SOURCE LICENSE INCLUDED WITH THIS SOURCE *
  * IN 'COPYING'. PLEASE READ THESE TERMS BEFORE DISTRIBUTING.       *
  *                                                                  *
- * THE OggVorbis SOURCE CODE IS (C) COPYRIGHT 1994-2009             *
- * by the Xiph.Org Foundation http://www.xiph.org/                  *
+ * THE OggVorbis SOURCE CODE IS (C) COPYRIGHT 1994-2015             *
+ * by the Xiph.Org Foundation https://xiph.org/                     *
  *                                                                  *
  ********************************************************************
 
  function: simple programmatic interface for encoder mode setup
- last mod: $Id: vorbisenc.c 17028 2010-03-25 05:22:15Z xiphmont $
 
  ********************************************************************/
 
@@ -152,15 +151,15 @@ static const vorbis_info_mapping0 _map_nominal[2]={
   {1, {0,0}, {1}, {1}, 1,{0},{1}}
 };
 
-#include "setup_44.h"
-#include "setup_44u.h"
-#include "setup_44p51.h"
-#include "setup_32.h"
-#include "setup_8.h"
-#include "setup_11.h"
-#include "setup_16.h"
-#include "setup_22.h"
-#include "setup_X.h"
+#include "modes/setup_44.h"
+#include "modes/setup_44u.h"
+#include "modes/setup_44p51.h"
+#include "modes/setup_32.h"
+#include "modes/setup_8.h"
+#include "modes/setup_11.h"
+#include "modes/setup_16.h"
+#include "modes/setup_22.h"
+#include "modes/setup_X.h"
 
 static const ve_setup_data_template *const setup_list[]={
   &ve_setup_44_stereo,
@@ -685,6 +684,7 @@ int vorbis_encode_setup_init(vorbis_info *vi){
   highlevel_encode_setup *hi=&ci->hi;
 
   if(ci==NULL)return(OV_EINVAL);
+  if(vi->channels<1||vi->channels>255)return(OV_EINVAL);
   if(!hi->impulse_block_p)i0=1;
 
   /* too low/high an ATH floater is nonsensical, but doesn't break anything */
@@ -903,11 +903,15 @@ int vorbis_encode_setup_vbr(vorbis_info *vi,
                             long  channels,
                             long  rate,
                             float quality){
-  codec_setup_info *ci=vi->codec_setup;
-  highlevel_encode_setup *hi=&ci->hi;
+  codec_setup_info *ci;
+  highlevel_encode_setup *hi;
+  if(rate<=0) return OV_EINVAL;
 
-  quality+=.0000001f;
-  if(quality>=1.)quality=.9999f;
+  ci=vi->codec_setup;
+  hi=&ci->hi;
+
+  quality+=.0000001;
+  if(quality>=1.)quality=.9999;
 
   hi->req=quality;
   hi->setup=get_setup_template(channels,rate,quality,0,&hi->base_setting);
@@ -948,9 +952,14 @@ int vorbis_encode_setup_managed(vorbis_info *vi,
                                 long nominal_bitrate,
                                 long min_bitrate){
 
-  codec_setup_info *ci=vi->codec_setup;
-  highlevel_encode_setup *hi=&ci->hi;
-  double tnominal=nominal_bitrate;
+  codec_setup_info *ci;
+  highlevel_encode_setup *hi;
+  double tnominal;
+  if(rate<=0) return OV_EINVAL;
+
+  ci=vi->codec_setup;
+  hi=&ci->hi;
+  tnominal=nominal_bitrate;
 
   if(nominal_bitrate<=0.){
     if(max_bitrate>0.){
@@ -1202,7 +1211,7 @@ int vorbis_encode_ctl(vorbis_info *vi,int number,void *arg){
                                           hi->req,
                                           hi->managed,
                                           &new_base);
-        if(!hi->setup)return OV_EIMPL;
+        if(!new_template)return OV_EIMPL;
         hi->setup=new_template;
         hi->base_setting=new_base;
         vorbis_encode_setup_setting(vi,vi->channels,vi->rate);

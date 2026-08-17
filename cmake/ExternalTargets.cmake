@@ -15,12 +15,30 @@ add_library(Ogg STATIC "${EXT}/Ogg/bitwise.c" "${EXT}/Ogg/framing.c")
 xray_common(Ogg)
 target_compile_definitions(Ogg PRIVATE _LIB)
 
-file(GLOB VORBIS_SRC CONFIGURE_DEPENDS "${EXT}/Vorbis/*.c" "${EXT}/Vorbis/*.cpp")
+set(VORBIS_SRC
+    "${EXT}/Vorbis/analysis.c" "${EXT}/Vorbis/bitrate.c" "${EXT}/Vorbis/block.c"
+    "${EXT}/Vorbis/codebook.c" "${EXT}/Vorbis/envelope.c" "${EXT}/Vorbis/floor0.c"
+    "${EXT}/Vorbis/floor1.c" "${EXT}/Vorbis/info.c" "${EXT}/Vorbis/lookup.c"
+    "${EXT}/Vorbis/lpc.c" "${EXT}/Vorbis/lsp.c" "${EXT}/Vorbis/mapping0.c"
+    "${EXT}/Vorbis/mdct.c" "${EXT}/Vorbis/psy.c" "${EXT}/Vorbis/registry.c"
+    "${EXT}/Vorbis/res0.c" "${EXT}/Vorbis/sharedbook.c" "${EXT}/Vorbis/smallft.c"
+    "${EXT}/Vorbis/synthesis.c" "${EXT}/Vorbis/vorbisenc.c"
+    "${EXT}/Vorbis/vorbisfile.c" "${EXT}/Vorbis/window.c")
 add_library(Vorbis STATIC ${VORBIS_SRC})
 xray_common(Vorbis)
 target_compile_definitions(Vorbis PRIVATE _LIB)
+target_include_directories(Vorbis PRIVATE "${EXT}/Vorbis")
 
-file(GLOB THEORA_SRC CONFIGURE_DEPENDS "${EXT}/Theora/*.c" "${EXT}/Theora/*.cpp")
+set(THEORA_SRC
+    "${EXT}/Theora/analyze.c" "${EXT}/Theora/apiwrapper.c" "${EXT}/Theora/bitpack.c"
+    "${EXT}/Theora/decapiwrapper.c" "${EXT}/Theora/decinfo.c" "${EXT}/Theora/decode.c"
+    "${EXT}/Theora/dequant.c" "${EXT}/Theora/encapiwrapper.c" "${EXT}/Theora/encfrag.c"
+    "${EXT}/Theora/encinfo.c" "${EXT}/Theora/encode.c" "${EXT}/Theora/enquant.c"
+    "${EXT}/Theora/fdct.c" "${EXT}/Theora/fragment.c" "${EXT}/Theora/huffdec.c"
+    "${EXT}/Theora/huffenc.c" "${EXT}/Theora/idct.c" "${EXT}/Theora/info.c"
+    "${EXT}/Theora/internal.c" "${EXT}/Theora/mathops.c" "${EXT}/Theora/mcenc.c"
+    "${EXT}/Theora/quant.c" "${EXT}/Theora/rate.c" "${EXT}/Theora/state.c"
+    "${EXT}/Theora/tokenize.c")
 add_library(Theora STATIC ${THEORA_SRC})
 xray_common(Theora)
 target_compile_definitions(Theora PRIVATE _LIB)
@@ -43,13 +61,20 @@ xray_common(OpenAutomate)
 target_compile_definitions(OpenAutomate PRIVATE _LIB)
 
 # zlib: the one project without /arch:AVX — configured by hand for parity
-file(GLOB ZLIB_SRC CONFIGURE_DEPENDS "${EXT}/zlib/*.c")
+set(ZLIB_SRC
+    "${EXT}/zlib/adler32.c" "${EXT}/zlib/compress.c" "${EXT}/zlib/crc32.c"
+    "${EXT}/zlib/deflate.c" "${EXT}/zlib/gzclose.c" "${EXT}/zlib/gzlib.c"
+    "${EXT}/zlib/gzread.c" "${EXT}/zlib/gzwrite.c" "${EXT}/zlib/infback.c"
+    "${EXT}/zlib/inffast.c" "${EXT}/zlib/inflate.c" "${EXT}/zlib/inftrees.c"
+    "${EXT}/zlib/ioapi.c" "${EXT}/zlib/iowin32.c" "${EXT}/zlib/mztools.c"
+    "${EXT}/zlib/trees.c" "${EXT}/zlib/uncompr.c" "${EXT}/zlib/unzip.c"
+    "${EXT}/zlib/zip.c" "${EXT}/zlib/zutil.c")
 add_library(zlib STATIC ${ZLIB_SRC})
 set_target_properties(zlib PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${XRAY_LIB}")
 target_compile_definitions(zlib PRIVATE
     _SILENCE_STDEXT_HASH_DEPRECATION_WARNINGS _WINDLL _SECURE_SCL=0 _ITERATOR_DEBUG_LEVEL=0
     $<$<CONFIG:Release>:DEBUG> $<$<CONFIG:Release>:NDEBUG>)
-target_include_directories(zlib PRIVATE "${EXT}/Public")  # headers live in External/Public/zlib/
+target_include_directories(zlib PRIVATE "${EXT}/Public" "${EXT}/Public/Zlib")
 target_compile_options(zlib PRIVATE /W0 /GR)
 
 #-- OpenAL (dll) ---------------------------------------------------------------

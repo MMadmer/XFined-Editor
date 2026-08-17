@@ -6,12 +6,11 @@
  * IN 'COPYING'. PLEASE READ THESE TERMS BEFORE DISTRIBUTING.       *
  *                                                                  *
  * THE OggVorbis SOURCE CODE IS (C) COPYRIGHT 1994-2007             *
- * by the Xiph.Org Foundation http://www.xiph.org/                  *
+ * by the Xiph.Org Foundation https://xiph.org/                     *
  *                                                                  *
  ********************************************************************
 
  function: single-block PCM analysis mode dispatch
- last mod: $Id: analysis.c 16226 2009-07-08 06:43:49Z xiphmont $
 
  ********************************************************************/
 
@@ -25,9 +24,7 @@
 #include "scales.h"
 #include "os.h"
 #include "misc.h"
-#ifdef WINDOWS
-#pragma warning(disable:4706)
-#endif
+
 /* decides between modes, dispatches to the appropriate mapping. */
 int vorbis_analysis(vorbis_block *vb, ogg_packet *op){
   int ret,i;
