@@ -76,6 +76,7 @@ class ECORE_API TUI: public IInputReceiver,public XrUIManager
 	u64 m_FramePacingWaits;
 	u64 m_FramePacingWaitTicks;
 	u32 m_LastFramePacingReason;
+	void SyncAppActivation();
 	void WaitForFramePacing();
 	// Main-thread flags remain authoritative; the event only interrupts a wait
 	// when work is posted from outside the current idle iteration.
