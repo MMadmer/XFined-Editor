@@ -1,6 +1,21 @@
 XFined Editor third-party notices
 =================================
 
+OpenAL Soft 1.25.2
+------------------
+
+XFined Editor dynamically links the unmodified official OpenAL Soft router and
+implementation. OpenAL Soft is licensed under the GNU Library General Public
+License version 2 or, at your option, any later version. The complete license
+is distributed beside the editor as OPENAL_SOFT_COPYING.txt. The corresponding
+source is available from:
+
+https://github.com/kcat/openal-soft/releases/tag/1.25.2
+
+OpenAL Soft includes a modified PFFFT implementation. Its complete BSD-style
+notice is distributed beside the editor as OPENAL_SOFT_LICENSE_PFFFT.txt.
+
+
 Dear ImGui
 ----------
 

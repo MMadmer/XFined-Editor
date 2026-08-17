@@ -77,13 +77,25 @@ target_compile_definitions(zlib PRIVATE
 target_include_directories(zlib PRIVATE "${EXT}/Public" "${EXT}/Public/Zlib")
 target_compile_options(zlib PRIVATE /W0 /GR)
 
-#-- OpenAL (dll) ---------------------------------------------------------------
-add_library(OpenAL SHARED
-    "${EXT}/OpenAL/al.cpp" "${EXT}/OpenAL/alc.cpp"
-    "${EXT}/OpenAL/alList.cpp" "${EXT}/OpenAL/OpenAL32.cpp")
-xray_common(OpenAL)
-target_compile_definitions(OpenAL PRIVATE AL_BUILD_LIBRARY OPENAL_EXPORTS _WINDOWS _USRDLL)
-target_link_libraries(OpenAL PRIVATE version winmm odbc32 odbccp32)
+#-- OpenAL Soft 1.25.2 (official x64 router + implementation) ------------------
+set(OPENAL_SOFT "${EXT}/OpenALSoft")
+add_library(OpenAL SHARED IMPORTED GLOBAL)
+set_target_properties(OpenAL PROPERTIES
+    IMPORTED_IMPLIB "${OPENAL_SOFT}/lib/Win64/OpenAL32.lib"
+    IMPORTED_LOCATION "${OPENAL_SOFT}/bin/Win64/OpenAL32.dll"
+    INTERFACE_INCLUDE_DIRECTORIES "${OPENAL_SOFT}/include"
+)
+
+# The router preserves the standard OpenAL32 ABI while soft_oal supplies EFX/EAX.
+foreach(_openal_runtime OpenAL32.dll soft_oal.dll)
+    configure_file(
+        "${OPENAL_SOFT}/bin/Win64/${_openal_runtime}"
+        "${XRAY_BIN}/${_openal_runtime}"
+        COPYONLY
+    )
+endforeach()
+configure_file("${OPENAL_SOFT}/COPYING" "${XRAY_BIN}/OPENAL_SOFT_COPYING.txt" COPYONLY)
+configure_file("${OPENAL_SOFT}/LICENSE-pffft" "${XRAY_BIN}/OPENAL_SOFT_LICENSE_PFFFT.txt" COPYONLY)
 
 #-- RedImage subtree (own property sheet: no engine defines, own includes) -----
 set(REDIMAGE "${EXT}/RedImage")

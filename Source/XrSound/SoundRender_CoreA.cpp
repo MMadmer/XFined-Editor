@@ -92,7 +92,7 @@ void CSoundRender_CoreA::_initialize(int stage)
 	const ALDeviceDesc& deviceDesc	= pDeviceList->GetDeviceDesc(snd_device_id);
     // OpenAL device
     pDevice						= alcOpenDevice		(deviceDesc.name);
-	if (pDevice == NULL)
+	if (!pDevice)
 	{
 		CHECK_OR_EXIT			(0,"SOUND: OpenAL: Failed to create device.");
 		bPresent				= FALSE;
@@ -130,9 +130,9 @@ void CSoundRender_CoreA::_initialize(int stage)
     bEAX 				        = deviceDesc.props.eax && !deviceDesc.props.eax_unwanted;
 
     eaxSet 				        = (EAXSet)alGetProcAddress	((const ALchar*)"EAXSet");
-    if (eaxSet==NULL) bEAX 		= false;
+    if (!eaxSet) bEAX 		= false;
     eaxGet 				        = (EAXGet)alGetProcAddress	((const ALchar*)"EAXGet");
-    if (eaxGet==NULL) bEAX 		= false;
+    if (!eaxGet) bEAX 		= false;
 
     if (bEAX)
 	{

@@ -101,7 +101,7 @@ void ALDeviceList::Enumerate()
 
 		index				= 0;
 		// go through device list (each device terminated with a single NULL, list terminated with double NULL)
-		while(*devices != NULL) 
+		while (*devices)
 		{
 			ALCdevice *device		= alcOpenDevice(devices);
 			if (device) 
@@ -113,7 +113,7 @@ void ALDeviceList::Enumerate()
 					// if new actual device name isn't already in the list, then add it...
 					actualDeviceName = alcGetString(device, ALC_DEVICE_SPECIFIER);
 
-					if ( (actualDeviceName != NULL) && xr_strlen(actualDeviceName)>0 ) 
+					if (actualDeviceName && xr_strlen(actualDeviceName) > 0)
 					{
 						alcGetIntegerv						(device, ALC_MAJOR_VERSION, sizeof(int), &major);
 						alcGetIntegerv						(device, ALC_MINOR_VERSION, sizeof(int), &minor);
@@ -128,7 +128,7 @@ void ALDeviceList::Enumerate()
 						if(alIsExtensionPresent("EAX5.0"))
 							m_devices.back().props.eax		= 5;	
 
-						m_devices.back().props.efx			= (alIsExtensionPresent("ALC_EXT_EFX") == TRUE);
+						m_devices.back().props.efx			= alcIsExtensionPresent(device, "ALC_EXT_EFX") == ALC_TRUE;
 						m_devices.back().props.xram			= (alIsExtensionPresent("EAX_RAM") == TRUE);
 
 						m_devices.back().props.eax_unwanted	=Core.Editor?0: ((0==xr_strcmp(actualDeviceName,AL_GENERIC_HARDWARE))||
