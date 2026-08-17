@@ -13,6 +13,14 @@
 class NqCanvas
 {
 public:
+	struct SViewState
+	{
+		float				cx, cy;
+		int					zoom;
+		xr_vector<xr_string>	selection;
+		xr_string				slot;
+	};
+
 	explicit		NqCanvas		(NqDoc* doc);
 
 	// draws the canvas into the current window at the cursor, `size` pixels
@@ -29,11 +37,37 @@ public:
 	// an explicit centre wins over a pending frame request (the coordinates are
 	// clamped: quest_view takes them straight from the request line)
 	void			Center			(float wx, float wy);
-	// framing needs the canvas rect: it runs at once when a Draw has already
-	// measured it, otherwise it waits for the next one
+	// all/selection framing needs the canvas rect and waits for Draw when needed;
+	// a single node can be centred immediately
 	void			RequestFrameAll	();
 	void			RequestFrameSel	();
 	void			RequestFrameNode(LPCSTR id);
+	bool			FramePending	() const { return m_WantFrameAll || m_WantFrameSel; }
+	void			BeginNavigationBatch();
+	void			EndNavigationBatch();
+	bool			HistoryBack		();
+	bool			HistoryForward	();
+	void			ClearHistory	();
+	SViewState		CurrentView		() const;
+	const xr_vector<SViewState>& BackHistory() const	{ return m_BackHistory; }
+	const xr_vector<SViewState>& ForwardHistory() const { return m_ForwardHistory; }
+
+	// Bookmarks are transient editor state and never enter the quest asset.
+	bool			SetBookmark		(LPCSTR id, bool enabled);
+	bool			ToggleBookmark	(LPCSTR id);
+	void			ClearBookmarks	();
+	bool			JumpBookmark	(int delta);
+	bool			IsBookmarked	(LPCSTR id) const;
+	const xr_vector<xr_string>& Bookmarks() const		{ return m_Bookmarks; }
+
+	void			SetMinimapVisible(bool visible)
+	{
+		m_ShowMinimap = visible;
+		if (!visible) m_MinimapHovered = m_MinimapPanning = false;
+	}
+	bool			MinimapVisible	() const					{ return m_ShowMinimap; }
+	bool			GraphBounds		(float& min_x, float& min_y, float& max_x, float& max_y) const;
+	bool			ViewportBounds	(float& min_x, float& min_y, float& max_x, float& max_y) const;
 
 	// the inspector wants the id field focused (F2 / rename)
 	bool			TakeRenameRequest()						{ bool r = m_WantRename; m_WantRename = false; return r; }
@@ -75,6 +109,12 @@ private:
 	ImVec2			m_Origin;		// screen top-left of the canvas rect
 	ImVec2			m_Size;
 	bool			m_Hovered;
+	bool			m_ShowMinimap;
+	bool			m_MinimapHovered;
+	bool			m_MinimapPanning;
+	ImVec2			m_MinimapMin, m_MinimapMax;
+	ImVec2			m_MinimapWorldMin, m_MinimapWorldMax;
+	float			m_MinimapScale;
 
 	// interaction
 	bool			m_Panning;
@@ -105,9 +145,18 @@ private:
 	// actually travelled (ImGui's own drag threshold), so a click stays a click
 	bool			m_ChipDragging;
 	bool			m_WantFrameAll, m_WantFrameSel, m_WantRename, m_WantFocusAction, m_OpenAddAction;
-	xr_string		m_WantFrameNode;
 	int				m_WantZoom;		// zoom asked for explicitly (-1 = none); applied after framing
-	void			CancelFraming	()	{ m_WantFrameAll = m_WantFrameSel = false; m_WantFrameNode.clear(); }
+	xr_vector<SViewState> m_BackHistory, m_ForwardHistory;
+	xr_vector<xr_string> m_Bookmarks;
+	xr_flat_hash_map<xr_string, u8> m_BookmarkLookup;
+	bool			m_ReplayingHistory;
+	bool			m_HistoryReady;
+	int				m_HistoryBatchDepth;
+	bool			m_HistoryBatchRemembered;
+	double			m_LastWheelHistory;
+	bool			m_WheelZooming;
+	bool			m_MiddlePanning;
+	void			CancelFraming	()	{ m_WantFrameAll = m_WantFrameSel = false; }
 	bool			Measured		() const { return m_Size.x > 32.f && m_Size.y > 32.f; }
 	u32				m_ReachRevision;
 	xr_vector<bool>	m_Reachable;
@@ -150,6 +199,7 @@ private:
 	void			DrawChipStrip	(ImDrawList* dl, int index, LPCSTR slot, const ImVec2& tl, float w);
 	void			DrawMarquee		(ImDrawList* dl);
 	void			DrawLinking		(ImDrawList* dl);
+	void			DrawMinimap		(ImDrawList* dl);
 	void			HandleInput		();
 	void			HandleKeys		();
 	void			OpenContextMenus();
@@ -179,4 +229,9 @@ private:
 	void			ProblemTooltip	(LPCSTR node_id) const;
 	void			ChipTooltip		(const SNqAction& a) const;
 	void			FrameRect		(const ImVec2& wmin, const ImVec2& wmax);
+	void			RememberView	();
+	void			ApplyView		(const SViewState& state);
+	void			PruneTransient	();
+	void			ToggleSelectedBookmarks();
+	ImVec2			MinimapToWorld	(const ImVec2& screen) const;
 };

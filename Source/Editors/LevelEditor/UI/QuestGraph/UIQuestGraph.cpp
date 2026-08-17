@@ -5,6 +5,7 @@
 #include "../../../XrECore/Editor/Nq/NqUtil.h"
 #include "../../../XrECore/Editor/Nq/NqCatalog.h"
 #include "../../../XrECore/Editor/Nq/NqLayout.h"
+#include "../../../XrECore/Editor/Nq/NqLua.h"
 
 namespace
 {
@@ -18,6 +19,12 @@ namespace
 	const float	s_InspectorMinEm	= 16.f;		// ~290 px at 100%
 	const float	s_GrabEm			= 0.35f;	// drag handle, plus one ItemSpacing
 	const u32	s_SplitDefault		= 320;		// permille of the body width
+
+	struct SSearchTerm
+	{
+		xr_string	text;
+		bool		exclude;
+	};
 
 	float SplitGrab()	{ return ImGui::GetFrameHeight() * s_GrabEm + ImGui::GetStyle().ItemSpacing.x; }
 
@@ -36,6 +43,71 @@ namespace
 		if (CLevelPreferences* prefs = dynamic_cast<CLevelPreferences*>(EPrefs))
 			prefs->QuestInspectorSplit = u32(_max(_min(frac, 0.95f), 0.05f) * 1000.f + 0.5f);
 	}
+
+	// Match the picker search for both ASCII and Cyrillic UTF-8 text.
+	void FoldSearch(LPCSTR text, xr_string& out)
+	{
+		out.clear();
+		if (!text) return;
+		for (const u8* p = (const u8*)text; *p; ++p)
+		{
+			const u8 c = *p;
+			if (c >= 'A' && c <= 'Z') { out += char(c + 0x20); continue; }
+			if (c == 0xD0 && p[1])
+			{
+				const u8 d = p[1];
+				if (d == 0x81)				{ out += char(0xD1); out += char(0x91); ++p; continue; }
+				if (d >= 0x90 && d <= 0x9F)	{ out += char(0xD0); out += char(d + 0x20); ++p; continue; }
+				if (d >= 0xA0 && d <= 0xAF)	{ out += char(0xD1); out += char(d - 0x20); ++p; continue; }
+			}
+			out += char(c);
+		}
+	}
+
+	void ParseSearch(LPCSTR query, xr_vector<SSearchTerm>& out)
+	{
+		out.clear();
+		const char* p = query ? query : "";
+		while (*p)
+		{
+			while (*p && (u8)*p <= 0x20) ++p;
+			if (!*p) break;
+			SSearchTerm term;
+			term.exclude = *p == '-' && p[1] && (u8)p[1] > 0x20;
+			if (term.exclude) ++p;
+			const bool quoted = *p == '"';
+			if (quoted) ++p;
+			const char* begin = p;
+			if (quoted) while (*p && *p != '"') ++p;
+			else while (*p && (u8)*p > 0x20) ++p;
+			xr_string raw;
+			raw.assign(begin, p - begin);
+			if (quoted && *p == '"') ++p;
+			FoldSearch(raw.c_str(), term.text);
+			if (!term.text.empty()) out.push_back(term);
+		}
+	}
+
+	bool SearchMatches(LPCSTR text, const xr_vector<SSearchTerm>& terms)
+	{
+		xr_string folded;
+		FoldSearch(text, folded);
+		for (u32 i = 0; i < terms.size(); ++i)
+		{
+			const bool found = strstr(folded.c_str(), terms[i].text.c_str());
+			if ((terms[i].exclude && found) || (!terms[i].exclude && !found)) return false;
+		}
+		return !terms.empty();
+	}
+
+	bool SearchFieldHit(LPCSTR text, const xr_vector<SSearchTerm>& terms)
+	{
+		xr_string folded;
+		FoldSearch(text, folded);
+		for (u32 i = 0; i < terms.size(); ++i)
+			if (!terms[i].exclude && strstr(folded.c_str(), terms[i].text.c_str())) return true;
+		return false;
+	}
 }
 
 //------------------------------------------------------------------------------
@@ -49,6 +121,11 @@ UIQuestGraphWindow::UIQuestGraphWindow(NqDoc* doc) : m_Doc(doc)
 	m_Focus = true;
 	m_AskClose = m_CloseNow = false;
 	m_ShowProblems = false;
+	m_ShowFind = m_FocusFind = false;
+	m_Find[0] = 0;
+	m_FindIndex = -1;
+	m_FindRevision = u32(-1);
+	m_FindCatalogGeneration = u32(-1);
 }
 
 UIQuestGraphWindow::~UIQuestGraphWindow()
@@ -76,6 +153,188 @@ void UIQuestGraphWindow::Save()
 	if (m_Doc->Save(false, err)) m_Message = "saved";
 	else if (err == "modified externally") m_Message = "file changed on disk - use Reload or Save (force)";
 	else m_Message = "save failed: " + err;
+}
+
+void UIQuestGraphWindow::SetFindQuery(LPCSTR query)
+{
+	strncpy_s(m_Find, sizeof(m_Find), query ? query : "", _TRUNCATE);
+	m_ShowFind = true;
+	RefreshFind(true);
+}
+
+void UIQuestGraphWindow::RefreshFind(bool force)
+{
+	const u32 catalog_generation = NqCatalog::Generation();
+	if (!force && m_FindRevision == m_Doc->revision && m_FindCatalogGeneration == catalog_generation) return;
+	xr_string active;
+	if (m_FindIndex >= 0 && m_FindIndex < (int)m_FindResults.size()) active = m_FindResults[m_FindIndex].node;
+	m_FindResults.clear();
+	m_FindIndex = -1;
+	m_FindRevision = m_Doc->revision;
+	m_FindCatalogGeneration = catalog_generation;
+
+	xr_vector<SSearchTerm> terms;
+	ParseSearch(NqUtil::Trim(m_Find).c_str(), terms);
+	if (terms.empty()) return;
+	for (u32 i = 0; i < m_Doc->quest.nodes.size(); ++i)
+	{
+		const SNqNode& node = m_Doc->quest.nodes[i];
+		const NqCatalog::SKind* kind = NqCatalog::Find(node.kind.c_str());
+		const xr_string title = kind ? kind->title : node.kind;
+		xr_string searchable = NqLua::WriteNode(node, 0);
+		searchable += "\n";
+		searchable += title;
+		if (!SearchMatches(searchable.c_str(), terms)) continue;
+
+		SFindResult result;
+		result.node = node.id;
+		result.kind = node.kind;
+		result.title = title;
+		if (SearchFieldHit(node.id.c_str(), terms)) result.match = "id";
+		else if (SearchFieldHit(node.kind.c_str(), terms) || SearchFieldHit(title.c_str(), terms)) result.match = "kind";
+		else if (SearchFieldHit(node.comment.c_str(), terms)) result.match = "comment";
+		else result.match = "content";
+		m_FindResults.push_back(result);
+		if (!active.empty() && active == node.id) m_FindIndex = (int)m_FindResults.size() - 1;
+	}
+}
+
+bool UIQuestGraphWindow::NavigateFind(int index)
+{
+	RefreshFind();
+	if (m_FindResults.empty()) { m_FindIndex = -1; return false; }
+	if (index < 0) index = (int)m_FindResults.size() - 1;
+	if (index >= (int)m_FindResults.size()) index = 0;
+	m_FindIndex = index;
+	m_Canvas->RequestFrameNode(m_FindResults[index].node.c_str());
+	Focus();
+	return true;
+}
+
+void UIQuestGraphWindow::AppendViewState(xr_string& out)
+{
+	out += NqUtil::Format(",\"zoom_level\":%d,\"zoom\":%.3f,\"center\":[%.1f,%.1f]",
+		m_Doc->zoom_idx, m_Canvas->Zoom(), m_Doc->view_cx, m_Doc->view_cy);
+	out += ",\"selected\":";
+	NqUtil::JsonStringArray(out, m_Doc->selection);
+	out += ",\"slot\":";
+	NqUtil::JsonString(out, m_Doc->sel_slot);
+}
+
+void UIQuestGraphWindow::AppendFindState(xr_string& out, int limit)
+{
+	RefreshFind();
+	limit = _max(1, _min(limit, 500));
+	out += ",\"query\":";
+	NqUtil::JsonString(out, m_Find);
+	out += ",\"count\":";
+	NqUtil::JsonInt(out, (int)m_FindResults.size());
+	out += ",\"index\":";
+	NqUtil::JsonInt(out, m_FindIndex);
+	out += ",\"current\":";
+	if (m_FindIndex >= 0 && m_FindIndex < (int)m_FindResults.size()) NqUtil::JsonString(out, m_FindResults[m_FindIndex].node);
+	else out += "null";
+	out += ",\"results\":[";
+	const int count = _min(limit, (int)m_FindResults.size());
+	for (int i = 0; i < count; ++i)
+	{
+		if (i) out += ",";
+		out += "{\"node\":"; NqUtil::JsonString(out, m_FindResults[i].node);
+		out += ",\"kind\":"; NqUtil::JsonString(out, m_FindResults[i].kind);
+		out += ",\"title\":"; NqUtil::JsonString(out, m_FindResults[i].title);
+		out += ",\"match\":"; NqUtil::JsonString(out, m_FindResults[i].match);
+		out += "}";
+	}
+	out += "],\"truncated\":";
+	NqUtil::JsonBool(out, count < (int)m_FindResults.size());
+	AppendViewState(out);
+}
+
+void UIQuestGraphWindow::DrawFindBar()
+{
+	RefreshFind();
+	const bool can_back = !m_Canvas->BackHistory().empty();
+	const bool can_forward = !m_Canvas->ForwardHistory().empty();
+	ImGui::BeginDisabled(!can_back);
+	if (ImGui::SmallButton("<###nq_history_back")) m_Canvas->HistoryBack();
+	ImGui::EndDisabled();
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back (Alt+Left)");
+	ImGui::SameLine();
+	ImGui::BeginDisabled(!can_forward);
+	if (ImGui::SmallButton(">###nq_history_forward")) m_Canvas->HistoryForward();
+	ImGui::EndDisabled();
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Forward (Alt+Right)");
+
+	ImGui::SameLine();
+	if (ImGui::SmallButton("Find###nq_find_toggle")) { m_ShowFind = true; m_FocusFind = true; }
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Find nodes (Ctrl+F, F3 next)");
+
+	ImGui::SameLine();
+	const xr_string bookmark_label = NqUtil::Format("Bookmarks (%d)", (int)m_Canvas->Bookmarks().size());
+	if (ImGui::BeginCombo("##nq_bookmarks", bookmark_label.c_str()))
+	{
+		const xr_vector<xr_string>& bookmarks = m_Canvas->Bookmarks();
+		for (u32 i = 0; i < bookmarks.size(); ++i)
+			if (m_Doc->quest.FindNode(bookmarks[i].c_str()) && ImGui::Selectable(bookmarks[i].c_str())) m_Canvas->RequestFrameNode(bookmarks[i].c_str());
+		if (bookmarks.empty()) ImGui::TextDisabled("No bookmarks (Ctrl+B)");
+		if (!bookmarks.empty())
+		{
+			ImGui::Separator();
+			if (ImGui::Selectable("Clear bookmarks")) m_Canvas->ClearBookmarks();
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::SameLine();
+	ImGui::BeginDisabled(m_Canvas->Bookmarks().empty());
+	if (ImGui::SmallButton("B<###nq_bookmark_prev")) m_Canvas->JumpBookmark(-1);
+	ImGui::SameLine();
+	if (ImGui::SmallButton("B>###nq_bookmark_next")) m_Canvas->JumpBookmark(1);
+	ImGui::EndDisabled();
+
+	ImGui::SameLine();
+	bool minimap = m_Canvas->MinimapVisible();
+	if (ImGui::Checkbox("Minimap###nq_minimap", &minimap)) m_Canvas->SetMinimapVisible(minimap);
+	if (!m_ShowFind) return;
+
+	if (m_FocusFind) { ImGui::SetKeyboardFocusHere(); m_FocusFind = false; }
+	ImGui::SetNextItemWidth(_max(180.f, _min(440.f, ImGui::GetContentRegionAvail().x - 220.f)));
+	const bool submit = ImGui::InputTextWithHint("##nq_find", "Find id, kind, params, actions, comments", m_Find, sizeof(m_Find), ImGuiInputTextFlags_EnterReturnsTrue);
+	const bool edited = ImGui::IsItemEdited();
+	const bool active = ImGui::IsItemActive();
+	if (edited) RefreshFind(true);
+	if (submit) NavigateFind(ImGui::GetIO().KeyShift ? m_FindIndex - 1 : m_FindIndex + 1);
+	if (active && ImGui::IsKeyPressed(ImGuiKey_Escape)) m_ShowFind = false;
+
+	ImGui::SameLine();
+	ImGui::BeginDisabled(m_FindResults.empty());
+	if (ImGui::SmallButton("Prev###nq_find_prev")) NavigateFind(m_FindIndex - 1);
+	ImGui::SameLine();
+	if (ImGui::SmallButton("Next###nq_find_next")) NavigateFind(m_FindIndex + 1);
+	ImGui::EndDisabled();
+	ImGui::SameLine();
+	if (m_FindResults.empty()) ImGui::TextDisabled("0 results");
+	else ImGui::TextDisabled("%d/%d", m_FindIndex >= 0 ? m_FindIndex + 1 : 0, (int)m_FindResults.size());
+	ImGui::SameLine();
+	const char* preview = m_FindIndex >= 0 && m_FindIndex < (int)m_FindResults.size() ? m_FindResults[m_FindIndex].node.c_str() : "Results";
+	ImGui::SetNextItemWidth(150.f);
+	if (ImGui::BeginCombo("##nq_find_results", preview))
+	{
+		ImGuiListClipper clipper;
+		clipper.Begin((int)m_FindResults.size());
+		if (m_FindIndex >= 0) clipper.IncludeItemByIndex(m_FindIndex);
+		while (clipper.Step())
+		{
+			for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
+			{
+				xr_string label = m_FindResults[i].node + " - " + m_FindResults[i].title;
+				if (ImGui::Selectable(label.c_str(), i == m_FindIndex)) NavigateFind(i);
+				if (i == m_FindIndex) ImGui::SetItemDefaultFocus();
+			}
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::SameLine();
+	if (ImGui::SmallButton("x###nq_find_close")) m_ShowFind = false;
 }
 
 void UIQuestGraphWindow::DrawToolbar()
@@ -262,9 +521,21 @@ void UIQuestGraphWindow::Draw()
 	{
 		ImGuiIO& io = ImGui::GetIO();
 		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) Save();
+		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F))
+		{
+			if (UI) UI->BlockShortCuts();
+			m_ShowFind = true;
+			m_FocusFind = true;
+		}
+		if (ImGui::IsKeyPressed(ImGuiKey_F3))
+		{
+			if (UI) UI->BlockShortCuts();
+			NavigateFind(io.KeyShift ? m_FindIndex - 1 : m_FindIndex + 1);
+		}
 	}
 
 	DrawToolbar();
+	DrawFindBar();
 	ImGui::Separator();
 
 	// canvas | inspector split with a draggable bar
@@ -289,6 +560,159 @@ void UIQuestGraphWindow::Draw()
 	DrawProblems();
 	DrawClosePrompt();
 	ImGui::End();
+}
+
+void UIQuestGraphWindow::McpFind(LPCSTR raw, xr_string& out)
+{
+	xr_string action, query;
+	NqUtil::ArgString(raw, "action", action);
+	const bool has_query = NqUtil::ArgString(raw, "query", query);
+	if (action.empty()) action = has_query ? "set" : "get";
+	if (has_query && query.size() >= sizeof(m_Find)) { NqUtil::JsonError(out, "query is too long (max 255 UTF-8 bytes)"); return; }
+
+	if (action == "set")
+	{
+		SetFindQuery(has_query ? query.c_str() : "");
+		if (NqUtil::ArgBool(raw, "select", false)) NavigateFind(0);
+	}
+	else if (action == "next" || action == "previous")
+	{
+		if (has_query) SetFindQuery(query.c_str());
+		NavigateFind(action == "previous" ? m_FindIndex - 1 : m_FindIndex + 1);
+	}
+	else if (action == "clear")
+	{
+		m_Find[0] = 0;
+		m_ShowFind = false;
+		RefreshFind(true);
+	}
+	else if (action == "get")
+	{
+		if (has_query) SetFindQuery(query.c_str());
+	}
+	else
+	{
+		NqUtil::JsonError(out, "action must be get, set, next, previous or clear");
+		return;
+	}
+
+	out = "{\"ok\":true,\"path\":";
+	NqUtil::JsonPath(out, NqUtil::ProjectRelative(m_Doc->path.c_str()).c_str());
+	AppendFindState(out, NqUtil::ArgInt(raw, "limit", 100));
+	out += "}";
+}
+
+void UIQuestGraphWindow::McpBookmarks(LPCSTR raw, xr_string& out)
+{
+	xr_vector<xr_string> known = m_Canvas->Bookmarks();
+	for (u32 i = 0; i < known.size(); ++i)
+		if (!m_Doc->quest.FindNode(known[i].c_str())) m_Canvas->SetBookmark(known[i].c_str(), false);
+
+	xr_string action, node;
+	NqUtil::ArgString(raw, "action", action);
+	NqUtil::ArgString(raw, "node", node);
+	if (action.empty()) action = "get";
+	if (node.empty() && m_Doc->selection.size() == 1) node = m_Doc->selection[0];
+
+	if (action == "add" || action == "remove" || action == "toggle")
+	{
+		if (node.empty()) { NqUtil::JsonError(out, "node is required unless exactly one node is selected"); return; }
+		if (action != "remove" && !m_Doc->quest.FindNode(node.c_str())) { NqUtil::JsonError(out, "node not found"); return; }
+		const bool enabled = action == "add" || (action == "toggle" && !m_Canvas->IsBookmarked(node.c_str()));
+		if (!m_Canvas->SetBookmark(node.c_str(), enabled)) { NqUtil::JsonError(out, "bookmark update failed"); return; }
+	}
+	else if (action == "next" || action == "previous")
+	{
+		if (!m_Canvas->JumpBookmark(action == "previous" ? -1 : 1)) { NqUtil::JsonError(out, "no bookmarks"); return; }
+	}
+	else if (action == "clear") m_Canvas->ClearBookmarks();
+	else if (action != "get")
+	{
+		NqUtil::JsonError(out, "action must be get, add, remove, toggle, next, previous or clear");
+		return;
+	}
+
+	out = "{\"ok\":true,\"path\":";
+	NqUtil::JsonPath(out, NqUtil::ProjectRelative(m_Doc->path.c_str()).c_str());
+	out += ",\"bookmarks\":";
+	NqUtil::JsonStringArray(out, m_Canvas->Bookmarks());
+	out += ",\"count\":";
+	NqUtil::JsonInt(out, (int)m_Canvas->Bookmarks().size());
+	AppendViewState(out);
+	out += "}";
+}
+
+void UIQuestGraphWindow::McpHistory(LPCSTR raw, xr_string& out)
+{
+	xr_string action;
+	NqUtil::ArgString(raw, "action", action);
+	if (action.empty()) action = "get";
+	bool moved = false;
+	if (action == "back") moved = m_Canvas->HistoryBack();
+	else if (action == "forward") moved = m_Canvas->HistoryForward();
+	else if (action == "clear") m_Canvas->ClearHistory();
+	else if (action != "get")
+	{
+		NqUtil::JsonError(out, "action must be get, back, forward or clear");
+		return;
+	}
+
+	auto append_state = [](xr_string& json, const NqCanvas::SViewState& state)
+	{
+		json += NqUtil::Format("{\"center\":[%.1f,%.1f],\"zoom_level\":%d,\"selected\":", state.cx, state.cy, state.zoom);
+		NqUtil::JsonStringArray(json, state.selection);
+		json += ",\"slot\":";
+		NqUtil::JsonString(json, state.slot);
+		json += "}";
+	};
+	out = "{\"ok\":true,\"path\":";
+	NqUtil::JsonPath(out, NqUtil::ProjectRelative(m_Doc->path.c_str()).c_str());
+	out += ",\"moved\":";
+	NqUtil::JsonBool(out, moved);
+	const xr_vector<NqCanvas::SViewState>& back = m_Canvas->BackHistory();
+	const xr_vector<NqCanvas::SViewState>& forward = m_Canvas->ForwardHistory();
+	out += ",\"back_count\":";
+	NqUtil::JsonInt(out, (int)back.size());
+	out += ",\"forward_count\":";
+	NqUtil::JsonInt(out, (int)forward.size());
+	out += ",\"back\":[";
+	for (u32 i = 0; i < back.size(); ++i) { if (i) out += ","; append_state(out, back[i]); }
+	out += "],\"forward\":[";
+	for (u32 i = 0; i < forward.size(); ++i) { if (i) out += ","; append_state(out, forward[i]); }
+	out += "],\"current\":";
+	append_state(out, m_Canvas->CurrentView());
+	out += "}";
+}
+
+void UIQuestGraphWindow::McpMinimap(LPCSTR raw, xr_string& out)
+{
+	xr_string action;
+	NqUtil::ArgString(raw, "action", action);
+	if (action.empty()) action = "get";
+	if (action == "show") m_Canvas->SetMinimapVisible(true);
+	else if (action == "hide") m_Canvas->SetMinimapVisible(false);
+	else if (action == "toggle") m_Canvas->SetMinimapVisible(!m_Canvas->MinimapVisible());
+	else if (action != "get")
+	{
+		NqUtil::JsonError(out, "action must be get, show, hide or toggle");
+		return;
+	}
+
+	out = "{\"ok\":true,\"path\":";
+	NqUtil::JsonPath(out, NqUtil::ProjectRelative(m_Doc->path.c_str()).c_str());
+	out += ",\"visible\":";
+	NqUtil::JsonBool(out, m_Canvas->MinimapVisible());
+	float min_x, min_y, max_x, max_y;
+	out += ",\"graph_bounds\":";
+	if (m_Canvas->GraphBounds(min_x, min_y, max_x, max_y))
+		out += NqUtil::Format("[%.1f,%.1f,%.1f,%.1f]", min_x, min_y, max_x, max_y);
+	else out += "null";
+	out += ",\"viewport_bounds\":";
+	if (m_Canvas->ViewportBounds(min_x, min_y, max_x, max_y))
+		out += NqUtil::Format("[%.1f,%.1f,%.1f,%.1f]", min_x, min_y, max_x, max_y);
+	else out += "null";
+	AppendViewState(out);
+	out += "}";
 }
 
 //------------------------------------------------------------------------------
@@ -374,47 +798,77 @@ namespace UIQuestGraph
 
 	int Count() { return (int)s_Windows.size(); }
 
+	static UIQuestGraphWindow* OpenMcpWindow(LPCSTR raw, xr_string& out)
+	{
+		xr_string path;
+		if (!NqUtil::ArgString(raw, "path", path) || path.empty()) { NqUtil::JsonError(out, "path is required"); return 0; }
+		xr_string err;
+		if (!Open(path.c_str(), &err)) { NqUtil::JsonError(out, err.c_str()); return 0; }
+		UIQuestGraphWindow* window = Find(path.c_str());
+		if (!window) { NqUtil::JsonError(out, "window not found"); return 0; }
+		window->Focus();
+		return window;
+	}
+
+	void McpClose(LPCSTR raw, xr_string& out)
+	{
+		xr_string path;
+		if (!NqUtil::ArgString(raw, "path", path) || path.empty()) { NqUtil::JsonError(out, "missing 'path' (project-relative, e.g. quests/wolf_debt.nqasset)"); return; }
+		NqDoc* doc = NqDocs::Get(path.c_str());
+		if (!doc) { NqUtil::JsonError(out, "not open"); return; }
+		const bool discard = NqUtil::ArgBool(raw, "discard", false);
+		if (doc->dirty && !discard) { NqUtil::JsonError(out, "unsaved"); return; }
+		const xr_string absolute = doc->path;
+
+		// Canvas and inspector retain the document pointer, so every matching view must die first.
+		for (u32 i = 0; i < s_Windows.size(); )
+		{
+			if (s_Windows[i]->Doc() != doc) { ++i; continue; }
+			xr_delete(s_Windows[i]);
+			s_Windows.erase(s_Windows.begin() + i);
+		}
+
+		xr_string err;
+		if (!NqDocs::Close(absolute.c_str(), discard, err)) { NqUtil::JsonError(out, err); return; }
+		out = "{\"ok\":true}";
+	}
+
 	void McpView(LPCSTR raw, xr_string& out)
 	{
-		string_path path = "";
-		XFinedMCP::GetArg(raw, "path", path, sizeof(path));
-		if (!path[0]) { NqUtil::JsonError(out, "path is required"); return; }
-		xr_string err;
-		if (!Open(path, &err)) { NqUtil::JsonError(out, err.c_str()); return; }
-		UIQuestGraphWindow* w = Find(path);
-		if (!w) { NqUtil::JsonError(out, "window not found"); return; }
-		w->Focus();
+		UIQuestGraphWindow* w = OpenMcpWindow(raw, out);
+		if (!w) return;
 		NqCanvas* c = w->Canvas();
 		string_path frame = "";
 		XFinedMCP::GetArg(raw, "frame", frame, sizeof(frame));
 		int zoom = NqUtil::ArgInt(raw, "zoom_level", -1);
 		float cx, cy;
 		bool has_c = NqUtil::ArgFloat(raw, "cx", cx) && NqUtil::ArgFloat(raw, "cy", cy);
+		string_path slot = "";
+		XFinedMCP::GetArg(raw, "slot", slot, sizeof(slot));
+		// Reject validator-only slots before changing any part of the view.
+		if (slot[0] && 0 != strcmp(slot, "none"))
+		{
+			LPCSTR digits = 0;
+			if (0 == strncmp(slot, "enter:", 6))		digits = slot + 6;
+			else if (0 == strncmp(slot, "exit:", 5))	digits = slot + 5;
+			bool ok = digits && digits[0];
+			for (LPCSTR p = digits; ok && *p; ++p) if (*p < '0' || *p > '9') ok = false;
+			if (!ok) { NqUtil::JsonError(out, "slot must be \"enter:N\", \"exit:N\" or \"none\""); return; }
+		}
+
+		c->BeginNavigationBatch();
 		if (frame[0] && 0 == strcmp(frame, "all")) c->RequestFrameAll();
 		else if (frame[0]) c->RequestFrameNode(frame);
 		if (zoom >= 0) c->SetZoom(zoom);
 		if (has_c) c->Center(cx, cy);
 		// "enter:2" / "exit:0" opens that action in the inspector; framing a
 		// node clears the slot, so this comes last
-		string_path slot = "";
-		XFinedMCP::GetArg(raw, "slot", slot, sizeof(slot));
 		if (slot[0])
 		{
 			if (0 == strcmp(slot, "none")) w->Doc()->sel_slot.clear();
-			else
-			{
-				// only "enter:N" / "exit:N" mean anything to the inspector; anything
-				// else (a validator slot like "cond:1" or "param:npc", say) would be
-				// silently treated as on_enter and edits would land in the wrong list
-				LPCSTR digits = 0;
-				if (0 == strncmp(slot, "enter:", 6))		digits = slot + 6;
-				else if (0 == strncmp(slot, "exit:", 5))	digits = slot + 5;
-				bool ok = digits && digits[0];
-				for (LPCSTR p = digits; ok && *p; ++p) if (*p < '0' || *p > '9') ok = false;
-				if (!ok) { NqUtil::JsonError(out, "slot must be \"enter:N\", \"exit:N\" or \"none\""); return; }
-				w->Doc()->sel_slot = slot;
-			}
+			else w->Doc()->sel_slot = slot;
 		}
+		c->EndNavigationBatch();
 		out = "{\"ok\":true,\"path\":";
 		NqUtil::JsonPath(out, w->Doc()->path.c_str());
 		out += NqUtil::Format(",\"zoom_level\":%d,\"zoom\":%.3f,\"center\":[%.1f,%.1f],\"nodes\":%d,\"open_tabs\":%d,\"slot\":",
@@ -422,6 +876,28 @@ namespace UIQuestGraph
 		NqUtil::JsonString(out, w->Doc()->sel_slot);
 		out += ",\"selected\":";
 		NqUtil::JsonStringArray(out, w->Doc()->selection);
+		out += ",\"pending\":";
+		NqUtil::JsonBool(out, c->FramePending());
 		out += "}";
+	}
+
+	void McpFind(LPCSTR raw, xr_string& out)
+	{
+		if (UIQuestGraphWindow* window = OpenMcpWindow(raw, out)) window->McpFind(raw, out);
+	}
+
+	void McpBookmarks(LPCSTR raw, xr_string& out)
+	{
+		if (UIQuestGraphWindow* window = OpenMcpWindow(raw, out)) window->McpBookmarks(raw, out);
+	}
+
+	void McpHistory(LPCSTR raw, xr_string& out)
+	{
+		if (UIQuestGraphWindow* window = OpenMcpWindow(raw, out)) window->McpHistory(raw, out);
+	}
+
+	void McpMinimap(LPCSTR raw, xr_string& out)
+	{
+		if (UIQuestGraphWindow* window = OpenMcpWindow(raw, out)) window->McpMinimap(raw, out);
 	}
 }

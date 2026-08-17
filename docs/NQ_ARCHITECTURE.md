@@ -1026,6 +1026,12 @@ docking в `Source/Editors/XrEUI/`; сторонние (imnodes/imgui-node-edito
   чипу — фокус в нижний инспектор; «+» — меню доп. действий (каталог + Lua);
   перетаскивание чипов меняет порядок; ПКМ по чипу — удалить/дублировать.
   Привязка к сетке 16 px по отпусканию.
+- **Навигация**: `Ctrl+F` — поиск по всему содержимому нод (id, вид, параметры,
+  условия, действия, связи, комментарии), `F3`/`Shift+F3` — следующий/предыдущий
+  результат; `Ctrl+B` — transient-закладка выделенных нод; `Alt+Left/Right` — назад/
+  вперёд по transient-истории вида (центр, зум, выделение, слот инспектора). Миникарта
+  показывает весь граф и прямоугольник viewport; клик/drag по ней панорамирует канвас.
+  Поиск, закладки, история и видимость миникарты не сериализуются и не меняют dirty/undo.
 - **Разложить** — детерминированная раскладка сверху вниз (слои = глубина от
   триггеров, порядок в слое — барицентры родителей).
 - Состояние вида (центр, зум) — в `NqDoc`, не в файле.
@@ -1072,7 +1078,11 @@ Python — записи в `TOOLS` + `CMD_MAP` (`tools/mcp/xfined_mcp.py`), та
 | `xfined_quest_save` | `path`[, `force`] | |
 | `xfined_quest_reload` | `path` | перечитать с диска |
 | `xfined_quest_layout` | `path` | авто-раскладка |
-| `xfined_quest_view` | `path`, `frame:"all"\|<node>`, `zoom_level`, `cx`/`cy` (перебивают `frame`), `slot:"enter:0"\|"exit:1"\|"none"` (открыть действие в инспекторе) | итоговые `zoom_level`/`center`/`selected`/`slot`; затем `xfined_screenshot_editor` |
+| `xfined_quest_view` | `path`, `frame:"all"\|<node>`, `zoom_level`, `cx`/`cy` (перебивают `frame`), `slot:"enter:0"\|"exit:1"\|"none"` (открыть действие в инспекторе) | итоговые `zoom_level`/`center`/`selected`/`slot`; raw-ответ помечает отложенный первый `frame:all` как `pending:true`, Python bridge дочитывает вид после следующего Draw; затем `xfined_screenshot_editor` |
+| `xfined_quest_find` | `path`, `action`, `query`, `select`, `limit` | полнотекстовые результаты в порядке файла, активный результат и состояние вида; `get` с `query` атомарно меняет запрос без навигации, `next`/`previous` фокусируют ноду |
+| `xfined_quest_bookmarks` | `path`, `action`, `node` | transient-закладки (`get/add/remove/toggle/next/previous/clear`) и состояние вида |
+| `xfined_quest_history` | `path`, `action` | transient-история (`get/back/forward/clear`) со всеми состояниями вида |
+| `xfined_quest_minimap` | `path`, `action` | видимость, границы графа/viewport и состояние вида (`get/show/hide/toggle`) |
 | `xfined_quest_lookup` | `type`, `query`, `limit` | данные пикеров (§13.6) |
 | `xfined_quest_check_all` | — | то же, что гейт билда |
 

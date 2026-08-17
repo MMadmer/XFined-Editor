@@ -32,6 +32,7 @@ namespace
 	const float kPickerRows	= 12.f;		// rows a search popup shows before it scrolls
 	const float kPickerMinW	= 320.f;
 	const float kPickerMaxW	= 640.f;
+	const int	kHistoryLimit	= 64;
 
 	IC ImU32 Col(u8 r, u8 g, u8 b, u8 a = 255) { return IM_COL32(r, g, b, a); }
 
@@ -153,7 +154,13 @@ NqCanvas::NqCanvas(NqDoc* doc) : m_Doc(doc)
 {
 	m_Origin = m_Size = ImVec2(0, 0);
 	m_Hovered = false;
+	m_ShowMinimap = true;
+	m_MinimapHovered = m_MinimapPanning = false;
+	m_MinimapMin = m_MinimapMax = ImVec2(0, 0);
+	m_MinimapWorldMin = m_MinimapWorldMax = ImVec2(0, 0);
+	m_MinimapScale = 1.f;
 	m_Panning = m_RmbMoved = false;
+	m_MiddlePanning = false;
 	m_Dragging = m_DragMoved = false;
 	m_Marquee = false;
 	m_Linking = m_PendingLink = false;
@@ -163,6 +170,12 @@ NqCanvas::NqCanvas(NqDoc* doc) : m_Doc(doc)
 	m_ChipDragging = false;
 	m_WantFrameAll = m_WantFrameSel = m_WantRename = m_WantFocusAction = m_OpenAddAction = false;
 	m_WantZoom = -1;
+	m_ReplayingHistory = false;
+	m_HistoryReady = false;
+	m_HistoryBatchDepth = 0;
+	m_HistoryBatchRemembered = false;
+	m_LastWheelHistory = -DBL_MAX;
+	m_WheelZooming = false;
 	m_ReachRevision = u32(-1);
 	m_GeomRevision = m_GeomCatalogGeneration = u32(-1);
 	m_LinkRevision = m_LinkCatalogGeneration = u32(-1);
@@ -179,6 +192,203 @@ NqCanvas::NqCanvas(NqDoc* doc) : m_Doc(doc)
 int   NqCanvas::ZoomLevels()			{ return kZoomCount; }
 float NqCanvas::ZoomOf(int idx)			{ if (idx < 0) idx = 0; if (idx >= kZoomCount) idx = kZoomCount - 1; return kZoom[idx]; }
 
+NqCanvas::SViewState NqCanvas::CurrentView() const
+{
+	SViewState state;
+	state.cx = m_Doc->view_cx;
+	state.cy = m_Doc->view_cy;
+	state.zoom = m_Doc->zoom_idx;
+	state.selection = m_Doc->selection;
+	state.slot = m_Doc->sel_slot;
+	return state;
+}
+
+void NqCanvas::RememberView()
+{
+	if (!m_WheelZooming) m_LastWheelHistory = -DBL_MAX;
+	if (!m_HistoryReady || m_ReplayingHistory || (m_HistoryBatchDepth && m_HistoryBatchRemembered)) return;
+	const SViewState state = CurrentView();
+	if (!m_BackHistory.empty())
+	{
+		const SViewState& last = m_BackHistory.back();
+		if (last.cx == state.cx && last.cy == state.cy && last.zoom == state.zoom
+			&& last.selection == state.selection && last.slot == state.slot)
+		{
+			if (m_HistoryBatchDepth) m_HistoryBatchRemembered = true;
+			return;
+		}
+	}
+	m_BackHistory.push_back(state);
+	if ((int)m_BackHistory.size() > kHistoryLimit) m_BackHistory.erase(m_BackHistory.begin());
+	m_ForwardHistory.clear();
+	if (m_HistoryBatchDepth) m_HistoryBatchRemembered = true;
+}
+
+void NqCanvas::ApplyView(const SViewState& state)
+{
+	m_ReplayingHistory = true;
+	m_LastWheelHistory = -DBL_MAX;
+	CancelFraming();
+	m_Doc->view_cx = NqLayout::Sane(state.cx);
+	m_Doc->view_cy = NqLayout::Sane(state.cy);
+	m_Doc->zoom_idx = _max(0, _min(state.zoom, kZoomCount - 1));
+	m_Doc->selection.clear();
+	for (u32 i = 0; i < state.selection.size(); ++i)
+		if (m_Doc->quest.FindNode(state.selection[i].c_str())) m_Doc->selection.push_back(state.selection[i]);
+	m_Doc->sel_slot = m_Doc->selection.size() == 1 ? state.slot : "";
+	m_ReplayingHistory = false;
+}
+
+void NqCanvas::BeginNavigationBatch()
+{
+	if (!m_HistoryBatchDepth) m_HistoryBatchRemembered = false;
+	++m_HistoryBatchDepth;
+}
+
+void NqCanvas::EndNavigationBatch()
+{
+	if (m_HistoryBatchDepth > 0) --m_HistoryBatchDepth;
+	if (!m_HistoryBatchDepth) m_HistoryBatchRemembered = false;
+}
+
+bool NqCanvas::HistoryBack()
+{
+	if (m_BackHistory.empty()) return false;
+	const SViewState current = CurrentView();
+	const SViewState target = m_BackHistory.back();
+	m_BackHistory.pop_back();
+	m_ForwardHistory.push_back(current);
+	if ((int)m_ForwardHistory.size() > kHistoryLimit) m_ForwardHistory.erase(m_ForwardHistory.begin());
+	ApplyView(target);
+	return true;
+}
+
+bool NqCanvas::HistoryForward()
+{
+	if (m_ForwardHistory.empty()) return false;
+	const SViewState current = CurrentView();
+	const SViewState target = m_ForwardHistory.back();
+	m_ForwardHistory.pop_back();
+	m_BackHistory.push_back(current);
+	if ((int)m_BackHistory.size() > kHistoryLimit) m_BackHistory.erase(m_BackHistory.begin());
+	ApplyView(target);
+	return true;
+}
+
+void NqCanvas::ClearHistory()
+{
+	m_BackHistory.clear();
+	m_ForwardHistory.clear();
+	m_LastWheelHistory = -DBL_MAX;
+}
+
+bool NqCanvas::IsBookmarked(LPCSTR id) const
+{
+	return id && m_BookmarkLookup.find(id) != m_BookmarkLookup.end();
+}
+
+bool NqCanvas::SetBookmark(LPCSTR id, bool enabled)
+{
+	if (!id || !id[0]) return false;
+	auto found = m_BookmarkLookup.find(id);
+	if (found != m_BookmarkLookup.end())
+	{
+		if (enabled) return true;
+		m_BookmarkLookup.erase(found);
+		for (u32 i = 0; i < m_Bookmarks.size(); ++i)
+		{
+			if (m_Bookmarks[i] != id) continue;
+			m_Bookmarks.erase(m_Bookmarks.begin() + i);
+			break;
+		}
+		return true;
+	}
+	if (!m_Doc->quest.FindNode(id)) return false;
+	if (enabled)
+	{
+		m_Bookmarks.push_back(id);
+		m_BookmarkLookup.emplace(id, 1);
+	}
+	return true;
+}
+
+bool NqCanvas::ToggleBookmark(LPCSTR id)
+{
+	return SetBookmark(id, !IsBookmarked(id));
+}
+
+void NqCanvas::ClearBookmarks()
+{
+	m_Bookmarks.clear();
+	m_BookmarkLookup.clear();
+}
+
+void NqCanvas::PruneTransient()
+{
+	for (u32 i = 0; i < m_Bookmarks.size(); )
+	{
+		if (m_Doc->quest.FindNode(m_Bookmarks[i].c_str())) ++i;
+		else
+		{
+			m_BookmarkLookup.erase(m_Bookmarks[i]);
+			m_Bookmarks.erase(m_Bookmarks.begin() + i);
+		}
+	}
+}
+
+void NqCanvas::ToggleSelectedBookmarks()
+{
+	if (m_Doc->selection.empty()) { SetStatus("select nodes to bookmark"); return; }
+	bool all = true;
+	for (u32 i = 0; i < m_Doc->selection.size(); ++i) all &= IsBookmarked(m_Doc->selection[i].c_str());
+	for (u32 i = 0; i < m_Doc->selection.size(); ++i) SetBookmark(m_Doc->selection[i].c_str(), !all);
+	SetStatus(all ? "bookmarks removed" : "bookmarked selection");
+}
+
+bool NqCanvas::JumpBookmark(int delta)
+{
+	PruneTransient();
+	if (m_Bookmarks.empty()) return false;
+	int current = -1;
+	if (m_Doc->selection.size() == 1)
+		for (u32 i = 0; i < m_Bookmarks.size(); ++i)
+			if (m_Bookmarks[i] == m_Doc->selection[0]) { current = (int)i; break; }
+	int next = delta < 0 ? (current < 0 ? (int)m_Bookmarks.size() - 1 : current - 1)
+					 : (current + 1);
+	if (next < 0) next = (int)m_Bookmarks.size() - 1;
+	if (next >= (int)m_Bookmarks.size()) next = 0;
+	RequestFrameNode(m_Bookmarks[next].c_str());
+	return true;
+}
+
+bool NqCanvas::GraphBounds(float& min_x, float& min_y, float& max_x, float& max_y) const
+{
+	if (m_Doc->quest.nodes.empty()) return false;
+	min_x = min_y = FLT_MAX;
+	max_x = max_y = -FLT_MAX;
+	for (u32 i = 0; i < m_Doc->quest.nodes.size(); ++i)
+	{
+		const SNqNode& node = m_Doc->quest.nodes[i];
+		const Fvector2 size = NqLayout::NodeSize(node);
+		min_x = _min(min_x, node.pos.x);
+		min_y = _min(min_y, node.pos.y);
+		max_x = _max(max_x, node.pos.x + size.x);
+		max_y = _max(max_y, node.pos.y + size.y);
+	}
+	return true;
+}
+
+bool NqCanvas::ViewportBounds(float& min_x, float& min_y, float& max_x, float& max_y) const
+{
+	if (!Measured()) return false;
+	const float z = Zoom();
+	min_x = m_Doc->view_cx - m_Size.x / (2.f * z);
+	min_y = m_Doc->view_cy - m_Size.y / (2.f * z);
+	max_x = m_Doc->view_cx + m_Size.x / (2.f * z);
+	max_y = m_Doc->view_cy + m_Size.y / (2.f * z);
+	return true;
+}
+
 // an asked-for zoom outranks the zoom a pending frame request would pick, so
 // quest_view with both `frame` and `zoom_level` shows the level that was asked
 // for (and the answer it already reported)
@@ -186,6 +396,7 @@ void NqCanvas::SetZoom(int idx)
 {
 	if (idx < 0) idx = 0;
 	if (idx >= kZoomCount) idx = kZoomCount - 1;
+	if (idx != m_Doc->zoom_idx) RememberView();
 	m_Doc->zoom_idx = idx;
 	m_WantZoom = idx;
 }
@@ -202,7 +413,7 @@ void NqCanvas::RequestFrameSel()
 
 void NqCanvas::RequestFrameNode(LPCSTR id)
 {
-	if (Measured()) FrameNode(id); else m_WantFrameNode = id ? id : "";
+	FrameNode(id);
 }
 
 ImVec2 NqCanvas::ToScreen(const ImVec2& w) const
@@ -225,6 +436,7 @@ void NqCanvas::ZoomBy(int delta, const ImVec2* anchor)
 	if (idx < 0) idx = 0;
 	if (idx >= kZoomCount) idx = kZoomCount - 1;
 	if (idx == m_Doc->zoom_idx) return;
+	RememberView();
 	if (anchor)
 	{
 		// keep the world point under the cursor in place
@@ -241,9 +453,11 @@ void NqCanvas::ZoomBy(int delta, const ImVec2* anchor)
 
 void NqCanvas::Center(float wx, float wy)
 {
+	const float x = NqLayout::Sane(wx), y = NqLayout::Sane(wy);
+	if (x != m_Doc->view_cx || y != m_Doc->view_cy) RememberView();
 	CancelFraming();
-	m_Doc->view_cx = NqLayout::Sane(wx);
-	m_Doc->view_cy = NqLayout::Sane(wy);
+	m_Doc->view_cx = x;
+	m_Doc->view_cy = y;
 }
 
 void NqCanvas::FrameRect(const ImVec2& wmin, const ImVec2& wmax)
@@ -255,15 +469,24 @@ void NqCanvas::FrameRect(const ImVec2& wmin, const ImVec2& wmax)
 	if (m_Size.x > 0 && m_Size.y > 0)
 		while (idx > 0 && (w * kZoom[idx] > m_Size.x || h * kZoom[idx] > m_Size.y)) --idx;
 	if (idx > kZoomDefault) idx = kZoomDefault;		// framing never zooms in past 1:1
+	const float cx = NqLayout::Sane((wmin.x + wmax.x) * 0.5f);
+	const float cy = NqLayout::Sane((wmin.y + wmax.y) * 0.5f);
+	if (cx != m_Doc->view_cx || cy != m_Doc->view_cy || idx != m_Doc->zoom_idx) RememberView();
 	m_Doc->zoom_idx = idx;
-	m_Doc->view_cx = NqLayout::Sane((wmin.x + wmax.x) * 0.5f);
-	m_Doc->view_cy = NqLayout::Sane((wmin.y + wmax.y) * 0.5f);
+	m_Doc->view_cx = cx;
+	m_Doc->view_cy = cy;
 }
 
 void NqCanvas::FrameAll()
 {
 	const SNqQuest& q = m_Doc->quest;
-	if (q.nodes.empty()) { m_Doc->view_cx = m_Doc->view_cy = 0.f; m_Doc->zoom_idx = kZoomDefault; return; }
+	if (q.nodes.empty())
+	{
+		if (m_Doc->view_cx != 0.f || m_Doc->view_cy != 0.f || m_Doc->zoom_idx != kZoomDefault) RememberView();
+		m_Doc->view_cx = m_Doc->view_cy = 0.f;
+		m_Doc->zoom_idx = kZoomDefault;
+		return;
+	}
 	ImVec2 mn(FLT_MAX, FLT_MAX), mx(-FLT_MAX, -FLT_MAX);
 	for (u32 i = 0; i < q.nodes.size(); ++i)
 	{
@@ -296,10 +519,15 @@ void NqCanvas::FrameNode(LPCSTR id)
 {
 	const SNqNode* n = m_Doc->quest.FindNode(id);
 	if (!n) return;
+	CancelFraming();
 	Fvector2 sz = NqLayout::NodeSize(*n);
-	m_Doc->view_cx = n->pos.x + sz.x * 0.5f;
-	m_Doc->view_cy = n->pos.y + sz.y * 0.5f;
-	if (m_Doc->zoom_idx < kZoomDefault) m_Doc->zoom_idx = kZoomDefault;
+	const float cx = n->pos.x + sz.x * 0.5f, cy = n->pos.y + sz.y * 0.5f;
+	const int zoom = _max(m_Doc->zoom_idx, kZoomDefault);
+	const bool same_selection = m_Doc->selection.size() == 1 && m_Doc->selection[0] == id && m_Doc->sel_slot.empty();
+	if (cx != m_Doc->view_cx || cy != m_Doc->view_cy || zoom != m_Doc->zoom_idx || !same_selection) RememberView();
+	m_Doc->view_cx = cx;
+	m_Doc->view_cy = cy;
+	m_Doc->zoom_idx = zoom;
 	SelectOnly(id);
 }
 
@@ -996,6 +1224,13 @@ void NqCanvas::DrawNode(ImDrawList* dl, int index)
 		dl->AddCircleFilled(c, r, over ? Col(255, 220, 120) : Col(200, 200, 200), 12);
 		dl->AddCircle(c, r, Col(20, 20, 20), 12, 1.f);
 	}
+	if (IsBookmarked(n.id.c_str()))
+	{
+		const float r = _max(3.f, 5.f * z);
+		const ImVec2 c(a.x + r + 3.f, a.y + r + 3.f);
+		dl->AddQuadFilled(ImVec2(c.x, c.y - r), ImVec2(c.x + r, c.y), ImVec2(c.x, c.y + r), ImVec2(c.x - r, c.y), Col(188, 139, 255));
+		dl->AddQuad(ImVec2(c.x, c.y - r), ImVec2(c.x + r, c.y), ImVec2(c.x, c.y + r), ImVec2(c.x - r, c.y), Col(28, 22, 34), 1.f);
+	}
 	// problem badge
 	int sev = Severity(n.id.c_str());
 	if (sev)
@@ -1031,6 +1266,90 @@ void NqCanvas::DrawLinking(ImDrawList* dl)
 	dl->AddBezierCubic(p0, ImVec2(p0.x, p0.y + d), ImVec2(p3.x, p3.y - d), p3, Col(255, 220, 120), 2.f, 24);
 }
 
+ImVec2 NqCanvas::MinimapToWorld(const ImVec2& screen) const
+{
+	if (m_MinimapScale <= 0.f) return ImVec2(m_Doc->view_cx, m_Doc->view_cy);
+	const float x = _max(m_MinimapMin.x, _min(screen.x, m_MinimapMax.x));
+	const float y = _max(m_MinimapMin.y, _min(screen.y, m_MinimapMax.y));
+	return ImVec2(m_MinimapWorldMin.x + (x - m_MinimapMin.x) / m_MinimapScale,
+		m_MinimapWorldMin.y + (y - m_MinimapMin.y) / m_MinimapScale);
+}
+
+void NqCanvas::DrawMinimap(ImDrawList* dl)
+{
+	m_MinimapHovered = false;
+	if (!m_ShowMinimap || m_Size.x < 260.f || m_Size.y < 180.f || m_Geom.empty()) return;
+
+	float min_x, min_y, max_x, max_y;
+	if (!GraphBounds(min_x, min_y, max_x, max_y)) return;
+	const float scale = UiScale();
+	const ImVec2 box_size(_min(220.f * scale, m_Size.x * 0.35f), _min(140.f * scale, m_Size.y * 0.32f));
+	const ImVec2 box_max(m_Origin.x + m_Size.x - 10.f * scale, m_Origin.y + m_Size.y - 10.f * scale);
+	const ImVec2 box_min(box_max.x - box_size.x, box_max.y - box_size.y);
+	const float pad = 7.f * scale;
+	const ImVec2 available(_max(box_size.x - pad * 2.f, 8.f), _max(box_size.y - pad * 2.f, 8.f));
+
+	const float world_pad = NqLayout::kGrid * 2.f;
+	m_MinimapWorldMin = ImVec2(min_x - world_pad, min_y - world_pad);
+	m_MinimapWorldMax = ImVec2(max_x + world_pad, max_y + world_pad);
+	const float world_w = _max(m_MinimapWorldMax.x - m_MinimapWorldMin.x, 1.f);
+	const float world_h = _max(m_MinimapWorldMax.y - m_MinimapWorldMin.y, 1.f);
+	m_MinimapScale = _min(available.x / world_w, available.y / world_h);
+	const ImVec2 fitted(world_w * m_MinimapScale, world_h * m_MinimapScale);
+	m_MinimapMin = ImVec2(box_min.x + (box_size.x - fitted.x) * 0.5f, box_min.y + (box_size.y - fitted.y) * 0.5f);
+	m_MinimapMax = Add(m_MinimapMin, fitted);
+
+	dl->AddRectFilled(box_min, box_max, Col(20, 20, 24, 224), 5.f * scale);
+	dl->AddRect(box_min, box_max, Col(142, 96, 196, 210), 5.f * scale, 0, 1.f * scale);
+	auto map_point = [&](const ImVec2& world)
+	{
+		return ImVec2(m_MinimapMin.x + (world.x - m_MinimapWorldMin.x) * m_MinimapScale,
+			m_MinimapMin.y + (world.y - m_MinimapWorldMin.y) * m_MinimapScale);
+	};
+
+	for (u32 i = 0; i < m_Doc->quest.nodes.size(); ++i)
+	{
+		const SNqNode& node = m_Doc->quest.nodes[i];
+		const SNodeGeom& geom = m_Geom[i];
+		const ImVec2 from = map_point(Add(geom.pos, ImVec2(geom.size.x * 0.5f, geom.size.y * 0.5f)));
+		for (u32 p = 0; p < node.out.size(); ++p)
+			for (u32 t = 0; t < node.out[p].second.size(); ++t)
+			{
+				const int target = m_Doc->quest.NodeIndex(node.out[p].second[t].c_str());
+				if (target < 0 || target >= (int)m_Geom.size()) continue;
+				const SNodeGeom& target_geom = m_Geom[target];
+				const ImVec2 to = map_point(Add(target_geom.pos, ImVec2(target_geom.size.x * 0.5f, target_geom.size.y * 0.5f)));
+				dl->AddLine(from, to, Col(184, 184, 192, 105), _max(1.f, scale));
+			}
+	}
+
+	for (u32 i = 0; i < m_Doc->quest.nodes.size(); ++i)
+	{
+		const SNqNode& node = m_Doc->quest.nodes[i];
+		const SNodeGeom& geom = m_Geom[i];
+		const ImVec2 a = map_point(geom.pos);
+		const ImVec2 b = map_point(Add(geom.pos, geom.size));
+		const ImVec2 visible_b(_max(b.x, a.x + 2.f * scale), _max(b.y, a.y + 2.f * scale));
+		dl->AddRectFilled(a, visible_b, FamilyColor(node.kind.c_str()), 1.f * scale);
+		if (IsSelected(node.id.c_str())) dl->AddRect(a, visible_b, Col(255, 255, 255, 235), 1.f * scale, 0, 1.5f * scale);
+		else if (IsBookmarked(node.id.c_str())) dl->AddRect(a, visible_b, Col(188, 139, 255, 235), 1.f * scale, 0, 1.5f * scale);
+	}
+
+	const float z = Zoom();
+	const ImVec2 view_min(m_Doc->view_cx - m_Size.x / (2.f * z), m_Doc->view_cy - m_Size.y / (2.f * z));
+	const ImVec2 view_max(m_Doc->view_cx + m_Size.x / (2.f * z), m_Doc->view_cy + m_Size.y / (2.f * z));
+	ImVec2 va = map_point(view_min), vb = map_point(view_max);
+	va.x = _max(m_MinimapMin.x, _min(va.x, m_MinimapMax.x));
+	va.y = _max(m_MinimapMin.y, _min(va.y, m_MinimapMax.y));
+	vb.x = _max(m_MinimapMin.x, _min(vb.x, m_MinimapMax.x));
+	vb.y = _max(m_MinimapMin.y, _min(vb.y, m_MinimapMax.y));
+	dl->AddRect(va, vb, Col(225, 205, 255, 240), 0.f, 0, _max(1.f, 1.5f * scale));
+
+	m_MinimapHovered = m_Hovered && InRect(ImGui::GetMousePos(), box_min, box_max);
+	if (m_MinimapHovered && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+		ImGui::SetTooltip("Quest minimap - click or drag to navigate");
+}
+
 //------------------------------------------------------------------------------
 // input
 //------------------------------------------------------------------------------
@@ -1038,11 +1357,36 @@ void NqCanvas::HandleInput()
 {
 	ImGuiIO& io = ImGui::GetIO();
 	ImVec2 mouse = ImGui::GetMousePos();
-	bool hovered = m_Hovered;
+	bool hovered = m_Hovered && !m_MinimapHovered;
+
+	if (m_MinimapHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+	{
+		RememberView();
+		m_MinimapPanning = true;
+	}
+	if (m_MinimapPanning && ImGui::IsMouseDown(ImGuiMouseButton_Left))
+	{
+		const ImVec2 world = MinimapToWorld(mouse);
+		CancelFraming();
+		m_Doc->view_cx = NqLayout::Sane(world.x);
+		m_Doc->view_cy = NqLayout::Sane(world.y);
+	}
+	if (m_MinimapPanning && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) m_MinimapPanning = false;
 
 	// wheel: zoom around the cursor
 	if (hovered && io.MouseWheel != 0.f)
+	{
+		const double now = ImGui::GetTime();
+		const bool coalesce = now - m_LastWheelHistory < 0.35;
+		const bool replaying = m_ReplayingHistory;
+		const int zoom = m_Doc->zoom_idx;
+		if (coalesce) m_ReplayingHistory = true;
+		m_WheelZooming = true;
 		ZoomBy(io.MouseWheel > 0.f ? 1 : -1, &mouse);
+		m_WheelZooming = false;
+		m_ReplayingHistory = replaying;
+		if (m_Doc->zoom_idx != zoom) m_LastWheelHistory = now;
+	}
 
 	// right button: pan while dragging, context menu on a click
 	if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) { m_Panning = true; m_RmbMoved = false; m_RmbDown = mouse; }
@@ -1051,7 +1395,11 @@ void NqCanvas::HandleInput()
 		ImVec2 d = io.MouseDelta;
 		if (d.x != 0.f || d.y != 0.f)
 		{
-			if (fabsf(mouse.x - m_RmbDown.x) + fabsf(mouse.y - m_RmbDown.y) > 3.f) m_RmbMoved = true;
+			if (!m_RmbMoved && fabsf(mouse.x - m_RmbDown.x) + fabsf(mouse.y - m_RmbDown.y) > 3.f)
+			{
+				RememberView();
+				m_RmbMoved = true;
+			}
 			if (m_RmbMoved) { float z = Zoom(); m_Doc->view_cx -= d.x / z; m_Doc->view_cy -= d.y / z; }
 		}
 	}
@@ -1063,9 +1411,11 @@ void NqCanvas::HandleInput()
 	// middle button pans too
 	if (hovered && ImGui::IsMouseDown(ImGuiMouseButton_Middle))
 	{
+		if (!m_MiddlePanning && (io.MouseDelta.x != 0.f || io.MouseDelta.y != 0.f)) { RememberView(); m_MiddlePanning = true; }
 		float z = Zoom();
 		m_Doc->view_cx -= io.MouseDelta.x / z; m_Doc->view_cy -= io.MouseDelta.y / z;
 	}
+	if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle)) m_MiddlePanning = false;
 
 	// left button
 	if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
@@ -1417,6 +1767,9 @@ void NqCanvas::HandleKeys()
 	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, once))		CopySelection();
 	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, once))		PasteClipboard();
 	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, once))		DuplicateSelection();
+	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_B, once))		ToggleSelectedBookmarks();
+	if (io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_LeftArrow, once))	HistoryBack();
+	if (io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_RightArrow, once))	HistoryForward();
 	if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, once)) m_Doc->Undo();
 	if (io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_Y, once) || (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, once)))) m_Doc->Redo();
 	if (ImGui::IsKeyPressed(ImGuiKey_Escape, once))
@@ -1585,6 +1938,9 @@ void NqCanvas::DrawContextMenus()
 	if (ImGui::BeginPopup("nq_node_ctx"))
 	{
 		if (ImGui::MenuItem("Rename", "F2"))			m_WantRename = true;
+		bool all_bookmarked = !m_Doc->selection.empty();
+		for (u32 i = 0; i < m_Doc->selection.size(); ++i) all_bookmarked &= IsBookmarked(m_Doc->selection[i].c_str());
+		if (ImGui::MenuItem(all_bookmarked ? "Remove bookmarks" : "Bookmark selection", "Ctrl+B")) ToggleSelectedBookmarks();
 		if (ImGui::MenuItem("Duplicate", "Ctrl+D"))		DuplicateSelection();
 		if (ImGui::MenuItem("Copy", "Ctrl+C"))			CopySelection();
 		if (ImGui::MenuItem("Add on_enter action..."))	{ m_ChipDragSlot = "enter"; m_OpenAddAction = true; }
@@ -1681,9 +2037,10 @@ void NqCanvas::Draw(const ImVec2& size)
 	// deferred framing requests need the rect
 	if (m_WantFrameAll)			{ FrameAll(); m_WantFrameAll = false; }
 	if (m_WantFrameSel)			{ FrameSelection(); m_WantFrameSel = false; }
-	if (!m_WantFrameNode.empty()) { FrameNode(m_WantFrameNode.c_str()); m_WantFrameNode.clear(); }
 	// framing picks a zoom of its own; an explicit one was asked for later
 	if (m_WantZoom >= 0)		{ m_Doc->zoom_idx = m_WantZoom; m_WantZoom = -1; }
+	m_HistoryReady = true;
+	PruneTransient();
 
 	ImDrawList* dl = ImGui::GetWindowDrawList();
 	dl->AddRectFilled(m_Origin, Add(m_Origin, m_Size), Col(30, 30, 33));
@@ -1726,6 +2083,7 @@ void NqCanvas::Draw(const ImVec2& size)
 		dl->AddText(font, fs, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), Col(20, 20, 20), label);
 	}
 	DrawMarquee(dl);
+	DrawMinimap(dl);
 
 	// zoom label
 	{

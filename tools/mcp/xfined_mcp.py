@@ -11,6 +11,7 @@ import json
 import os
 import socket
 import sys
+import time
 
 HOST, PORT = "127.0.0.1", 28016
 CONNECT_TIMEOUT_SECONDS = 20.0
@@ -1006,11 +1007,72 @@ TOOLS = [
         "description": "Open (or focus) the graph tab of a quest and set its view: frame='all' or a node id, "
                        "zoom_level 0..9 (6 = 100%), cx/cy = world centre (cx/cy override 'frame'), "
                        "slot='enter:0'/'exit:1' opens that action of the framed node in the inspector ('none' clears it). "
+                       "The bridge waits for deferred frame-all layout before returning when the editor is drawing. "
                        "Then use xfined_screenshot_editor to look at it.",
         "inputSchema": {
             "type": "object",
             "properties": {"path": {"type": "string"}, "frame": {"type": "string"}, "zoom_level": {"type": "integer"},
                            "cx": {"type": "number"}, "cy": {"type": "number"}, "slot": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_quest_find",
+        "description": "Graph-wide node search over ids, kind ids/titles, parameters, conditions, actions, links and "
+                       "comments. Terms are ANDed; quoted phrases stay together; prefix a term with '-' to exclude it. "
+                       "action=get|set|next|previous|clear; get with query atomically updates without navigating, "
+                       "set can select the first result, next/previous frame a result. "
+                       "Returns deterministic file-order results plus the active result and exact graph view state.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "action": {"type": "string", "enum": ["get", "set", "next", "previous", "clear"]},
+                "query": {"type": "string", "description": "For get/set/next/previous, replace the current query before returning or navigating."},
+                "select": {"type": "boolean", "description": "For action=set, frame the first result."},
+                "limit": {"type": "integer", "description": "Maximum returned results, 1..500 (default 100)."},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_quest_bookmarks",
+        "description": "Read or control transient per-document node bookmarks. action=get|add|remove|toggle|next|"
+                       "previous|clear. add/remove/toggle use 'node', or the sole selected node when omitted. Bookmarks "
+                       "are editor-only and never change the .nqasset or its undo/dirty state.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "action": {"type": "string", "enum": ["get", "add", "remove", "toggle", "next", "previous", "clear"]},
+                "node": {"type": "string"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_quest_history",
+        "description": "Read or navigate the transient graph view history. action=get|back|forward|clear. Each state "
+                       "contains world center, zoom level, selected node ids and inspector slot; no quest data changes.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "action": {"type": "string", "enum": ["get", "back", "forward", "clear"]},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_quest_minimap",
+        "description": "Read or control the transient interactive graph minimap with action=get|show|hide|toggle. "
+                       "Returns visibility, graph bounds, current viewport bounds, center, zoom and selection.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "action": {"type": "string", "enum": ["get", "show", "hide", "toggle"]},
+            },
             "required": ["path"],
         },
     },
@@ -1121,6 +1183,10 @@ CMD_MAP = {
     "xfined_quest_reload": "quest_reload",
     "xfined_quest_layout": "quest_layout",
     "xfined_quest_view": "quest_view",
+    "xfined_quest_find": "quest_find",
+    "xfined_quest_bookmarks": "quest_bookmarks",
+    "xfined_quest_history": "quest_history",
+    "xfined_quest_minimap": "quest_minimap",
     "xfined_quest_lookup": "quest_lookup",
     "xfined_quest_check_all": "quest_check_all",
 }
@@ -1156,6 +1222,13 @@ def editor_call(cmd: str, extra: dict | None = None) -> dict:
 
 def tool_result(name: str, args: dict) -> dict:
     data = editor_call(CMD_MAP[name], args)
+    if name == "xfined_quest_view" and data.get("ok") and data.get("pending"):
+        deadline = time.monotonic() + 1.0
+        while data.get("pending") and time.monotonic() < deadline:
+            time.sleep(0.02)
+            data = editor_call("quest_view", {"path": args["path"]})
+            if not data.get("ok"):
+                break
     png = data.pop("png_base64", None)
     content = []
     if png and data.get("ok"):

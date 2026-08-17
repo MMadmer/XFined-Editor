@@ -25,8 +25,20 @@ public:
 	// close request from the tab's X or CloseAll: dirty documents ask first
 	void			RequestClose		(bool discard);
 	bool			WantsClose			() const { return m_CloseNow; }
+	void			McpFind				(LPCSTR raw, xr_string& out);
+	void			McpBookmarks		(LPCSTR raw, xr_string& out);
+	void			McpHistory			(LPCSTR raw, xr_string& out);
+	void			McpMinimap			(LPCSTR raw, xr_string& out);
 
 private:
+	struct SFindResult
+	{
+		xr_string	node;
+		xr_string	kind;
+		xr_string	title;
+		xr_string	match;
+	};
+
 	NqDoc*			m_Doc;
 	NqCanvas*		m_Canvas;
 	NqInspector*	m_Inspector;
@@ -38,8 +50,21 @@ private:
 	bool			m_CloseNow;
 	bool			m_ShowProblems;
 	xr_string		m_Message;			// last save/reload result
+	bool			m_ShowFind;
+	bool			m_FocusFind;
+	char			m_Find[256];
+	int				m_FindIndex;
+	u32				m_FindRevision;
+	u32				m_FindCatalogGeneration;
+	xr_vector<SFindResult> m_FindResults;
 
 	void			DrawToolbar			();
+	void			DrawFindBar			();
+	void			RefreshFind			(bool force = false);
+	bool			NavigateFind		(int index);
+	void			SetFindQuery		(LPCSTR query);
+	void			AppendFindState		(xr_string& out, int limit);
+	void			AppendViewState		(xr_string& out);
 	void			DrawSplitter		(float body_w, float body_h);
 	void			DrawProblems		();
 	void			DrawClosePrompt		();
@@ -64,7 +89,12 @@ namespace UIQuestGraph
 	int				Count				();
 	UIQuestGraphWindow* Find			(LPCSTR path);
 	// MCP quest_view: {"path","frame":"all"|"<node>","zoom_level":n,"center":{x,y}}
+	void			McpClose			(LPCSTR raw, xr_string& out);
 	void			McpView				(LPCSTR raw, xr_string& out);
+	void			McpFind				(LPCSTR raw, xr_string& out);
+	void			McpBookmarks		(LPCSTR raw, xr_string& out);
+	void			McpHistory			(LPCSTR raw, xr_string& out);
+	void			McpMinimap			(LPCSTR raw, xr_string& out);
 	// forget every tab when the project changes
 	void			OnProjectChanged	();
 }

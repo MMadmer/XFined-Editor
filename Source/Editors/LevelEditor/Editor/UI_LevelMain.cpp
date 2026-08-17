@@ -3435,7 +3435,12 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     }
 
     // quest graph (NQ) commands: project-scoped, no scene needed, no dialogs
+	if (0 == xr_strcmp(cmd, "quest_close")) { UIQuestGraph::McpClose(raw, out); return true; }
     if (0 == xr_strcmp(cmd, "quest_view")) { UIQuestGraph::McpView(raw, out); return true; }
+    if (0 == xr_strcmp(cmd, "quest_find")) { UIQuestGraph::McpFind(raw, out); return true; }
+    if (0 == xr_strcmp(cmd, "quest_bookmarks")) { UIQuestGraph::McpBookmarks(raw, out); return true; }
+    if (0 == xr_strcmp(cmd, "quest_history")) { UIQuestGraph::McpHistory(raw, out); return true; }
+    if (0 == xr_strcmp(cmd, "quest_minimap")) { UIQuestGraph::McpMinimap(raw, out); return true; }
     if (NqMcp::Handle(cmd, raw, out)) return true;
 
     return false;

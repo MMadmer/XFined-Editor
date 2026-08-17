@@ -382,7 +382,11 @@ finish (flow.end; status=completed)
 | `xfined_quest_save` | `path`, `force?` | `path`, `errors`, `warnings`. Отказ `modified externally`, если файл изменился на диске после загрузки — тогда `force: true` |
 | `xfined_quest_reload` | `path` | перечитывает открытый документ с диска (теряет несохранённые правки и историю undo) |
 | `xfined_quest_layout` | `path`, `all?` | детерминированная раскладка сверху вниз. `all:false` двигает только ноды без `pos`. Ответ: `moved`, `positions[]` (`id`, `x`, `y`) |
-| `xfined_quest_view` | `path`, `frame?` (`"all"` или id ноды), `zoom_level?` (0..9, 6 = 100%), `cx?`, `cy?` | открывает/фокусирует вкладку графа и ставит вид. Ответ: `path`, `zoom_level`, `zoom`, `center`, `nodes`, `open_tabs`. Дальше — `xfined_screenshot_editor` |
+| `xfined_quest_view` | `path`, `frame?` (`"all"` или id ноды), `zoom_level?` (0..9, 6 = 100%), `cx?`, `cy?` | открывает/фокусирует вкладку графа и ставит вид. Raw-ответ: `path`, `zoom_level`, `zoom`, `center`, `nodes`, `open_tabs`, `pending`; первый `frame:all` может быть `pending:true` до Draw, Python bridge прозрачно перечитывает итоговый вид после кадра. Дальше — `xfined_screenshot_editor` |
+| `xfined_quest_find` | `path`, `action?`, `query?`, `select?`, `limit?` | полнотекстовый поиск нод по id/видам/параметрам/условиям/действиям/связям/комментариям; `get` с `query` атомарно меняет запрос без навигации, `next`/`previous` фокусируют результат. Токены соединяются через AND, кавычки сохраняют фразу, `-токен` исключает |
+| `xfined_quest_bookmarks` | `path`, `action?`, `node?` | transient-закладки нод (`get/add/remove/toggle/next/previous/clear`), не меняют ассет/dirty/undo |
+| `xfined_quest_history` | `path`, `action?` | transient-история вида (`get/back/forward/clear`): центр, зум, выделение и слот инспектора |
+| `xfined_quest_minimap` | `path`, `action?` | интерактивная transient-миникарта (`get/show/hide/toggle`), ответ с границами графа и текущего viewport |
 | `xfined_quest_lookup` | `type`, `query?`, `limit?` (по умолчанию 50), `path?` | данные пикеров. `type`: `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `spot_type` (из подключённой игры, кэшируются) либо документные `task_id`, `var_name`, `ref_name`, `node_id` (нужен `path`), `quest_id` (квесты проекта) |
 | `xfined_quest_check_all` | — | гейт сборки: `passed`, `errors`, `warnings`, `error`, `log[]` (строки `<путь>: <код> <нода>: <сообщение>`) |
 
