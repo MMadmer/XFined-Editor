@@ -79,7 +79,18 @@ public:
 	void			PasteClipboard	();
 	void			DeleteSelection	();
 	void			SelectAll		();
+	// Replaces the selection with exactly these node ids (empty = clear). The one
+	// way in from outside the canvas; the piecewise helpers below are its internals.
+	void			SelectNodes		(const xr_vector<xr_string>& ids);
 	void			DuplicateSelection();
+	// Q: wires the one selected node to the nearest free pin of another one
+	void			ConnectNearest	();
+	// Alt+D: the node stays put and the chain closes over it (BlueprintAssist's Alt+D)
+	void			BypassSelected	();
+	// the single gate every new edge passes: false + `why` when the validator
+	// would reject it on the spot (E007)
+	bool			CanLink			(LPCSTR from, LPCSTR to, xr_string& why) const;
+	LPCSTR			Status			() const { return m_Status.c_str(); }	// last refusal / result
 
 	// world <-> screen of the last Draw
 	ImVec2			ToScreen		(const ImVec2& w) const;
@@ -132,6 +143,7 @@ private:
 	double			m_StatusAt;
 	int				m_HotNode;		// node whose pin the cursor is on (-1 none)
 	int				m_HotPin;		// output pin index, or -1 for the input pin
+	int				m_HotLink;		// link under the cursor (-1 none) - lit, Alt+LMB or D removes it
 	// pending "create node and connect" after dropping a link on empty space
 	bool			m_PendingLink;
 	ImVec2			m_MenuWorld;	// world position for node creation from menus
@@ -192,6 +204,7 @@ private:
 	bool			HitAnyPin		(const ImVec2& screen, int& node, int& pin) const;
 	bool			HitChip			(int node, const ImVec2& screen, xr_string& slot, int& index, bool& plus) const;
 	int				HitLink			(const ImVec2& screen) const;			// link index or -1
+	bool			MenuOpen		() const;								// a popup of this canvas is up
 	void			UpdateHot		();
 	void			DrawGrid		(ImDrawList* dl);
 	void			DrawLinks		(ImDrawList* dl);
@@ -209,12 +222,8 @@ private:
 	const NqCatalog::SKind* PickKind(LPCSTR hint, u32 use_mask);
 	void			InsertNodes		(xr_vector<SNqNode>& in, const ImVec2& place, bool anchor);
 	void			CreateNode		(const NqCatalog::SKind& k, const ImVec2& world, bool connect_pending);
-	// the single gate every new edge passes: false + `why` when the validator
-	// would reject it on the spot (E007)
-	bool			CanLink			(LPCSTR from, LPCSTR to, xr_string& why) const;
-	// Q: wires the one selected node to the nearest free pin of another one
-	void			ConnectNearest	();
 	void			SetStatus		(LPCSTR text);
+	void			DeleteHotLink	();										// Alt+LMB and D share this
 	void			SelectOnly		(LPCSTR id);
 	bool			IsSelected		(LPCSTR id) const;
 	void			ToggleSelected	(LPCSTR id);

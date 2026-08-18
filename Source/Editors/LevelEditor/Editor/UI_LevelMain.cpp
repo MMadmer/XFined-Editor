@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "Recovery/EditorRecovery.h"
 #include "..\..\XrAPI\xrGameManager.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
@@ -3667,6 +3667,7 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     // quest graph (NQ) commands: project-scoped, no scene needed, no dialogs
 	if (0 == xr_strcmp(cmd, "quest_close")) { UIQuestGraph::McpClose(raw, out); return true; }
     if (0 == xr_strcmp(cmd, "quest_view")) { UIQuestGraph::McpView(raw, out); return true; }
+    if (0 == xr_strcmp(cmd, "quest_edit")) { UIQuestGraph::McpEdit(raw, out); return true; }
     if (0 == xr_strcmp(cmd, "quest_find")) { UIQuestGraph::McpFind(raw, out); return true; }
     if (0 == xr_strcmp(cmd, "quest_bookmarks")) { UIQuestGraph::McpBookmarks(raw, out); return true; }
     if (0 == xr_strcmp(cmd, "quest_history")) { UIQuestGraph::McpHistory(raw, out); return true; }

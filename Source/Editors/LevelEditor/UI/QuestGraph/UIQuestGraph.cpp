@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "UIQuestGraph.h"
 #include "NqCanvas.h"
 #include "NqInspector.h"
@@ -118,9 +118,10 @@ UIQuestGraphWindow::UIQuestGraphWindow(NqDoc* doc) : m_Doc(doc)
 	m_Canvas = xr_new<NqCanvas>(doc);
 	m_Inspector = xr_new<NqInspector>(doc);
 	m_SplitFrac = LoadSplit();
-	m_Focus = true;
+	m_Focus = 3;
 	m_AskClose = m_CloseNow = false;
 	m_ShowProblems = false;
+	m_ShowKeys = false;
 	m_ShowFind = m_FocusFind = false;
 	m_Find[0] = 0;
 	m_FindIndex = -1;
@@ -467,6 +468,10 @@ void UIQuestGraphWindow::DrawToolbar()
 	ImGui::SameLine();
 	if (ImGui::Button("Frame all"))			m_Canvas->RequestFrameAll();
 	ImGui::SameLine();
+	// The graph is worked with the keyboard - and a shortcut nobody can find is a
+	// shortcut nobody has. The list lives in the tab, not in a manual.
+	if (ImGui::Button(m_ShowKeys ? "Keys v" : "Keys >")) m_ShowKeys = !m_ShowKeys;
+	ImGui::SameLine();
 	if (ImGui::Button("-"))					m_Canvas->ZoomBy(-1);
 	ImGui::SameLine();
 	ImGui::Text("%d%%", int(m_Canvas->Zoom() * 100.f + 0.5f));
@@ -475,6 +480,94 @@ void UIQuestGraphWindow::DrawToolbar()
 	ImGui::SameLine();
 	ImGui::TextDisabled("| undo %d  redo %d | catalog: %s v%d", m_Doc->UndoDepth(), m_Doc->RedoDepth(), NqCatalog::Source(), NqCatalog::Version());
 	if (!m_Message.empty()) { ImGui::SameLine(); ImGui::TextDisabled("| %s", m_Message.c_str()); }
+}
+
+// Read off the code that implements them (NqCanvas::HandleKeys and the mouse
+// gestures in HandleInput) - a list that drifts from the bindings is worse than none.
+void UIQuestGraphWindow::DrawKeysPanel()
+{
+	if (!m_ShowKeys) return;
+	struct SRow { LPCSTR keys; LPCSTR what; };
+	static const SRow kNav[] =
+	{
+		{ "Home",					"frame the whole graph" },
+		{ "F",						"frame the selection" },
+		{ "Alt + Left / Right",		"back / forward through the view history" },
+		{ "Middle drag / Space drag","pan" },
+		{ "Wheel",					"zoom" },
+	};
+	static const SRow kEdit[] =
+	{
+		{ "LMB / Ctrl + LMB",		"select / add to the selection" },
+		{ "Drag on empty space",	"marquee select" },
+		{ "Ctrl + A",				"select every node" },
+		{ "F2",						"rename the node" },
+		{ "Delete",					"delete the selection" },
+		{ "Ctrl + C / Ctrl + V",	"copy / paste" },
+		{ "Ctrl + D",				"duplicate the selection" },
+		{ "Ctrl + Z / Ctrl + Y",	"undo / redo" },
+		{ "Ctrl + B",				"bookmark the selection" },
+	};
+	static const SRow kLinks[] =
+	{
+		{ "Drag from a pin",		"draw a link" },
+		{ "Q",						"link the selected node to the nearest free pin" },
+		{ "Hover a link",			"it lights up - that one is the target below" },
+		{ "D",						"cut the lit link" },
+		{ "Alt + LMB",				"cut the lit link" },
+		{ "Alt + D",				"keep the node, close the chain over it (A->B->C becomes A->C)" },
+	};
+	static const SRow kOther[] =
+	{
+		{ "RMB",					"context menu (every shortcut is off while it is open)" },
+		{ "Escape",					"cancel the gesture in progress" },
+		{ "Drag an action chip",	"move it between nodes or reorder it" },
+	};
+	struct SGroup { LPCSTR title; const SRow* rows; int count; };
+	const SGroup groups[] =
+	{
+		{ "View",		kNav,	sizeof(kNav) / sizeof(kNav[0]) },
+		{ "Nodes",		kEdit,	sizeof(kEdit) / sizeof(kEdit[0]) },
+		{ "Links",		kLinks,	sizeof(kLinks) / sizeof(kLinks[0]) },
+		{ "Other",		kOther,	sizeof(kOther) / sizeof(kOther[0]) },
+	};
+
+	// sized from the rows it actually has: a fixed height cut the last group off the
+	// moment a shortcut was added, which is exactly when the list matters most
+	const float em = ImGui::GetFrameHeight();
+	const float line = ImGui::GetTextLineHeightWithSpacing();
+	const int top_rows = _max(groups[0].count, groups[1].count);
+	const int bottom_rows = _max(groups[2].count, groups[3].count);
+	// + the caption, the separator, two group titles and the padding the nested
+	// tables add between them
+	const float body = float(top_rows + bottom_rows + 4) * line + em * 2.6f;
+	ImGui::BeginChild("##nq_keys", ImVec2(0.f, body), true);
+	ImGui::TextDisabled("Shortcuts work while the cursor is over the graph. Everything here is also an MCP call (xfined_quest_edit).");
+	ImGui::Separator();
+	if (ImGui::BeginTable("##nq_keys_cols", 2, ImGuiTableFlags_SizingStretchSame))
+	{
+		for (int g = 0; g < 4; ++g)
+		{
+			if (0 == (g & 1)) ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(g & 1);
+			ImGui::TextUnformatted(groups[g].title);
+			if (ImGui::BeginTable(groups[g].title, 2, ImGuiTableFlags_SizingFixedFit))
+			{
+				for (int r = 0; r < groups[g].count; ++r)
+				{
+					ImGui::TableNextRow();
+					ImGui::TableSetColumnIndex(0);
+					ImGui::TextUnformatted(groups[g].rows[r].keys);
+					ImGui::TableSetColumnIndex(1);
+					ImGui::TextDisabled("%s", groups[g].rows[r].what);
+				}
+				ImGui::EndTable();
+			}
+			ImGui::Dummy(ImVec2(0.f, em * 0.3f));
+		}
+		ImGui::EndTable();
+	}
+	ImGui::EndChild();
 }
 
 float UIQuestGraphWindow::SplitWidth(float body_w) const
@@ -621,7 +714,7 @@ void UIQuestGraphWindow::DrawClosePrompt()
 void UIQuestGraphWindow::Draw()
 {
 	if (m_CloseNow) { bOpen = false; return; }
-	if (m_Focus) { ImGui::SetNextWindowFocus(); m_Focus = false; }
+	if (m_Focus > 0) { ImGui::SetNextWindowFocus(); --m_Focus; }
 	// a tab beside the viewport, like the model preview (docs par. 13.7)
 	UI->DockNextWindowWith("Render");
 	ImGui::SetNextWindowSize(ImVec2(1100.f, 700.f), ImGuiCond_FirstUseEver);
@@ -653,6 +746,7 @@ void UIQuestGraphWindow::Draw()
 	}
 
 	DrawToolbar();
+	DrawKeysPanel();
 	DrawFindBar();
 	DrawProjectFind();
 	ImGui::Separator();
@@ -964,6 +1058,41 @@ namespace UIQuestGraph
 		bool has_c = NqUtil::ArgFloat(raw, "cx", cx) && NqUtil::ArgFloat(raw, "cy", cy);
 		string_path slot = "";
 		XFinedMCP::GetArg(raw, "slot", slot, sizeof(slot));
+		// The reply has always reported `selected`; this is how it gets set. Nothing
+		// else can: the inspector follows the graph selection, so without it a caller
+		// could open a node's tab and never look at the node.
+		string_path select = "";
+		XFinedMCP::GetArg(raw, "select", select, sizeof(select));
+		// the shortcut list is a button in the toolbar; a button only a hand can press
+		// is a feature an agent does not have
+		string_path keys = "";
+		XFinedMCP::GetArg(raw, "keys", keys, sizeof(keys));
+		if (keys[0])
+		{
+			if (0 == strcmp(keys, "show"))			w->SetShowKeys(true);
+			else if (0 == strcmp(keys, "hide"))		w->SetShowKeys(false);
+			else if (0 == strcmp(keys, "toggle"))	w->SetShowKeys(!w->ShowKeys());
+			else { NqUtil::JsonError(out, "keys must be \"show\", \"hide\" or \"toggle\""); return; }
+		}
+		xr_vector<xr_string> want;
+		if (select[0] && 0 != strcmp(select, "none"))
+		{
+			xr_string rest = select;
+			while (!rest.empty())
+			{
+				const size_t comma = rest.find(',');
+				xr_string id = NqUtil::Trim((comma == xr_string::npos ? rest : rest.substr(0, comma)).c_str());
+				rest = (comma == xr_string::npos) ? xr_string() : rest.substr(comma + 1);
+				if (id.empty()) continue;
+				if (!w->Doc()->quest.FindNode(id.c_str()))
+				{
+					NqUtil::JsonError(out, NqUtil::Format("no node '%s' in this quest", id.c_str()).c_str());
+					return;
+				}
+				want.push_back(id);
+			}
+			if (want.empty()) { NqUtil::JsonError(out, "select needs a node id, a comma separated list, or \"none\""); return; }
+		}
 		// Reject validator-only slots before changing any part of the view.
 		if (slot[0] && 0 != strcmp(slot, "none"))
 		{
@@ -982,6 +1111,9 @@ namespace UIQuestGraph
 		if (has_c) c->Center(cx, cy);
 		// "enter:2" / "exit:0" opens that action in the inspector; framing a
 		// node clears the slot, so this comes last
+		// before the slot: SelectOnly clears sel_slot, and "select a node, open its
+		// second action" has to end up on the action
+		if (select[0]) c->SelectNodes(want);
 		if (slot[0])
 		{
 			if (0 == strcmp(slot, "none")) w->Doc()->sel_slot.clear();
@@ -995,8 +1127,98 @@ namespace UIQuestGraph
 		NqUtil::JsonString(out, w->Doc()->sel_slot);
 		out += ",\"selected\":";
 		NqUtil::JsonStringArray(out, w->Doc()->selection);
+		out += ",\"keys\":";
+		NqUtil::JsonBool(out, w->ShowKeys());
 		out += ",\"pending\":";
 		NqUtil::JsonBool(out, c->FramePending());
+		out += "}";
+	}
+
+	// Every graph edit the canvas offers, reachable without a mouse. The editor is
+	// driven by agents as a first-class caller (CLAUDE.md), and a shortcut that only
+	// answers to a keypress is a feature only a human has - which is the same as a
+	// feature the editor does not really have.
+	void McpEdit(LPCSTR raw, xr_string& out)
+	{
+		UIQuestGraphWindow* w = OpenMcpWindow(raw, out);
+		if (!w) return;
+		NqCanvas* c = w->Canvas();
+		NqDoc* d = w->Doc();
+
+		xr_string op;
+		if (!NqUtil::ArgString(raw, "op", op) || op.empty())
+		{
+			NqUtil::JsonError(out, "missing 'op': connect, disconnect, bypass, delete, duplicate, connect_nearest, select_all");
+			return;
+		}
+
+		// `nodes` (comma separated) overrides the selection for the ops that take one,
+		// so a caller never has to select first and can leave the view alone
+		xr_string nodes;
+		NqUtil::ArgString(raw, "nodes", nodes);
+		if (!nodes.empty())
+		{
+			xr_vector<xr_string> ids;
+			xr_string rest = nodes;
+			while (!rest.empty())
+			{
+				const size_t comma = rest.find(',');
+				xr_string id = NqUtil::Trim((comma == xr_string::npos ? rest : rest.substr(0, comma)).c_str());
+				rest = (comma == xr_string::npos) ? xr_string() : rest.substr(comma + 1);
+				if (id.empty()) continue;
+				if (!d->quest.FindNode(id.c_str()))
+				{
+					NqUtil::JsonError(out, NqUtil::Format("no node '%s' in this quest", id.c_str()).c_str());
+					return;
+				}
+				ids.push_back(id);
+			}
+			c->SelectNodes(ids);
+		}
+
+		xr_string from, pin, to;
+		NqUtil::ArgString(raw, "from", from);
+		NqUtil::ArgString(raw, "pin", pin);
+		NqUtil::ArgString(raw, "to", to);
+
+		if (op == "connect")
+		{
+			if (from.empty() || pin.empty() || to.empty()) { NqUtil::JsonError(out, "connect needs 'from', 'pin' and 'to'"); return; }
+			xr_string why;
+			if (!c->CanLink(from.c_str(), to.c_str(), why)) { NqUtil::JsonError(out, why.c_str()); return; }
+			xr_string err;
+			if (!d->Connect(from.c_str(), pin.c_str(), to.c_str(), err)) { NqUtil::JsonError(out, err.empty() ? "connect refused" : err.c_str()); return; }
+		}
+		else if (op == "disconnect")
+		{
+			// no 'to' drops every target of the pin, no 'pin' drops every pin - the
+			// same reach the context menu has
+			if (from.empty()) { NqUtil::JsonError(out, "disconnect needs 'from' (plus 'pin' and 'to' to name one link)"); return; }
+			xr_string err;
+			if (!d->Disconnect(from.c_str(), pin.c_str(), to.c_str(), err)) { NqUtil::JsonError(out, err.empty() ? "disconnect refused" : err.c_str()); return; }
+		}
+		else if (op == "bypass")			c->BypassSelected();
+		else if (op == "delete")			c->DeleteSelection();
+		else if (op == "duplicate")			c->DuplicateSelection();
+		else if (op == "connect_nearest")	c->ConnectNearest();
+		else if (op == "select_all")		c->SelectAll();
+		else
+		{
+			NqUtil::JsonError(out, NqUtil::Format("unknown op '%s': connect, disconnect, bypass, delete, duplicate, connect_nearest, select_all", op.c_str()).c_str());
+			return;
+		}
+
+		// the outline is how a caller sees what the edit did, without a screenshot
+		out = "{\"ok\":true,\"path\":";
+		NqUtil::JsonPath(out, d->path.c_str());
+		out += ",\"op\":";
+		NqUtil::JsonString(out, op);
+		out += ",\"selected\":";
+		NqUtil::JsonStringArray(out, d->selection);
+		out += ",\"status\":";
+		NqUtil::JsonString(out, c->Status());
+		out += ",\"outline\":";
+		NqUtil::JsonString(out, d->Outline());
 		out += "}";
 	}
 

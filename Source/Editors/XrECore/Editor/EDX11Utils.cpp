@@ -23,7 +23,7 @@ namespace
 	// diagnosis of the last arm window, reported by DX11FrameCaptureWhy
 	u32			g_frames_armed	= 0;	// frames the render loop presented while armed
 	const char*	g_last_bail		= 0;	// why the newest of those frames mirrored nothing
-	bool		g_have_frame	= false;	// this arm window got a frame of its own
+	u32			g_want_frames	= 0;	// frames still to mirror before the picture is handed over
 
 	// Wall-clock, not frame counts: the arm window has to survive the gap between
 	// the request that arms it and the follow-up that reads the frame. Six
@@ -36,6 +36,10 @@ namespace
 	// this the first request after the arm window lapsed would happily hand back
 	// the frame the PREVIOUS session mirrored - minutes old, reported as ok.
 	const u32	CAPTURE_FRESH_MS	= 1000;
+	// The first frame after an idle spell is not the finished picture: ImGui settles a
+	// dock layout over a frame or two, and handing back the first one gave a window
+	// with nothing in it but the menu bar. Mirror a few and answer with the last.
+	const u32	CAPTURE_SETTLE		= 3;
 }
 
 void	DX11ArmFrameCapture()
@@ -48,7 +52,7 @@ void	DX11ArmFrameCapture()
 		g_armed_at		= now;
 		g_frames_armed	= 0;
 		g_last_bail		= 0;
-		g_have_frame	= false;
+		g_want_frames	= CAPTURE_SETTLE;
 	}
 	g_armed_until	= now + CAPTURE_ARM_MS;
 
@@ -62,6 +66,7 @@ bool	DX11GetFrameCapture(U32Vec& out, u32& w, u32& h)
 {
 	if (!g_frame_w || !g_frame_h || g_frame_px.empty())	return false;
 	if (!g_last_mirror)									return false;
+	if (g_want_frames)									return false;	// still settling
 
 	// A frame mirrored during the CURRENT arm window is what is on screen, however
 	// old it is: the editor redraws on demand, so an idle one simply stops
@@ -109,7 +114,7 @@ void	DX11MirrorBackbuffer()
 		g_frame_w		= w;
 		g_frame_h		= h;
 		g_last_mirror	= now;
-		g_have_frame	= true;
+		if (g_want_frames) --g_want_frames;
 	}
 	else
 	{
@@ -122,7 +127,7 @@ void	DX11MirrorBackbuffer()
 
 bool	DX11FrameCaptureWants()
 {
-	return ::GetTickCount() <= g_armed_until && !g_have_frame;
+	return ::GetTickCount() <= g_armed_until && g_want_frames > 0;
 }
 
 void	DX11FrameCaptureWhy(xr_string& out)
@@ -133,6 +138,11 @@ void	DX11FrameCaptureWhy(xr_string& out)
 	{
 		out = "the render loop has presented no frame since the capture was armed - "
 			  "the editor redraws on demand, so ask again after something makes it draw";
+		return;
+	}
+	if (g_want_frames && g_last_mirror)
+	{
+		out = "the picture is still settling, ask again in a moment";
 		return;
 	}
 	if (g_last_bail)

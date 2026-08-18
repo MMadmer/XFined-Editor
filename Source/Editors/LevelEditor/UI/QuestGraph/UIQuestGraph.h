@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // NQ - the quest graph editor tab (docs/NQ_ARCHITECTURE.md par. 13.7): one ImGui
 // window per open document, docked as a tab in the centre like an asset editor.
@@ -22,7 +22,10 @@ public:
 
 	NqDoc*			Doc					()	{ return m_Doc; }
 	NqCanvas*		Canvas				()	{ return m_Canvas; }
-	void			Focus				()	{ m_Focus = true; }
+	// Asks for the tab across a few frames, not one: a dock layout settles over
+	// several, and a single SetNextWindowFocus landing on an unsettled frame is
+	// simply lost - which is what left an MCP caller looking at the Render tab.
+	void			Focus				()	{ m_Focus = 3; }
 	// close request from the tab's X or CloseAll: dirty documents ask first
 	void			RequestClose		(bool discard);
 	bool			WantsClose			() const { return m_CloseNow; }
@@ -46,10 +49,15 @@ private:
 	// inspector width as a fraction of the body, not pixels: the tab is resized
 	// and rescaled far more often than the split is dragged
 	float			m_SplitFrac;
-	bool			m_Focus;
+	int				m_Focus;		// frames left to keep asking for the tab
 	bool			m_AskClose;			// modal "unsaved changes"
 	bool			m_CloseNow;
 	bool			m_ShowProblems;
+	bool			m_ShowKeys;		// the shortcut list folded into the tab
+public:
+	void			SetShowKeys		(bool on)	{ m_ShowKeys = on; }
+	bool			ShowKeys		() const	{ return m_ShowKeys; }
+private:
 	xr_string		m_Message;			// last save/reload result
 	bool			m_ShowFind;
 	bool			m_FocusFind;
@@ -68,6 +76,7 @@ private:
 	u64			m_ProjectFindFingerprint;
 
 	void			DrawToolbar			();
+	void			DrawKeysPanel		();		// what the keyboard does here, read off HandleKeys
 	void			DrawFindBar			();
 	void			RefreshProjectFind	();
 	void			DrawProjectFind		();
@@ -103,6 +112,8 @@ namespace UIQuestGraph
 	// MCP quest_view: {"path","frame":"all"|"<node>","zoom_level":n,"center":{x,y}}
 	void			McpClose			(LPCSTR raw, xr_string& out);
 	void			McpView				(LPCSTR raw, xr_string& out);
+	// every graph edit the canvas can do, for callers without a mouse
+	void			McpEdit				(LPCSTR raw, xr_string& out);
 	void			McpFind				(LPCSTR raw, xr_string& out);
 	void			McpBookmarks		(LPCSTR raw, xr_string& out);
 	void			McpHistory			(LPCSTR raw, xr_string& out);

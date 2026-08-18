@@ -1040,14 +1040,37 @@ TOOLS = [
         "name": "xfined_quest_view",
         "description": "Open (or focus) the graph tab of a quest and set its view: frame='all' or a node id, "
                        "zoom_level 0..9 (6 = 100%), cx/cy = world centre (cx/cy override 'frame'), "
-                       "slot='enter:0'/'exit:1' opens that action of the framed node in the inspector ('none' clears it). "
+                       "select='<node id>' (or a comma separated list, or 'none') selects nodes - the inspector "
+                       "follows the graph selection, so this is what puts a node in it; "
+                       "slot='enter:0'/'exit:1' opens that action of the selected node in the inspector ('none' clears it). "
+                       "keys='show'/'hide'/'toggle' folds the shortcut list into the tab. "
                        "The bridge waits for deferred frame-all layout before returning when the editor is drawing. "
                        "Then use xfined_screenshot_editor to look at it.",
         "inputSchema": {
             "type": "object",
             "properties": {"path": {"type": "string"}, "frame": {"type": "string"}, "zoom_level": {"type": "integer"},
-                           "cx": {"type": "number"}, "cy": {"type": "number"}, "slot": {"type": "string"}},
+                           "cx": {"type": "number"}, "cy": {"type": "number"}, "slot": {"type": "string"},
+                           "select": {"type": "string"}, "keys": {"type": "string",
+                           "enum": ["show", "hide", "toggle"]}},
             "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_quest_edit",
+        "description": "Every graph edit the canvas offers, without a mouse. op=connect (from+pin+to) | "
+                       "disconnect (from, plus pin/to to name one link; omit them to drop a whole pin or node) | "
+                       "bypass (the node stays put and the chain closes over it - A->B->C becomes A->C) | "
+                       "delete | duplicate | connect_nearest | select_all. 'nodes' (comma separated) picks what "
+                       "the op acts on instead of the current selection. Returns the outline, so the result is "
+                       "readable without a screenshot.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "op": {"type": "string",
+                           "enum": ["connect", "disconnect", "bypass", "delete", "duplicate",
+                                    "connect_nearest", "select_all"]},
+                           "nodes": {"type": "string"}, "from": {"type": "string"},
+                           "pin": {"type": "string"}, "to": {"type": "string"}},
+            "required": ["path", "op"],
         },
     },
     {
@@ -1271,6 +1294,7 @@ CMD_MAP = {
     "xfined_quest_reload": "quest_reload",
     "xfined_quest_layout": "quest_layout",
     "xfined_quest_view": "quest_view",
+    "xfined_quest_edit": "quest_edit",
     "xfined_quest_find": "quest_find",
     "xfined_quest_project_find": "quest_project_find",
     "xfined_quest_references": "quest_references",
@@ -1311,7 +1335,34 @@ def editor_call(cmd: str, extra: dict | None = None) -> dict:
         return {"ok": False, "error": f"editor returned malformed JSON ({e})"}
 
 
+# tool name -> the argument names its schema declares
+TOOL_ARGS = {t["name"]: set((t.get("inputSchema") or {}).get("properties", {})) for t in TOOLS}
+
+
+def unknown_args(name: str, args: dict):
+    """Argument names the tool does not declare, in the order they were passed.
+
+    A name the editor does not read used to travel all the way in and come back
+    "ok" having done nothing, so a misremembered argument looked exactly like a
+    feature that does not work. Caught here because this is the only place that
+    knows what each tool declares.
+    """
+    known = TOOL_ARGS.get(name)
+    if known is None:
+        return []
+    return [k for k in args if k not in known]
+
+
 def tool_result(name: str, args: dict) -> dict:
+    extra = unknown_args(name, args)
+    if extra:
+        known = sorted(TOOL_ARGS[name])
+        return {
+            "ok": False,
+            "error": "%s has no argument %s; it takes %s"
+                     % (name, ", ".join("'%s'" % a for a in extra),
+                        ", ".join(known) if known else "no arguments"),
+        }
     data = editor_call(CMD_MAP[name], args)
     if name == "xfined_quest_view" and data.get("ok") and data.get("pending"):
         deadline = time.monotonic() + 1.0

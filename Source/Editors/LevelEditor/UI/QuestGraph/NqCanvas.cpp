@@ -27,7 +27,9 @@ namespace
 	const float kPinGrabMin		= 12.f;
 	const float kPinGrabMax		= 22.f;
 	const float kPinGrabInside	= 0.7f;		// share of the radius that reaches inwards
-	const float kLinkGrab		= 9.f;		// around a link curve
+	// around a link curve. Matched to kPinGrabMin: a wire is thinner than a pin, so
+	// aiming at one pixel-perfectly is worse, not better.
+	const float kLinkGrab		= 12.f;
 
 	const float kPickerRows	= 12.f;		// rows a search popup shows before it scrolls
 	const float kPickerMinW	= 320.f;
@@ -165,7 +167,7 @@ NqCanvas::NqCanvas(NqDoc* doc) : m_Doc(doc)
 	m_Marquee = false;
 	m_Linking = m_PendingLink = false;
 	m_StatusAt = 0.0;
-	m_HotNode = m_HotPin = -1;
+	m_HotNode = m_HotPin = m_HotLink = -1;
 	m_ChipDragIndex = -1;
 	m_ChipDragging = false;
 	m_WantFrameAll = m_WantFrameSel = m_WantRename = m_WantFocusAction = m_OpenAddAction = false;
@@ -555,6 +557,14 @@ void NqCanvas::ToggleSelected(LPCSTR id)
 	m_Doc->selection.push_back(id);
 }
 
+void NqCanvas::SelectNodes(const xr_vector<xr_string>& ids)
+{
+	m_Doc->selection.clear();
+	m_Doc->sel_slot.clear();
+	for (u32 i = 0; i < ids.size(); ++i)
+		if (!IsSelected(ids[i].c_str())) m_Doc->selection.push_back(ids[i]);
+}
+
 void NqCanvas::SelectAll()
 {
 	m_Doc->selection.clear();
@@ -888,8 +898,11 @@ bool NqCanvas::HitAnyPin(const ImVec2& s, int& node, int& pin) const
 // will pick, so the highlight and the drop can never disagree.
 void NqCanvas::UpdateHot()
 {
-	m_HotNode = m_HotPin = -1;
-	if (!m_Hovered) return;
+	m_HotNode = m_HotPin = m_HotLink = -1;
+	// A menu is a mode: while one is open the cursor is aimed at it, and lighting up
+	// whatever happens to be under it - let alone letting D delete that - is not what
+	// the author is doing.
+	if (!m_Hovered || MenuOpen()) return;
 	const ImVec2 mouse = ImGui::GetMousePos();
 	if (m_Linking)
 	{
@@ -909,6 +922,16 @@ void NqCanvas::UpdateHot()
 		if (p >= 0 && d2 < best) { best = d2; m_HotNode = i; m_HotPin = p; }
 		if (!g.trigger && NearPin(mouse, ToScreen(InputPin(g)), 1.f, d2) && d2 < best) { best = d2; m_HotNode = i; m_HotPin = -1; }
 	}
+	// a pin wins over a link it starts from, and a node body swallows the wires behind it
+	if (m_HotNode < 0 && HitNode(mouse) < 0) m_HotLink = HitLink(mouse);
+}
+
+// True while any popup of this canvas is up. Every shortcut and every hover cue is
+// off for its lifetime: the menu owns the input, and a key that also does something
+// underneath it would fire twice as far as the author can tell.
+bool NqCanvas::MenuOpen() const
+{
+	return ImGui::IsPopupOpen(0, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
 }
 
 bool NqCanvas::HitChip(int node, const ImVec2& s, xr_string& slot, int& index, bool& plus) const
@@ -1073,11 +1096,21 @@ void NqCanvas::DrawLinks(ImDrawList* dl)
 		const float max_y = _max(_max(l.p0.y, l.p1.y), _max(l.p2.y, l.p3.y)) + pad;
 		if (max_x < m_Origin.x || max_y < m_Origin.y || min_x > m_Origin.x + m_Size.x || min_y > m_Origin.y + m_Size.y) continue;
 		bool sel = IsSelected(m_Doc->quest.nodes[l.from].id.c_str()) || IsSelected(m_Doc->quest.nodes[l.to].id.c_str());
-		ImU32 col = sel ? Col(255, 220, 120) : Col(200, 200, 205, 200);
+		const bool hot = ((int)i == m_HotLink);
+		ImU32 col = hot ? Col(255, 255, 255) : sel ? Col(255, 220, 120) : Col(200, 200, 205, 200);
+		// The wire the cursor has claimed says so before anything is clicked: Alt+LMB
+		// and D act on THIS one, and the author gets to see which that is. A halo
+		// under a fatter line reads at every zoom, where a colour change alone does not.
+		if (hot)
+		{
+			dl->AddBezierCubic(l.p0, l.p1, l.p2, l.p3, Col(120, 190, 255, 110), th * 3.5f + 2.f, 24);
+			th *= 1.8f;
+		}
 		dl->AddBezierCubic(l.p0, l.p1, l.p2, l.p3, col, th, 24);
 		// arrow head at the target
-		float a = _max(4.f, 7.f * z);
+		float a = _max(4.f, 7.f * z) * (hot ? 1.35f : 1.f);
 		dl->AddTriangleFilled(l.p3, ImVec2(l.p3.x - a * 0.6f, l.p3.y - a), ImVec2(l.p3.x + a * 0.6f, l.p3.y - a), col);
+		th = _max(1.f, 2.f * z);		// `hot` widened it for this wire only
 	}
 }
 
@@ -1471,13 +1504,9 @@ void NqCanvas::HandleInput()
 		}
 		else
 		{
-			int link = HitLink(mouse);
-			if (link >= 0 && io.KeyAlt)
-			{
-				const SLinkGeom& l = m_Links[link];
-				xr_string err;
-				m_Doc->Disconnect(m_Doc->quest.nodes[l.from].id.c_str(), l.pin.c_str(), m_Doc->quest.nodes[l.to].id.c_str(), err);
-			}
+			// the lit one, not a second hit test: what Alt+LMB removes has to be
+			// what the halo pointed at, including when a node body swallowed the wire
+			if (m_HotLink >= 0 && io.KeyAlt) DeleteHotLink();
 			else
 			{
 				// EndMarquee only ever adds; ctrl is the difference, and it is
@@ -1738,6 +1767,105 @@ void NqCanvas::ConnectNearest()
 		SetStatus(NqUtil::Format("connected %s.%s -> %s", from.c_str(), pin.c_str(), to.c_str()).c_str());
 }
 
+// Cuts the wire the cursor is on. The single path behind Alt+LMB and D, so the two
+// can never disagree about which wire that is.
+void NqCanvas::DeleteHotLink()
+{
+	if (m_HotLink < 0 || m_HotLink >= (int)m_Links.size()) return;
+	const SLinkGeom& l = m_Links[m_HotLink];
+	const xr_string from = m_Doc->quest.nodes[l.from].id;
+	const xr_string to = m_Doc->quest.nodes[l.to].id;
+	const xr_string pin = l.pin;
+	xr_string err;
+	if (m_Doc->Disconnect(from.c_str(), pin.c_str(), to.c_str(), err))
+		SetStatus(NqUtil::Format("removed %s.%s -> %s", from.c_str(), pin.c_str(), to.c_str()).c_str());
+	else if (!err.empty())
+		SetStatus(err.c_str());
+	// the geometry it indexed is about to be rebuilt
+	m_HotLink = -1;
+}
+
+// Alt+D: the node stays where it is and the chain closes over it - A->B->C with B
+// selected becomes A->C. Named after BlueprintAssist's "Disconnect execution on
+// selected node", which is Alt+D there too and also leaves the node in place.
+//
+// One difference on purpose: BA links every leaf input to every leaf output, which
+// suits UE where an exec output holds a single link. An NQ output pin carries a LIST
+// of targets, so crossing 2 inputs with 2 outputs would invent four edges where the
+// author asked to close two chains. Pairs go in order instead, and whatever has no
+// counterpart simply goes - a node wired on one side only just loses that side.
+void NqCanvas::BypassSelected()
+{
+	if (m_Doc->selection.empty()) { SetStatus("select a node first"); return; }
+
+	struct SBridge { xr_string from, pin, to; };
+	xr_vector<SBridge> bridges;			// edges to create
+	xr_vector<SBridge> cuts;			// edges to remove
+	int refused = 0;
+
+	for (u32 s = 0; s < m_Doc->selection.size(); ++s)
+	{
+		const xr_string& mid = m_Doc->selection[s];
+		const SNqNode* n = m_Doc->quest.FindNode(mid.c_str());
+		if (!n) continue;
+
+		// incoming, in graph order; outgoing, in the order the file declares the pins
+		xr_vector<SBridge> in, out;
+		for (u32 i = 0; i < m_Doc->quest.nodes.size(); ++i)
+		{
+			const SNqNode& other = m_Doc->quest.nodes[i];
+			if (other.id == mid) continue;
+			for (u32 p = 0; p < other.out.size(); ++p)
+				for (u32 t = 0; t < other.out[p].second.size(); ++t)
+					if (other.out[p].second[t] == mid)
+					{
+						SBridge e; e.from = other.id; e.pin = other.out[p].first; e.to = mid;
+						in.push_back(e);
+					}
+		}
+		for (u32 p = 0; p < n->out.size(); ++p)
+			for (u32 t = 0; t < n->out[p].second.size(); ++t)
+			{
+				SBridge e; e.from = mid; e.pin = n->out[p].first; e.to = n->out[p].second[t];
+				out.push_back(e);
+			}
+		if (in.empty() && out.empty()) continue;
+
+		cuts.insert(cuts.end(), in.begin(), in.end());
+		cuts.insert(cuts.end(), out.begin(), out.end());
+
+		const u32 pairs = _min(in.size(), out.size());
+		for (u32 k = 0; k < pairs; ++k)
+		{
+			// the same gate a hand-drawn edge passes (E007): a bridge into a trigger
+			// is not an edge the author could have made either
+			xr_string why;
+			if (!CanLink(in[k].from.c_str(), out[k].to.c_str(), why)) { ++refused; continue; }
+			SBridge e; e.from = in[k].from; e.pin = in[k].pin; e.to = out[k].to;
+			bridges.push_back(e);
+		}
+	}
+
+	if (cuts.empty()) { SetStatus("nothing was connected to the selection"); return; }
+
+	// one undo entry: Connect/Disconnect each push their own, and a rewiring the
+	// author asked for once should not take eight presses of Ctrl+Z to take back
+	m_Doc->Edit([&](SNqQuest& q)
+	{
+		for (u32 i = 0; i < cuts.size(); ++i)
+			if (SNqNode* f = q.FindNode(cuts[i].from.c_str())) f->Disconnect(cuts[i].pin.c_str(), cuts[i].to.c_str());
+		for (u32 i = 0; i < bridges.size(); ++i)
+			if (SNqNode* f = q.FindNode(bridges[i].from.c_str())) f->Connect(bridges[i].pin.c_str(), bridges[i].to.c_str());
+	});
+
+	if (refused)
+		SetStatus(NqUtil::Format("bypassed: %d link(s) bridged, %d could not be", (int)bridges.size(), refused).c_str());
+	else if (bridges.empty())
+		SetStatus("bypassed: the selection was wired on one side only, those links are gone");
+	else
+		SetStatus(NqUtil::Format("bypassed: %d link(s) bridged", (int)bridges.size()).c_str());
+}
+
 void NqCanvas::HandleKeys()
 {
 	if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) return;
@@ -1745,6 +1873,9 @@ void NqCanvas::HandleKeys()
 	// of the tab being worked in - the inspector next to it has its own lists
 	if (!m_Hovered && !ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) return;
 	if (ImGui::GetIO().WantTextInput) return;		// a text field owns the keyboard
+	// A menu is a mode. Its own items answer the keyboard while it is up, and a
+	// canvas shortcut firing underneath it acts on something the author cannot see.
+	if (MenuOpen()) return;
 	// the same keys are bound globally to the scene, and that layer runs from the
 	// window proc before this one: told nothing, it copies an empty scene selection
 	// and swallows the key-up on its way
@@ -1763,6 +1894,13 @@ void NqCanvas::HandleKeys()
 	// IsAnyItemActive on top of the WantTextInput gate above: a popup filter box
 	// (and the canvas button held down mid-drag) keeps Q to itself
 	if (ImGui::IsKeyPressed(ImGuiKey_Q, once) && !io.KeyCtrl && !io.KeyAlt && !ImGui::IsAnyItemActive()) ConnectNearest();
+	// D cuts the lit wire. No click, so nothing has to be aimed at twice: what the
+	// halo says is under the cursor is exactly what goes.
+	if (ImGui::IsKeyPressed(ImGuiKey_D, once) && !io.KeyCtrl && !ImGui::IsAnyItemActive())
+	{
+		if (io.KeyAlt)	BypassSelected();
+		else			DeleteHotLink();
+	}
 	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, once))		SelectAll();
 	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, once))		CopySelection();
 	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, once))		PasteClipboard();
