@@ -14,6 +14,10 @@ public:
 	
 private:
 	static xr_vector<xr_string>*List;
+	static xr_vector<xr_string> VisibleList;
+	static xrCriticalSection ListGuard;
+	static size_t CachedSourceCount;
+	static string_path CachedFilter;
 	static xr_vector<xr_string>* GetList();
 	static bool bAutoScroll;
 	static string_path m_Filter;

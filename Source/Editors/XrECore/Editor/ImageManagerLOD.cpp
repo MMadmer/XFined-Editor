@@ -111,7 +111,11 @@ BOOL GetPointColor(SPickQuery::SResult* R, u32& alpha, u32& color)
 {
     CSurface* surf			= R->e_mesh->GetSurfaceByFaceID(R->tag); VERIFY(surf);
     Shader_xrLC* c_sh		= EDevice->ShaderXRLC.Get(surf->_ShaderXRLCName());
-    if (!c_sh->flags.bRendering) return FALSE;
+    if (!c_sh || !c_sh->flags.bRendering) return FALSE;
+    if (!surf->m_ImageData || !surf->m_ImageData->w || !surf->m_ImageData->h || surf->m_ImageData->layers.empty())
+        return FALSE;
+    if (surf->m_ImageData->layers.back().size() < size_t(surf->m_ImageData->w) * surf->m_ImageData->h)
+        return FALSE;
     const Fvector2*			cuv[3];
     R->e_mesh->GetFaceTC	(R->tag,cuv);
 

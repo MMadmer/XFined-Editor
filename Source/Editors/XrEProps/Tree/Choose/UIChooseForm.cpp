@@ -140,15 +140,15 @@ void UIChooseForm::Draw()
                 }
                 //   ImGui::Image
                 ImGui::Separator();
-                if (m_SelectedItem == nullptr)
+                if (!m_SelectedItem)
                 {
                     ImGui::Text("Name:");
-                    ImGui::Text("Hit:");
+                    ImGui::Text("Hint:");
                 }
                 else
                 {
                     ImGui::Text("Name:%s", m_SelectedItem->Object->name.c_str());
-                    ImGui::Text("Hit:%s", m_SelectedItem->Object->hint.c_str());
+                    ImGui::Text("Hint:%s", m_SelectedItem->Object->hint.c_str());
                 }
                 ImGui::Separator();
             }

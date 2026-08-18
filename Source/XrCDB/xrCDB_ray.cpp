@@ -357,12 +357,23 @@ public:
 
 void	COLLIDER::ray_query	(const MODEL *m_def, const Fvector& r_start,  const Fvector& r_dir, float r_range)
 {
+	r_clear();
+
+	if (!m_def)
+		return;
+
 	m_def->syncronize		();
+	if (!m_def->tree)
+		return;
 
 	// Get nodes
 	const AABBNoLeafTree* T = (const AABBNoLeafTree*)m_def->tree->GetTree();
+	if (!T)
+		return;
+
 	const AABBNoLeafNode* N = T->GetNodes();
-	r_clear					();
+	if (!N)
+		return;
 	
 	if (CPU::ID.feature&_CPU_FEATURE_SSE)	{
 		// SSE
