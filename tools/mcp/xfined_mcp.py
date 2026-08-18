@@ -1026,7 +1026,8 @@ TOOLS = [
     },
     {
         "name": "xfined_quest_layout",
-        "description": "Deterministic auto layout of the graph (layers by depth from the triggers, top-down). "
+        "description": "Deterministic pin-aware top-down graph layout. Children follow the visible canvas pin order; "
+                       "complete nested branch bounds stay apart, and complete trigger trees use a larger gap. "
                        "all=false places only nodes without pos. Returns the positions; the document stays dirty.",
         "inputSchema": {
             "type": "object",

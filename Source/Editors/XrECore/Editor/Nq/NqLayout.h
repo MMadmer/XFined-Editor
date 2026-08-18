@@ -1,8 +1,8 @@
 #pragma once
 
 // NQ - deterministic top-down auto layout (docs/NQ_ARCHITECTURE.md par. 13.8):
-// layers = BFS depth from the triggers, order inside a layer = barycenter of
-// the parents, spacing from a node size estimate. Same graph -> same layout.
+// a pin-aware spanning forest keeps complete branch bounds apart, then packs
+// complete trigger trees with a larger gap. Same graph -> same layout.
 
 #include "NqAsset.h"
 
@@ -13,7 +13,8 @@ namespace NqLayout
 	const float kNodeHeight		= 96.f;		// body without chip strips
 	const float kChipStrip		= 26.f;		// one on_enter / on_exit strip
 	const float kTriggerHeight	= 56.f;
-	const float kGapX			= 48.f;
+	const float kGapX			= 64.f;
+	const float kTreeGapX		= 160.f;
 	const float kGapY			= 72.f;
 	const float kGrid			= 16.f;
 	// world coordinates are bounded: a hand-written or corrupt .nqasset can carry
