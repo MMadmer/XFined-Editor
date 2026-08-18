@@ -1,9 +1,9 @@
 #pragma once
 
-// Unreal-style World Outliner: the whole scene as one tree, grouped by object
-// tool class. Unlike UIObjectList (flat, current tool only) this panel shows
-// every class at once and keeps its selection in sync with the viewport both
-// ways - rows read Selected() live, clicks drive the scene selection.
+// Unreal-style World Outliner: the whole scene grouped by object tool class or
+// shown as a view-only owner hierarchy. Unlike UIObjectList (flat, current tool
+// only) this panel shows every class at once and keeps its selection in sync
+// with the viewport both ways - rows read Selected() live, clicks drive it.
 //
 // The scene stores objects in xr_list, so rows cannot be indexed directly.
 // Per-group pointer vectors are cached and rebuilt only when the scene really
@@ -45,6 +45,30 @@ private:
 		xr_string					name;		// tool ClassName()
 		xr_vector<CCustomObject*>	objects;	// the scene list, flattened
 		xr_vector<int>				shown;		// indices into objects, filter result
+		xr_vector<int>				hierarchy;	// parallel object-to-node lookup
+	};
+
+	struct SHierarchyNode
+	{
+		CCustomObject*				object;
+		int						group;
+		int						parent;
+		xr_vector<int>				children;
+		bool						direct;
+		bool						included;
+		bool						expanded;
+	};
+
+	struct SHierarchyRow
+	{
+		int						node;
+		int						depth;
+	};
+
+	struct SHierarchyIdentity
+	{
+		ObjClassID					cls;
+		shared_str					name;
 	};
 
 	static UIWorldOutliner*			Form;
@@ -54,6 +78,14 @@ private:
 	ObjClassID						m_TargetClass;	// LTools target the cache was built for
 	int								m_TotalObjects;
 	bool							m_Dirty;
+	xr_vector<SHierarchyNode>		m_Hierarchy;
+	xr_vector<int>					m_HierarchyRoots;
+	xr_vector<SHierarchyRow>		m_HierarchyRows;
+	std::map<xr_string, SHierarchyIdentity> m_HierarchyExpanded;
+	bool							m_HierarchyView;
+	bool							m_HierarchyDirty;
+	bool							m_HierarchyRowsDirty;
+	int								m_HierarchySort;
 
 	// filter state the `shown` lists were built with
 	xr_string						m_FilterApplied;
@@ -81,9 +113,10 @@ private:
 	// the funnel next to the search box: object types switched off by hand
 	xr_vector<ObjClassID>			m_HiddenClasses;
 
-	// shift-range anchor, the last plainly clicked row
+	// Flat and hierarchy ranges keep independent stable identities.
 	ObjClassID						m_AnchorClass;
 	shared_str						m_AnchorName;
+	SHierarchyIdentity				m_HierarchyAnchor;
 
 	// auto-scroll: a selection change that did NOT come from this panel brings
 	// the last selected row into view - last in scene order, since nothing
@@ -110,11 +143,26 @@ private:
 	void			ParseFilter			();
 	bool			NameMatches			(LPCSTR name) const;
 	bool			ClassHidden			(ObjClassID cls) const;
+	bool			AnyTypeHidden		() const;
 	// the funnel popup: which object types the tree shows
 	void			DrawFilterMenu		();
 	bool			Filtering			() const { return !m_Terms.empty() || m_SelectedOnly || m_Visibility; }
+	bool			HierarchyFiltering	() const { return Filtering() || AnyTypeHidden(); }
 	void			DrawGroup			(SGroup& g);
-	void			DrawRow				(SGroup& g, int row, CCustomObject* obj);
+	void			DrawFlatRow			(SGroup& g, int row, CCustomObject* obj);
+	void			DrawHierarchy		();
+	void			DrawHierarchyRow	(int row, const SHierarchyRow& item);
+	void			DrawObjectContext	(SGroup& g, CCustomObject* obj);
+	void			HandleRowSelection	(SGroup& g, int row, CCustomObject* obj);
+	void			HandleHierarchySelection(int row, CCustomObject* obj);
+	void			BuildHierarchy		();
+	void			InvalidateHierarchy	();
+	void			ApplyHierarchyFilter();
+	void			BuildHierarchyRows	();
+	void			SetHierarchyExpanded(int node, bool expanded);
+	void			RevealHierarchyPath	(CCustomObject* obj);
+	void			UpdateHierarchyIdentity(CCustomObject* obj, LPCSTR new_name);
+	static xr_string HierarchyIdentityKey(ObjClassID cls, LPCSTR name);
 	// Unreal's SListView::ScrollIntoView rule: a row already on screen is left
 	// alone, one off screen is pulled to the NEAREST edge. Never recentres -
 	// that is what makes clicking a visible row feel like the list ran away.

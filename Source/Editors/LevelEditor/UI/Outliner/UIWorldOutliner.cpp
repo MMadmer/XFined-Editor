@@ -11,6 +11,10 @@ UIWorldOutliner::UIWorldOutliner()
 	m_TargetClass			= OBJCLASS_DUMMY;
 	m_TotalObjects			= 0;
 	m_Dirty					= true;
+	m_HierarchyView			= false;
+	m_HierarchyDirty		= true;
+	m_HierarchyRowsDirty	= true;
+	m_HierarchySort			= -1;
 	m_SelectedOnly			= false;
 	m_SelectedOnlyApplied	= false;
 	m_Visibility				= 0;
@@ -18,6 +22,7 @@ UIWorldOutliner::UIWorldOutliner()
 	m_Sort						= 0;
 	m_SortApplied				= 0;
 	m_AnchorClass			= OBJCLASS_DUMMY;
+	m_HierarchyAnchor.cls	= OBJCLASS_DUMMY;
 	m_SelSignature			= 0;
 	m_ScrollTarget			= nullptr;
 	m_SkipNextScroll		= false;
@@ -55,7 +60,11 @@ void UIWorldOutliner::Update()
 
 void UIWorldOutliner::Refresh()
 {
-	if (Form) Form->m_Dirty = true;
+	if (Form)
+	{
+		Form->m_Dirty = true;
+		Form->InvalidateHierarchy();
+	}
 }
 
 //------------------------------------------------------------------------------
@@ -78,6 +87,7 @@ u32 UIWorldOutliner::SceneSignature()
 
 void UIWorldOutliner::Rebuild()
 {
+	InvalidateHierarchy();
 	// collect the qualifying tools first, so the groups can be sorted and then
 	// filled in place - no vector-of-vectors copying
 	xr_vector<ESceneToolBase*> tools;
@@ -114,8 +124,260 @@ void UIWorldOutliner::Rebuild()
 	m_TargetClass	= LTools->CurrentClassID();
 	m_Dirty			= false;
 	// the anchor survives a rebuild on purpose - a plain click switches the
-	// active target, which rebuilds right away; DrawRow range-checks it
+	// active target, which rebuilds right away; DrawFlatRow range-checks it
 	ApplyFilter		();
+}
+
+void UIWorldOutliner::InvalidateHierarchy()
+{
+	m_Hierarchy.clear();
+	m_HierarchyRoots.clear();
+	m_HierarchyRows.clear();
+	m_HierarchyDirty = true;
+	m_HierarchyRowsDirty = true;
+	m_HierarchySort = -1;
+}
+
+xr_string UIWorldOutliner::HierarchyIdentityKey(ObjClassID cls, LPCSTR name)
+{
+	xr_string key;
+	key.sprintf("%d:%s", int(cls), name);
+	return key;
+}
+
+void UIWorldOutliner::BuildHierarchy()
+{
+	std::map<CCustomObject*, int> by_object;
+	std::map<xr_string, int> by_identity;
+	InvalidateHierarchy();
+
+	for (int group = 0; group < int(m_Groups.size()); ++group)
+	{
+		SGroup& g = m_Groups[group];
+		g.hierarchy.assign(g.objects.size(), -1);
+		for (int object_index = 0; object_index < int(g.objects.size()); ++object_index)
+		{
+			CCustomObject* object = g.objects[object_index];
+			const auto found = by_object.find(object);
+			if (found != by_object.end())
+			{
+				g.hierarchy[object_index] = found->second;
+				continue;
+			}
+
+			SHierarchyNode node = {};
+			node.object = object;
+			node.group = group;
+			node.parent = -1;
+			const int node_index = int(m_Hierarchy.size());
+			m_Hierarchy.push_back(node);
+			by_object[object] = node_index;
+			by_identity.emplace(HierarchyIdentityKey(object->FClassID, object->GetName()), node_index);
+			g.hierarchy[object_index] = node_index;
+		}
+	}
+
+	for (int node_index = 0; node_index < int(m_Hierarchy.size()); ++node_index)
+	{
+		SHierarchyNode& node = m_Hierarchy[node_index];
+		if (CCustomObject* owner = node.object->GetOwner())
+		{
+			const auto found = by_object.find(owner);
+			if (found != by_object.end() && found->second != node_index)
+				node.parent = found->second;
+		}
+	}
+
+	// Corrupt owner chains must degrade to roots instead of hanging the UI.
+	xr_vector<u8> state(m_Hierarchy.size(), 0);
+	for (int start = 0; start < int(m_Hierarchy.size()); ++start)
+	{
+		if (state[start]) continue;
+
+		xr_vector<int> path;
+		int current = start;
+		while (current >= 0 && !state[current])
+		{
+			state[current] = 1;
+			path.push_back(current);
+			current = m_Hierarchy[current].parent;
+		}
+
+		if (current >= 0 && state[current] == 1)
+		{
+			int cycle_begin = 0;
+			while (path[cycle_begin] != current) ++cycle_begin;
+			int break_node = path[cycle_begin];
+			for (int i = cycle_begin + 1; i < int(path.size()); ++i)
+				break_node = _min(break_node, path[i]);
+			m_Hierarchy[break_node].parent = -1;
+		}
+
+		for (int node_index : path)
+			state[node_index] = 2;
+	}
+
+	for (int node_index = 0; node_index < int(m_Hierarchy.size()); ++node_index)
+	{
+		const int parent = m_Hierarchy[node_index].parent;
+		if (parent >= 0)
+			m_Hierarchy[parent].children.push_back(node_index);
+		else
+			m_HierarchyRoots.push_back(node_index);
+	}
+
+	for (auto expanded = m_HierarchyExpanded.begin(); expanded != m_HierarchyExpanded.end(); )
+	{
+		const auto object = by_identity.find(expanded->first);
+		if (object == by_identity.end())
+		{
+			expanded = m_HierarchyExpanded.erase(expanded);
+			continue;
+		}
+		m_Hierarchy[object->second].expanded = true;
+		++expanded;
+	}
+
+	m_HierarchyRowsDirty = true;
+	m_HierarchyDirty = false;
+}
+
+void UIWorldOutliner::ApplyHierarchyFilter()
+{
+	if (m_HierarchyDirty) BuildHierarchy();
+	for (SHierarchyNode& node : m_Hierarchy)
+	{
+		node.direct = false;
+		node.included = false;
+	}
+
+	for (int group = 0; group < int(m_Groups.size()); ++group)
+	{
+		SGroup& g = m_Groups[group];
+		if (ClassHidden(g.cls)) continue;
+		for (int row = 0; row < int(g.shown.size()); ++row)
+		{
+			const int object_index = g.shown[row];
+			const int node_index = g.hierarchy[object_index];
+			if (node_index < 0 || m_Hierarchy[node_index].group != group) continue;
+			SHierarchyNode& node = m_Hierarchy[node_index];
+			node.direct = true;
+			node.included = true;
+		}
+	}
+
+	for (const SHierarchyNode& match : m_Hierarchy)
+	{
+		if (!match.direct) continue;
+		int parent = match.parent;
+		while (parent >= 0)
+		{
+			if (m_Hierarchy[parent].included) break;
+			m_Hierarchy[parent].included = true;
+			parent = m_Hierarchy[parent].parent;
+		}
+	}
+
+	if (m_HierarchySort != m_Sort)
+	{
+		const auto less = [this](int lhs, int rhs)
+		{
+			if (m_Sort)
+			{
+				const int cmp = NaturalCompare(m_Hierarchy[lhs].object->GetName(),
+					m_Hierarchy[rhs].object->GetName());
+				if (cmp) return 1 == m_Sort ? cmp < 0 : cmp > 0;
+			}
+			return lhs < rhs;
+		};
+		std::sort(m_HierarchyRoots.begin(), m_HierarchyRoots.end(), less);
+		for (SHierarchyNode& node : m_Hierarchy)
+			std::sort(node.children.begin(), node.children.end(), less);
+		m_HierarchySort = m_Sort;
+	}
+
+	m_HierarchyRowsDirty = true;
+	BuildHierarchyRows();
+}
+
+void UIWorldOutliner::SetHierarchyExpanded(int node_index, bool expanded)
+{
+	SHierarchyNode& node = m_Hierarchy[node_index];
+	CCustomObject* obj = node.object;
+	const xr_string key = HierarchyIdentityKey(obj->FClassID, obj->GetName());
+	node.expanded = expanded;
+	if (expanded)
+	{
+		SHierarchyIdentity identity;
+		identity.cls = obj->FClassID;
+		identity.name = obj->GetName();
+		m_HierarchyExpanded[key] = identity;
+	}
+	else
+		m_HierarchyExpanded.erase(key);
+	m_HierarchyRowsDirty = true;
+}
+
+void UIWorldOutliner::RevealHierarchyPath(CCustomObject* obj)
+{
+	int node_index = -1;
+	for (int i = 0; i < int(m_Hierarchy.size()); ++i)
+		if (m_Hierarchy[i].object == obj) { node_index = i; break; }
+	if (node_index < 0 || !m_Hierarchy[node_index].direct) return;
+
+	for (int parent = m_Hierarchy[node_index].parent; parent >= 0;
+		parent = m_Hierarchy[parent].parent)
+		SetHierarchyExpanded(parent, true);
+}
+
+void UIWorldOutliner::UpdateHierarchyIdentity(CCustomObject* obj, LPCSTR new_name)
+{
+	const xr_string old_key = HierarchyIdentityKey(obj->FClassID, obj->GetName());
+	const auto expanded = m_HierarchyExpanded.find(old_key);
+	if (expanded != m_HierarchyExpanded.end())
+	{
+		SHierarchyIdentity identity = expanded->second;
+		m_HierarchyExpanded.erase(expanded);
+		identity.name = new_name;
+		m_HierarchyExpanded[HierarchyIdentityKey(identity.cls, new_name)] = identity;
+	}
+	if (m_HierarchyAnchor.cls == obj->FClassID && m_HierarchyAnchor.name.equal(obj->GetName()))
+		m_HierarchyAnchor.name = new_name;
+}
+
+void UIWorldOutliner::BuildHierarchyRows()
+{
+	m_HierarchyRows.clear();
+	const bool filtering = HierarchyFiltering();
+
+	struct SPendingRow
+	{
+		int node;
+		int depth;
+	};
+	xr_vector<SPendingRow> pending;
+	for (int i = int(m_HierarchyRoots.size()) - 1; i >= 0; --i)
+		pending.push_back({ m_HierarchyRoots[i], 0 });
+
+	while (!pending.empty())
+	{
+		const SPendingRow item = pending.back();
+		pending.pop_back();
+		const SHierarchyNode& node = m_Hierarchy[item.node];
+		if (!node.included) continue;
+		m_HierarchyRows.push_back({ item.node, item.depth });
+
+		bool has_included_children = false;
+		for (int child : node.children)
+			if (m_Hierarchy[child].included) { has_included_children = true; break; }
+		if (!has_included_children || (!filtering && !node.expanded)) continue;
+
+		for (int i = int(node.children.size()) - 1; i >= 0; --i)
+			if (m_Hierarchy[node.children[i]].included)
+				pending.push_back({ node.children[i], item.depth + 1 });
+	}
+
+	m_HierarchyRowsDirty = false;
 }
 
 // Unreal's search box splits on spaces and ANDs the results, treats a leading
@@ -181,6 +443,13 @@ bool UIWorldOutliner::ClassHidden(ObjClassID cls) const
 {
 	for (u32 i = 0; i < m_HiddenClasses.size(); ++i)
 		if (m_HiddenClasses[i] == cls) return true;
+	return false;
+}
+
+bool UIWorldOutliner::AnyTypeHidden() const
+{
+	for (const SGroup& group : m_Groups)
+		if (ClassHidden(group.cls)) return true;
 	return false;
 }
 
@@ -253,6 +522,10 @@ void UIWorldOutliner::ApplyFilter()
 	m_SelectedOnlyApplied	= m_SelectedOnly;
 	m_VisibilityApplied		= m_Visibility;
 	m_SortApplied				= m_Sort;
+	if (m_HierarchyView)
+		ApplyHierarchyFilter();
+	else
+		m_HierarchyRowsDirty = true;
 }
 
 int UIWorldOutliner::ScanSelection(u32& sig, CCustomObject*& last) const
@@ -286,6 +559,8 @@ bool UIWorldOutliner::McpSetFilter(LPCSTR text, int selected_only, LPCSTR types,
 {
 	Show();									// filtering a closed panel helps nobody
 	if (!Form)	{ err = "outliner unavailable"; return false; }
+	if (!Scene)	{ err = "scene unavailable"; return false; }
+	if (Form->m_Dirty) Form->Rebuild();
 
 	int next_visibility = Form->m_Visibility;
 	if (visibility)
@@ -492,6 +767,7 @@ bool UIWorldOutliner::ApplyRename()
 	}
 
 	if (m_AnchorName.equal(m_RenameOriginal)) m_AnchorName = low;
+	UpdateHierarchyIdentity(obj, low);
 	obj->SetName(low);
 	Scene->UndoSave();
 	ExecCommand(COMMAND_UPDATE_PROPERTIES);
@@ -502,69 +778,116 @@ bool UIWorldOutliner::ApplyRename()
 //------------------------------------------------------------------------------
 // ui
 //------------------------------------------------------------------------------
-void UIWorldOutliner::DrawRow(SGroup& g, int row, CCustomObject* obj)
+void UIWorldOutliner::HandleRowSelection(SGroup& g, int row, CCustomObject* obj)
 {
-	ImGui::TableNextRow();
-	ImGui::PushID(row);
-
-	// visibility toggle; the ##id keeps the widget id stable across the label flip
-	ImGui::TableSetColumnIndex(0);
-	const bool vis = !!obj->Visible();
-	if (ImGui::Button(vis ? "O##vis" : "-##vis", ImVec2(kEyeWidth, 0.f)))
+	const ImGuiIO& io = ImGui::GetIO();
+	if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 	{
-		obj->Show(vis ? FALSE : TRUE);
-		UI->RedrawScene(true);
+		PickObject(obj);
+		FocusObject(obj);
+		m_AnchorClass = g.cls; m_AnchorName = obj->GetName();
 	}
-	if (ImGui::IsItemHovered()) ImGui::SetTooltip(vis ? "Visible" : "Hidden");
-
-	// selection is read from the scene every frame, so viewport picks show here
-	ImGui::TableSetColumnIndex(1);
-	const bool sel = !!obj->Selected();
-	if (ImGui::Selectable(obj->GetName(), sel,
-		ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_SpanAllColumns,
-		ImVec2(0.f, ImGui::GetFrameHeight())))
+	else if (io.KeyShift && row >= 0 && m_AnchorClass == g.cls && m_AnchorName.size())
 	{
-		const ImGuiIO& io = ImGui::GetIO();
-		if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+		int anchor = -1;
+		for (int i = 0; i < int(g.shown.size()); ++i)
+			if (m_AnchorName.equal(g.objects[g.shown[i]]->GetName())) { anchor = i; break; }
+		if (anchor >= 0)
 		{
-			PickObject(obj);
-			FocusObject(obj);
-			m_AnchorClass = g.cls; m_AnchorName = obj->GetName();
-		}
-		else if (io.KeyShift && m_AnchorClass == g.cls && m_AnchorName.size())
-		{
-			int anchor = -1;
-			for (int i = 0; i < int(g.shown.size()); ++i)
-				if (m_AnchorName.equal(g.objects[g.shown[i]]->GetName())) { anchor = i; break; }
-			if (anchor >= 0)
-			{
-				const int a = _min(anchor, row);
-				const int b = _max(anchor, row);
-				for (int i = a; i <= b; ++i)
-					g.objects[g.shown[i]]->Select(TRUE);
-				m_SkipNextScroll = true;
-				UI->RedrawScene(true);
-			}
-			else
-			{
-				PickObject(obj);
-				m_AnchorName = obj->GetName();
-			}
-		}
-		else if (io.KeyCtrl)
-		{
-			obj->Select(sel ? FALSE : TRUE);
-			m_AnchorClass = g.cls; m_AnchorName = obj->GetName();
+			const int a = _min(anchor, row);
+			const int b = _max(anchor, row);
+			for (int i = a; i <= b; ++i)
+				g.objects[g.shown[i]]->Select(TRUE);
 			m_SkipNextScroll = true;
 			UI->RedrawScene(true);
 		}
 		else
 		{
 			PickObject(obj);
-			m_AnchorClass = g.cls; m_AnchorName = obj->GetName();
+			m_AnchorName = obj->GetName();
 		}
 	}
+	else if (io.KeyCtrl)
+	{
+		obj->Select(obj->Selected() ? FALSE : TRUE);
+		m_AnchorClass = g.cls; m_AnchorName = obj->GetName();
+		m_SkipNextScroll = true;
+		UI->RedrawScene(true);
+	}
+	else
+	{
+		PickObject(obj);
+		m_AnchorClass = g.cls; m_AnchorName = obj->GetName();
+	}
+}
 
+void UIWorldOutliner::HandleHierarchySelection(int row, CCustomObject* obj)
+{
+	const auto set_anchor = [this](CCustomObject* anchor)
+	{
+		m_HierarchyAnchor.cls = anchor->FClassID;
+		m_HierarchyAnchor.name = anchor->GetName();
+	};
+	const ImGuiIO& io = ImGui::GetIO();
+	if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+	{
+		PickObject(obj);
+		FocusObject(obj);
+		set_anchor(obj);
+	}
+	else if (io.KeyShift && m_HierarchyAnchor.name.size())
+	{
+		int anchor_row = -1;
+		for (int i = 0; i < int(m_HierarchyRows.size()); ++i)
+		{
+			CCustomObject* candidate = m_Hierarchy[m_HierarchyRows[i].node].object;
+			if (candidate->FClassID == m_HierarchyAnchor.cls &&
+				m_HierarchyAnchor.name.equal(candidate->GetName()))
+			{
+				anchor_row = i;
+				break;
+			}
+		}
+		if (anchor_row >= 0)
+		{
+			const int first = _min(anchor_row, row);
+			const int last = _max(anchor_row, row);
+			Scene->SelectObjects(false, OBJCLASS_DUMMY);
+			// Suppress group cascades without bypassing other object-specific selection contracts.
+			for (int i = first; i <= last; ++i)
+			{
+				CCustomObject* candidate = m_Hierarchy[m_HierarchyRows[i].node].object;
+				if (!candidate->Visible()) continue;
+				if (candidate->FClassID == OBJCLASS_GROUP)
+					candidate->CCustomObject::Select(TRUE);
+				else
+					candidate->Select(TRUE);
+			}
+			m_SkipNextScroll = true;
+			UI->RedrawScene(true);
+		}
+		else
+		{
+			PickObject(obj);
+			set_anchor(obj);
+		}
+	}
+	else if (io.KeyCtrl)
+	{
+		obj->Select(obj->Selected() ? FALSE : TRUE);
+		set_anchor(obj);
+		m_SkipNextScroll = true;
+		UI->RedrawScene(true);
+	}
+	else
+	{
+		PickObject(obj);
+		set_anchor(obj);
+	}
+}
+
+void UIWorldOutliner::DrawObjectContext(SGroup& g, CCustomObject* obj)
+{
 	if (ImGui::BeginPopupContextItem("ctx"))
 	{
 		const bool cur_vis = !!obj->Visible();
@@ -606,6 +929,30 @@ void UIWorldOutliner::DrawRow(SGroup& g, int row, CCustomObject* obj)
 		ImGui::EndDisabled();
 		ImGui::EndPopup();
 	}
+}
+
+void UIWorldOutliner::DrawFlatRow(SGroup& g, int row, CCustomObject* obj)
+{
+	ImGui::TableNextRow();
+	ImGui::PushID(obj);
+
+	ImGui::TableSetColumnIndex(0);
+	const bool visible = !!obj->Visible();
+	if (ImGui::Button(visible ? "O##vis" : "-##vis", ImVec2(kEyeWidth, 0.f)))
+	{
+		obj->Show(visible ? FALSE : TRUE);
+		UI->RedrawScene(true);
+	}
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip(visible ? "Visible" : "Hidden");
+
+	ImGui::TableSetColumnIndex(1);
+	string512 row_label;
+	xr_sprintf(row_label, "%s###row", obj->GetName());
+	if (ImGui::Selectable(row_label, !!obj->Selected(),
+		ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_SpanAllColumns,
+		ImVec2(0.f, ImGui::GetFrameHeight())))
+		HandleRowSelection(g, row, obj);
+	DrawObjectContext(g, obj);
 
 	ImGui::TableSetColumnIndex(2);
 	ImGui::TextUnformatted(g.name.c_str());
@@ -671,12 +1018,101 @@ void UIWorldOutliner::DrawGroup(SGroup& g)
 		clipper.Begin(int(g.shown.size()), row_h);
 		while (clipper.Step())
 			for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
-				DrawRow(g, row, g.objects[g.shown[row]]);
+				DrawFlatRow(g, row, g.objects[g.shown[row]]);
 		ImGui::TreePop();
 
 		if (target_row >= 0) ScrollRowIntoView(rows_top + target_row * row_h, row_h);
 	}
 	ImGui::PopID();
+}
+
+void UIWorldOutliner::DrawHierarchyRow(int row, const SHierarchyRow& item)
+{
+	SHierarchyNode& node = m_Hierarchy[item.node];
+	SGroup& group = m_Groups[node.group];
+	CCustomObject* obj = node.object;
+	bool has_included_children = false;
+	for (int child : node.children)
+		if (m_Hierarchy[child].included) { has_included_children = true; break; }
+
+	ImGui::TableNextRow();
+	ImGui::PushID(obj);
+	ImGui::TableSetColumnIndex(0);
+	const bool visible = !!obj->Visible();
+	if (ImGui::Button(visible ? "O##vis" : "-##vis", ImVec2(kEyeWidth, 0.f)))
+	{
+		obj->Show(visible ? FALSE : TRUE);
+		UI->RedrawScene(true);
+	}
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip(visible ? "Visible" : "Hidden");
+
+	ImGui::TableSetColumnIndex(1);
+	const int visible_depth = _min(item.depth, 12);
+	ImGui::SetCursorPosX(ImGui::GetCursorPosX() + visible_depth * ImGui::GetTreeNodeToLabelSpacing());
+	if (has_included_children)
+	{
+		const bool filtering = HierarchyFiltering();
+		const bool expanded = filtering || node.expanded;
+		ImGui::BeginDisabled(filtering);
+		if (ImGui::ArrowButton("##expand", expanded ? ImGuiDir_Down : ImGuiDir_Right))
+			SetHierarchyExpanded(item.node, !expanded);
+		ImGui::EndDisabled();
+	}
+	else
+	{
+		ImGui::Dummy(ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()));
+	}
+	ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
+
+	if (!node.direct) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+	string512 row_label;
+	xr_sprintf(row_label, "%s###row", obj->GetName());
+	ImGuiSelectableFlags row_flags = ImGuiSelectableFlags_AllowDoubleClick |
+		ImGuiSelectableFlags_SpanAllColumns;
+	if (!visible) row_flags |= ImGuiSelectableFlags_Disabled;
+	const bool clicked = ImGui::Selectable(row_label, !!obj->Selected(),
+		row_flags, ImVec2(0.f, ImGui::GetFrameHeight()));
+	if (!node.direct) ImGui::PopStyleColor();
+	if (clicked) HandleHierarchySelection(row, obj);
+	if (!visible && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		ImGui::SetTooltip("Hidden objects cannot be selected until shown.");
+	else if (!node.direct && ImGui::IsItemHovered())
+		ImGui::SetTooltip("ancestor of a filtered object");
+	if (visible) DrawObjectContext(group, obj);
+
+	ImGui::TableSetColumnIndex(2);
+	ImGui::TextUnformatted(group.name.c_str());
+	ImGui::TableSetColumnIndex(3);
+	if (CCustomObject* owner = obj->GetOwner()) ImGui::TextUnformatted(owner->GetName());
+	ImGui::PopID();
+}
+
+void UIWorldOutliner::DrawHierarchy()
+{
+	if (m_HierarchyDirty) ApplyHierarchyFilter();
+	if (m_HierarchyRowsDirty) BuildHierarchyRows();
+	if (m_HierarchyRows.empty())
+	{
+		ImGui::TableNextRow();
+		ImGui::TableSetColumnIndex(1);
+		ImGui::TextDisabled(m_Hierarchy.empty() ? "scene is empty" : "no matching objects");
+		return;
+	}
+
+	int target_row = -1;
+	if (m_ScrollTarget)
+		for (int row = 0; row < int(m_HierarchyRows.size()); ++row)
+			if (m_Hierarchy[m_HierarchyRows[row].node].object == m_ScrollTarget) { target_row = row; break; }
+
+	const float rows_top = ImGui::GetCursorPosY();
+	const float row_h = ImGui::GetFrameHeightWithSpacing();
+	ImGuiListClipper clipper;
+	clipper.Begin(int(m_HierarchyRows.size()), row_h);
+	while (clipper.Step())
+		for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
+			DrawHierarchyRow(row, m_HierarchyRows[row]);
+
+	if (target_row >= 0) ScrollRowIntoView(rows_top + target_row * row_h, row_h);
 }
 
 // The funnel beside the search box, Unreal's "Filters" menu in miniature: the
@@ -685,6 +1121,21 @@ void UIWorldOutliner::DrawGroup(SGroup& g)
 void UIWorldOutliner::DrawFilterMenu()
 {
 	if (!ImGui::BeginPopup("outliner_filters")) return;
+
+	ImGui::TextDisabled("Layout");
+	if (ImGui::RadioButton("By Type", !m_HierarchyView))
+	{
+		m_HierarchyView = false;
+		m_HierarchyRowsDirty = true;
+	}
+	ImGui::SameLine();
+	if (ImGui::RadioButton("Hierarchy", m_HierarchyView))
+	{
+		m_HierarchyView = true;
+		ApplyHierarchyFilter();
+	}
+	ImGui::TextDisabled("View only: ownership is never changed here.");
+	ImGui::Separator();
 
 	ImGui::TextDisabled("Visibility");
 	const char* visibility[] = { "All", "Visible", "Hidden" };
@@ -695,14 +1146,19 @@ void UIWorldOutliner::DrawFilterMenu()
 	ImGui::TextDisabled("Object types");
 	ImGui::Separator();
 
+	bool hierarchy_filter_changed = false;
 	if (ImGui::SmallButton("All"))
+	{
+		hierarchy_filter_changed = !m_HiddenClasses.empty();
 		m_HiddenClasses.clear();
+	}
 	ImGui::SameLine();
 	if (ImGui::SmallButton("None"))
 	{
 		m_HiddenClasses.clear();
 		for (u32 i = 0; i < m_Groups.size(); ++i)
 			m_HiddenClasses.push_back(m_Groups[i].cls);
+		hierarchy_filter_changed = true;
 	}
 	ImGui::Separator();
 
@@ -719,10 +1175,18 @@ void UIWorldOutliner::DrawFilterMenu()
 					if (m_HiddenClasses[k] == g.cls) { m_HiddenClasses.erase(m_HiddenClasses.begin() + k); break; }
 			}
 			else m_HiddenClasses.push_back(g.cls);
+			hierarchy_filter_changed = true;
 		}
 		ImGui::SameLine();
 		ImGui::TextDisabled("(%d)", int(g.objects.size()));
 		ImGui::PopID();
+	}
+	if (hierarchy_filter_changed)
+	{
+		if (m_HierarchyView)
+			ApplyHierarchyFilter();
+		else
+			m_HierarchyRowsDirty = true;
 	}
 
 	ImGui::EndPopup();
@@ -830,16 +1294,25 @@ void UIWorldOutliner::Draw()
 	{
 		m_SelSignature = sel_sig;
 		if (!m_SkipNextScroll && sel_last)
+		{
 			m_ScrollTarget = sel_last;
+			if (m_HierarchyView) RevealHierarchyPath(sel_last);
+		}
 		m_SkipNextScroll = false;
 	}
 
 	// funnel first, search box next: the Unreal arrangement
 	if (ImGui::Button("Filters")) ImGui::OpenPopup("outliner_filters");
 	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("which object types the tree shows%s",
+		ImGui::SetTooltip("layout, visibility, and object types%s",
 			m_HiddenClasses.empty() ? "" : "  (some are hidden)");
+	const bool hierarchy_before = m_HierarchyView;
 	DrawFilterMenu();
+	if (m_HierarchyView && !hierarchy_before && sel_last)
+	{
+		RevealHierarchyPath(sel_last);
+		m_ScrollTarget = sel_last;
+	}
 	ImGui::SameLine();
 
 	ImGui::SetNextItemWidth(-220.f);
@@ -883,17 +1356,22 @@ void UIWorldOutliner::Draw()
 			ApplyFilter();
 		}
 
-		if (m_Groups.empty())
+		if (m_HierarchyView)
+			DrawHierarchy();
+		else
 		{
-			ImGui::TableNextRow();
-			ImGui::TableSetColumnIndex(1);
-			ImGui::TextDisabled("scene is empty");
+			if (m_Groups.empty())
+			{
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(1);
+				ImGui::TextDisabled("scene is empty");
+			}
+			for (u32 i = 0; i < m_Groups.size(); ++i)
+				DrawGroup(m_Groups[i]);
 		}
-		for (u32 i = 0; i < m_Groups.size(); ++i)
-			DrawGroup(m_Groups[i]);
 		ImGui::EndTable();
 	}
-	// a target the filter hid never reaches DrawRow - one frame is its lifetime
+	// A target the filter hid never reaches a row; one frame is its lifetime.
 	m_ScrollTarget = nullptr;
 
 	ImGui::Separator();
