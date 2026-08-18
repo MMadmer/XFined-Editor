@@ -5,6 +5,8 @@
 #include "NqCatalog.h"
 #include "NqPickers.h"
 #include "NqLayout.h"
+#include "NqReferences.h"
+#include "NqProjectIndex.h"
 #include "../EditorProject.h"
 #include "../UI_ToolsCustom.h"
 
@@ -296,6 +298,44 @@ bool NqDoc::RenameNode(LPCSTR id, LPCSTR new_id, xr_string& err)
 		RenameNodeRefs(m.params, m.kind.c_str(), id, new_id);
 	}
 	for (u32 i = 0; i < selection.size(); ++i) if (selection[i] == id) selection[i] = new_id;
+	Changed();
+	return true;
+}
+
+bool NqDoc::RenameTask(LPCSTR id, LPCSTR new_id, xr_string& err, int& references_updated)
+{
+	references_updated = 0;
+	err.clear();
+	if (!id || !id[0]) { err = "task id is empty"; return false; }
+	if (!new_id || !new_id[0]) { err = "new task id is empty"; return false; }
+	if (!NqText::ValidId(new_id)) { err = "new task id must be [a-z0-9_]+"; return false; }
+	int declarations = 0;
+	for (u32 i = 0; i < quest.tasks.size(); ++i)
+		if (quest.tasks[i].id == id) ++declarations;
+	if (!declarations) { err = xr_string("task '") + id + "' does not exist"; return false; }
+	if (declarations != 1)
+	{
+		err = NqUtil::Format("task '%s' is declared %d times; rename requires exactly one source declaration", id, declarations);
+		return false;
+	}
+	if (0 == strcmp(id, new_id)) { err = "new task id is unchanged"; return false; }
+	if (quest.FindTask(new_id)) { err = xr_string("task '") + new_id + "' already exists"; return false; }
+	if (m_Partial) { err = "task rename refused: the open document is an incomplete model of a malformed source file"; return false; }
+
+	SNqQuest after = quest;
+	xr_vector<NqReferences::SDiagnostic> diagnostics;
+	if (!NqReferences::RenameTask(after, path.c_str(), id, new_id, references_updated, diagnostics))
+	{
+		err = "task rename refused because reference coverage is incomplete";
+		for (u32 i = 0; i < diagnostics.size(); ++i)
+		{
+			err += i ? "; " : ": ";
+			err += diagnostics[i].Text();
+		}
+		return false;
+	}
+	Snapshot();
+	quest = std::move(after);
 	Changed();
 	return true;
 }
@@ -636,24 +676,6 @@ bool NqDoc::ApplyOps(const SNqValue& ops, xr_string& err, int& applied)
 namespace
 {
 	xr_vector<NqDoc*>	s_Docs;
-
-	// project scan cache: path -> {mtime, id, title}
-	struct SIndexEntry
-	{
-		xr_string	path;
-		u64			mtime;
-		xr_string	id, title, error;
-		bool		readable;
-	};
-	xr_vector<SIndexEntry>	s_Index;
-	xr_string				s_IndexRoot;
-	xr_vector<xr_string>	s_IndexFiles;		// last directory walk
-	u64						s_IndexWalked = 0;	// tick of that walk (a project holds many files; not per keystroke)
-
-	bool SkipEntry(LPCSTR name)
-	{
-		return EditorProject::IsEditorOnlyEntry(name) || EditorProject::IsSourceOnlyEntry(name);
-	}
 }
 
 bool NqDocs::InsideProject(LPCSTR abs)
@@ -798,57 +820,25 @@ void NqDocs::Validate(const SNqQuest& q, LPCSTR path, xr_vector<SNqProblem>& out
 	NqValidate::Run(q, ctx, out);
 }
 
-void NqDocs::InvalidateProjectIndex()	{ s_Index.clear(); s_IndexRoot.clear(); s_IndexFiles.clear(); s_IndexWalked = 0; }
+void NqDocs::InvalidateProjectIndex()	{ NqProjectIndex::Invalidate(); }
 
 void NqDocs::ProjectQuests(xr_vector<SProjectQuest>& out, bool disk_only)
 {
 	out.clear();
-	if (!EditorProject::Active()) return;
-	xr_string root;
-	NqUtil::NormalizePath(EditorProject::Root(), root);
-	if (s_IndexRoot != root) { s_Index.clear(); s_IndexRoot = root; s_IndexFiles.clear(); s_IndexWalked = 0; }
-	const u64 now = ::GetTickCount64();
-	if (!s_IndexWalked || now - s_IndexWalked > 2000)
+	NqProjectIndex::SSnapshot snapshot;
+	xr_string index_error;
+	if (!NqProjectIndex::Snapshot(snapshot, index_error, !disk_only)) return;
+	for (u32 i = 0; i < snapshot.entries.size(); ++i)
 	{
-		NqUtil::ListFiles(root.c_str(), ".nqasset", s_IndexFiles, SkipEntry);
-		s_IndexWalked = now;
-	}
-	const xr_vector<xr_string>& files = s_IndexFiles;
-	xr_vector<SIndexEntry> fresh;
-	for (u32 i = 0; i < files.size(); ++i)
-	{
-		const u64 mt = NqLua::FileTime(files[i].c_str());
-		const xr_string key = NqUtil::PathKey(files[i].c_str());
-		SIndexEntry e;
-		bool cached = false;
-		for (u32 k = 0; k < s_Index.size(); ++k)
-			if (s_Index[k].path == key && s_Index[k].mtime == mt) { e = s_Index[k]; cached = true; break; }
-		if (!cached)
-		{
-			e.path = key; e.mtime = mt; e.readable = false;
-			SNqQuest q;
-			xr_string text, err;
-			if (NqLua::ReadFile(files[i].c_str(), text, err))
-			{
-				NqLua::SError le;
-				if (NqLua::ParseQuest(text.c_str(), (u32)text.size(), NqUtil::BaseName(files[i].c_str()).c_str(), q, le))
-				{
-					e.readable = true; e.id = q.id; e.title = NqText::Preview(q.title);
-				}
-				else e.error = le.message;
-			}
-			else e.error = err;
-		}
-		fresh.push_back(e);
+		const NqProjectIndex::SEntry& entry = snapshot.entries[i];
 		SProjectQuest pq;
-		pq.path = files[i]; pq.id = e.id; pq.title = e.title; pq.readable = e.readable; pq.error = e.error;
-		// an open document is the truth for its own file (unless the caller
-		// wants what is on disk - the export copies files, not documents)
-		if (!disk_only)
-			if (NqDoc* d = Get(files[i].c_str())) { pq.id = d->quest.id; pq.title = NqText::Preview(d->quest.title); pq.readable = true; pq.error.clear(); }
+		pq.path = entry.path;
+		pq.id = entry.readable ? entry.quest.id : "";
+		pq.title = entry.readable ? NqText::Preview(entry.quest.title) : "";
+		pq.readable = entry.readable && entry.complete;
+		pq.error = entry.error;
 		out.push_back(pq);
 	}
-	s_Index = fresh;
 }
 
 void NqDocs::OtherQuestIds(LPCSTR except_path, xr_vector<xr_string>& out, bool disk_only)

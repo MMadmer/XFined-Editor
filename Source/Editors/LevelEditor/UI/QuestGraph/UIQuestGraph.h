@@ -8,6 +8,7 @@
 // and the UI share them.
 
 #include "../../../XrECore/Editor/Nq/NqDoc.h"
+#include "../../../XrECore/Editor/Nq/NqProjectIndex.h"
 
 class NqCanvas;
 class NqInspector;
@@ -57,9 +58,20 @@ private:
 	u32				m_FindRevision;
 	u32				m_FindCatalogGeneration;
 	xr_vector<SFindResult> m_FindResults;
+	bool			m_OpenProjectFind;
+	char			m_ProjectFind[256];
+	xr_vector<NqProjectIndex::SFindResult>	m_ProjectFindResults;
+	xr_vector<NqProjectIndex::SDiagnostic>	m_ProjectFindDiagnostics;
+	xr_string		m_ProjectFindError;
+	bool			m_ProjectFindComplete;
+	u32			m_ProjectFindGeneration;
+	u64			m_ProjectFindFingerprint;
 
 	void			DrawToolbar			();
 	void			DrawFindBar			();
+	void			RefreshProjectFind	();
+	void			DrawProjectFind		();
+	bool			NavigateProjectFind	(int index);
 	void			RefreshFind			(bool force = false);
 	bool			NavigateFind		(int index);
 	void			SetFindQuery		(LPCSTR query);

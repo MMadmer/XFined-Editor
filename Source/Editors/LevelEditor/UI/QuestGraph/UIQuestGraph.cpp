@@ -126,6 +126,11 @@ UIQuestGraphWindow::UIQuestGraphWindow(NqDoc* doc) : m_Doc(doc)
 	m_FindIndex = -1;
 	m_FindRevision = u32(-1);
 	m_FindCatalogGeneration = u32(-1);
+	m_OpenProjectFind = false;
+	m_ProjectFind[0] = 0;
+	m_ProjectFindComplete = true;
+	m_ProjectFindGeneration = 0;
+	m_ProjectFindFingerprint = 0;
 }
 
 UIQuestGraphWindow::~UIQuestGraphWindow()
@@ -268,6 +273,14 @@ void UIQuestGraphWindow::DrawFindBar()
 	ImGui::SameLine();
 	if (ImGui::SmallButton("Find###nq_find_toggle")) { m_ShowFind = true; m_FocusFind = true; }
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Find nodes (Ctrl+F, F3 next)");
+	ImGui::SameLine();
+	if (ImGui::SmallButton("Project Find###nq_project_find"))
+	{
+		if (!m_ProjectFind[0] && m_Find[0]) strncpy_s(m_ProjectFind, sizeof(m_ProjectFind), m_Find, _TRUNCATE);
+		m_OpenProjectFind = true;
+		RefreshProjectFind();
+	}
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Find nodes in every quest asset");
 
 	ImGui::SameLine();
 	const xr_string bookmark_label = NqUtil::Format("Bookmarks (%d)", (int)m_Canvas->Bookmarks().size());
@@ -335,6 +348,111 @@ void UIQuestGraphWindow::DrawFindBar()
 	}
 	ImGui::SameLine();
 	if (ImGui::SmallButton("x###nq_find_close")) m_ShowFind = false;
+}
+
+void UIQuestGraphWindow::RefreshProjectFind()
+{
+	m_ProjectFindResults.clear();
+	m_ProjectFindDiagnostics.clear();
+	m_ProjectFindError.clear();
+	m_ProjectFindComplete = false;
+	m_ProjectFindGeneration = 0;
+	m_ProjectFindFingerprint = 0;
+	NqProjectIndex::SSnapshot snapshot;
+	xr_string error;
+	if (!NqProjectIndex::Snapshot(snapshot, error))
+	{
+		m_ProjectFindError = error;
+		return;
+	}
+	NqProjectIndex::SFindResponse result;
+	NqProjectIndex::FindNodes(snapshot, m_ProjectFind, result);
+	m_ProjectFindResults = result.results;
+	m_ProjectFindDiagnostics = result.diagnostics;
+	m_ProjectFindComplete = result.complete;
+	m_ProjectFindGeneration = result.generation;
+	m_ProjectFindFingerprint = result.fingerprint;
+}
+
+bool UIQuestGraphWindow::NavigateProjectFind(int index)
+{
+	if (index < 0 || index >= static_cast<int>(m_ProjectFindResults.size())) return false;
+	const NqProjectIndex::SFindResult result = m_ProjectFindResults[index];
+	xr_string error;
+	if (!UIQuestGraph::Open(result.path.c_str(), &error))
+	{
+		m_ProjectFindError = error;
+		return false;
+	}
+	UIQuestGraphWindow* target = UIQuestGraph::Find(result.path.c_str());
+	if (!target)
+	{
+		m_ProjectFindError = "quest window was not created";
+		return false;
+	}
+	target->m_Canvas->RequestFrameNode(result.node.c_str());
+	target->Focus();
+	return true;
+}
+
+void UIQuestGraphWindow::DrawProjectFind()
+{
+	if (m_OpenProjectFind)
+	{
+		ImGui::OpenPopup("Project Find###nq_project_find_modal");
+		m_OpenProjectFind = false;
+	}
+	ImGui::SetNextWindowSize(ImVec2(820.f, 520.f), ImGuiCond_Appearing);
+	if (!ImGui::BeginPopupModal("Project Find###nq_project_find_modal", 0,
+		ImGuiWindowFlags_NoSavedSettings)) return;
+
+	if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+	const ImGuiStyle& style = ImGui::GetStyle();
+	const float search_button = ImGui::CalcTextSize("Search").x + style.FramePadding.x * 2.f + style.ItemSpacing.x;
+	ImGui::SetNextItemWidth(-search_button);
+	const bool submit = ImGui::InputTextWithHint("##nq_project_find_query", "Find across all quest nodes",
+		m_ProjectFind, sizeof(m_ProjectFind), ImGuiInputTextFlags_EnterReturnsTrue);
+	ImGui::SameLine();
+	if (submit || ImGui::Button("Search")) RefreshProjectFind();
+	if (m_ProjectFindGeneration)
+	{
+		ImGui::TextDisabled("%d result(s) | generation %u | fingerprint %s", static_cast<int>(m_ProjectFindResults.size()),
+			m_ProjectFindGeneration, NqProjectIndex::FingerprintText(m_ProjectFindFingerprint).c_str());
+	}
+	if (!m_ProjectFindComplete)
+		ImGui::TextColored(ImVec4(1.f, 0.72f, 0.30f, 1.f), "Incomplete: one or more quest files could not be inspected.");
+	if (!m_ProjectFindError.empty())
+		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", m_ProjectFindError.c_str());
+
+	const float footer = ImGui::GetFrameHeightWithSpacing();
+	ImGui::BeginChild("##nq_project_find_results", ImVec2(0.f, -footer), true,
+		ImGuiWindowFlags_HorizontalScrollbar);
+	ImGuiListClipper clipper;
+	clipper.Begin(static_cast<int>(m_ProjectFindResults.size()));
+	while (clipper.Step())
+	{
+		for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
+		{
+			const NqProjectIndex::SFindResult& result = m_ProjectFindResults[i];
+			const xr_string label = NqUtil::Format("%s :: %s - %s [%s]###project_find_%d",
+				NqUtil::ProjectRelative(result.path.c_str()).c_str(), result.node.c_str(), result.title.c_str(),
+				result.source.c_str(), i);
+			if (ImGui::Selectable(label.c_str()))
+			{
+				if (NavigateProjectFind(i)) ImGui::CloseCurrentPopup();
+			}
+		}
+	}
+	if (m_ProjectFindResults.empty() && m_ProjectFindError.empty()) ImGui::TextDisabled("no matches");
+	for (u32 i = 0; i < m_ProjectFindDiagnostics.size(); ++i)
+	{
+		const NqProjectIndex::SDiagnostic& diagnostic = m_ProjectFindDiagnostics[i];
+		ImGui::TextColored(ImVec4(1.f, 0.72f, 0.30f, 1.f), "%s: %s",
+			NqUtil::ProjectRelative(diagnostic.path.c_str()).c_str(), diagnostic.message.c_str());
+	}
+	ImGui::EndChild();
+	if (ImGui::Button("Close") || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+	ImGui::EndPopup();
 }
 
 void UIQuestGraphWindow::DrawToolbar()
@@ -536,6 +654,7 @@ void UIQuestGraphWindow::Draw()
 
 	DrawToolbar();
 	DrawFindBar();
+	DrawProjectFind();
 	ImGui::Separator();
 
 	// canvas | inspector split with a draggable bar

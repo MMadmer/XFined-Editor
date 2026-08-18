@@ -1062,6 +1062,59 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_quest_project_find",
+        "description": "Read-only full-project node search across every sorted .nqasset without opening documents. "
+                       "Uses the same quoted, negative-term and case-folding semantics as xfined_quest_find. Dirty "
+                       "open documents overlay their disk file. Results report source=disk|memory; complete=false "
+                       "and diagnostics identify files whose content could not be inspected.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "description": "Maximum returned results, 1..1000 (default 200)."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "xfined_quest_references",
+        "description": "Find exact references whose parameter type is declared by the active NQ catalog. "
+                       "Pass path to limit the scan to one quest (required in practice for document-scoped task_id). "
+                       "Nested cond_list/cases_cond are inspected. Unknown kinds/params, malformed values, Lua and "
+                       "unreadable files make complete=false with exact diagnostics; no identifier is guessed from "
+                       "a parameter name.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string", "description": "Catalog parameter type, for example task_id."},
+                "value": {"type": "string", "description": "Exact value to find."},
+                "path": {"type": "string", "description": "Optional project-relative quest path scope."},
+                "limit": {"type": "integer", "description": "Maximum returned references, 1..2000 (default 500)."},
+            },
+            "required": ["type", "value"],
+        },
+    },
+    {
+        "name": "xfined_quest_rename_task",
+        "description": "Rename one task declaration and every proven catalog-typed task_id reference in the same "
+                       "quest as one undo step. Refuses before creating an undo snapshot when coverage is incomplete "
+                       "(unknown kind/parameter, malformed nested data, custom Lua, or partial source). A task id is "
+                       "persisted in runtime/save state, so ack_runtime_identity must be explicitly true.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "from": {"type": "string"},
+                "to": {"type": "string"},
+                "ack_runtime_identity": {
+                    "type": "boolean",
+                    "description": "Must be true: existing saves/running state under the old task id are not migrated.",
+                },
+            },
+            "required": ["path", "from", "to", "ack_runtime_identity"],
+        },
+    },
+    {
         "name": "xfined_quest_bookmarks",
         "description": "Read or control transient per-document node bookmarks. action=get|add|remove|toggle|next|"
                        "previous|clear. add/remove/toggle use 'node', or the sole selected node when omitted. Bookmarks "
@@ -1211,6 +1264,9 @@ CMD_MAP = {
     "xfined_quest_layout": "quest_layout",
     "xfined_quest_view": "quest_view",
     "xfined_quest_find": "quest_find",
+    "xfined_quest_project_find": "quest_project_find",
+    "xfined_quest_references": "quest_references",
+    "xfined_quest_rename_task": "quest_rename_task",
     "xfined_quest_bookmarks": "quest_bookmarks",
     "xfined_quest_history": "quest_history",
     "xfined_quest_minimap": "quest_minimap",

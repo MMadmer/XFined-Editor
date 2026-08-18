@@ -204,6 +204,11 @@ NqInspector::NqInspector(NqDoc* doc) : m_Doc(doc)
 	m_Search[0] = 0;
 	m_VarsFrac = 0.30f;
 	m_ParamsCtx = 0;
+	m_OpenTaskRename = false;
+	m_OpenTaskReferences = false;
+	m_TaskReferencesComplete = true;
+	m_TaskReferencesGeneration = 0;
+	m_ProjectQuestIdsSerial = 0;
 	if (CLevelPreferences* prefs = dynamic_cast<CLevelPreferences*>(EPrefs))
 		m_VarsFrac = float(_max(_min(prefs->QuestVarsSplit, 800u), 100u)) / 1000.f;
 }
@@ -344,6 +349,8 @@ void NqInspector::DrawQuestSection()
 	ImGui::TextDisabled("Quest");
 	ImGui::Separator();
 	bool ch = false;
+	xr_string rename_requested;
+	xr_string references_requested;
 	ch |= InputStr("id", m_Quest.id);
 	ch |= DrawText("title", m_Quest.title, false);
 	{
@@ -360,10 +367,16 @@ void NqInspector::DrawQuestSection()
 			ImGui::PushID((int)i);
 			bool open = ImGui::TreeNodeEx("##task", ImGuiTreeNodeFlags_DefaultOpen, "%s", t.id.c_str());
 			ImGui::SameLine();
+			if (ImGui::SmallButton("references")) references_requested = t.id;
+			ImGui::SameLine();
+			if (ImGui::SmallButton("rename")) rename_requested = t.id;
+			ImGui::SameLine();
 			if (ImGui::SmallButton("x")) { m_Quest.tasks.erase(m_Quest.tasks.begin() + i); ch = true; if (open) ImGui::TreePop(); ImGui::PopID(); break; }
 			if (open)
 			{
-				ch |= InputStr("id##t", t.id);
+				ImGui::TextDisabled("id");
+				ImGui::SameLine();
+				ImGui::TextUnformatted(t.id.c_str());
 				ch |= DrawText("title##t", t.title, false);
 				ch |= DrawText("descr##t", t.descr, true);
 				xr_vector<xr_string> types = Items("additional", "storyline");
@@ -376,16 +389,165 @@ void NqInspector::DrawQuestSection()
 		}
 		if (ImGui::SmallButton("+ task"))
 		{
-			SNqTask t; t.id = NqUtil::Format("task%d", int(m_Quest.tasks.size() + 1)); t.type = "additional";
+			SNqTask t;
+			for (u32 number = 1;; ++number)
+			{
+				t.id = NqUtil::Format("task%u", number);
+				bool used = false;
+				for (u32 i = 0; i < m_Quest.tasks.size(); ++i)
+					if (m_Quest.tasks[i].id == t.id) { used = true; break; }
+				if (!used) break;
+			}
+			t.type = "additional";
 			t.title = SNqValue::String(""); t.descr = SNqValue::String("");
 			m_Quest.tasks.push_back(t); ch = true;
 		}
 		ImGui::PopID();
 	}
 	if (ch) m_QuestDirty = true;
+	if (!references_requested.empty()) BeginTaskReferences(references_requested.c_str());
+	if (!rename_requested.empty()) BeginTaskRename(rename_requested.c_str());
+	DrawTaskRename();
+	DrawTaskReferences();
 
 	ImGui::Separator();
 	ImGui::TextDisabled("%d node(s), %d error(s), %d warning(s)", int(m_Doc->quest.nodes.size()), m_Doc->ErrorCount(), m_Doc->WarningCount());
+}
+
+void NqInspector::BeginTaskRename(LPCSTR id)
+{
+	if (m_QuestDirty) CommitQuest();
+	m_TaskRenameFrom = id ? id : "";
+	m_TaskRenameTo = m_TaskRenameFrom;
+	m_TaskRenameError.clear();
+	m_OpenTaskRename = true;
+}
+
+void NqInspector::DrawTaskRename()
+{
+	if (m_OpenTaskRename)
+	{
+		ImGui::OpenPopup("Rename Task###nq_task_rename");
+		m_OpenTaskRename = false;
+	}
+	if (!ImGui::BeginPopupModal("Rename Task###nq_task_rename", 0,
+		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) return;
+
+	ImGui::Text("Rename task '%s'", m_TaskRenameFrom.c_str());
+	ImGui::SetNextItemWidth(ImGui::GetFrameHeight() * 12.f);
+	InputStr("new id", m_TaskRenameTo);
+	ImGui::Spacing();
+	ImGui::TextColored(ImVec4(1.f, 0.72f, 0.30f, 1.f), "This changes the task's runtime and save identity.");
+	ImGui::TextWrapped("Existing saves and running quest state recorded under '%s' are not migrated.",
+		m_TaskRenameFrom.c_str());
+	if (!m_TaskRenameError.empty())
+		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", m_TaskRenameError.c_str());
+	ImGui::Separator();
+	const bool appearing = ImGui::IsWindowAppearing();
+	const bool cancel = ImGui::Button("Cancel");
+	if (appearing) ImGui::SetItemDefaultFocus();
+	if (cancel || ImGui::IsKeyPressed(ImGuiKey_Escape))
+	{
+		m_TaskRenameFrom.clear();
+		ImGui::CloseCurrentPopup();
+	}
+	else
+	{
+		ImGui::SameLine();
+		if (ImGui::Button("Rename task"))
+		{
+			const xr_string to = NqUtil::Trim(m_TaskRenameTo);
+			xr_string error;
+			int updated = 0;
+			if (m_Doc->RenameTask(m_TaskRenameFrom.c_str(), to.c_str(), error, updated))
+			{
+				m_QuestRev = u32(-1);
+				m_TaskRenameFrom.clear();
+				ImGui::CloseCurrentPopup();
+			}
+			else m_TaskRenameError = error;
+		}
+	}
+	ImGui::EndPopup();
+}
+
+void NqInspector::BeginTaskReferences(LPCSTR id)
+{
+	if (m_QuestDirty) CommitQuest();
+	m_TaskReferencesId = id ? id : "";
+	m_TaskReferences.clear();
+	m_TaskReferenceDiagnostics.clear();
+	m_TaskReferencesError.clear();
+	m_TaskReferencesComplete = false;
+	m_TaskReferencesGeneration = 0;
+
+	NqProjectIndex::SSnapshot snapshot;
+	xr_string error;
+	if (!NqProjectIndex::Snapshot(snapshot, error)) m_TaskReferencesError = error;
+	else
+	{
+		NqReferences::SResult result;
+		if (!NqReferences::Find(snapshot, "task_id", m_TaskReferencesId.c_str(), m_Doc->path.c_str(), result, error))
+			m_TaskReferencesError = error;
+		else
+		{
+			m_TaskReferences = result.references;
+			m_TaskReferenceDiagnostics = result.diagnostics;
+			m_TaskReferencesComplete = result.complete;
+			m_TaskReferencesGeneration = result.generation;
+		}
+	}
+	m_OpenTaskReferences = true;
+}
+
+void NqInspector::DrawTaskReferences()
+{
+	if (m_OpenTaskReferences)
+	{
+		ImGui::OpenPopup("Task References###nq_task_references");
+		m_OpenTaskReferences = false;
+	}
+	if (!ImGui::BeginPopupModal("Task References###nq_task_references", 0,
+		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) return;
+
+	ImGui::Text("task_id '%s': %d reference(s)", m_TaskReferencesId.c_str(), static_cast<int>(m_TaskReferences.size()));
+	if (m_TaskReferencesGeneration)
+	{
+		ImGui::SameLine();
+		ImGui::TextDisabled("index generation %u", m_TaskReferencesGeneration);
+	}
+	if (!m_TaskReferencesComplete)
+		ImGui::TextColored(ImVec4(1.f, 0.72f, 0.30f, 1.f), "Incomplete: some content could not be proven safe.");
+	if (!m_TaskReferencesError.empty())
+		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", m_TaskReferencesError.c_str());
+
+	ImGui::BeginChild("##task_refs", ImVec2(ImGui::GetFrameHeight() * 32.f,
+		ImGui::GetTextLineHeightWithSpacing() * 12.f), true, ImGuiWindowFlags_HorizontalScrollbar);
+	for (u32 i = 0; i < m_TaskReferences.size(); ++i)
+	{
+		const NqReferences::SReference& reference = m_TaskReferences[i];
+		const xr_string label = NqUtil::Format("%s [%s] %s.%s", reference.node.c_str(), reference.slot.c_str(),
+			reference.kind.c_str(), reference.param.c_str());
+		if (ImGui::Selectable(label.c_str()))
+		{
+			ImGui::CloseCurrentPopup();
+			m_Doc->selection.clear();
+			m_Doc->selection.push_back(reference.node);
+			const size_t slash = reference.slot.find('/');
+			const xr_string base = slash == xr_string::npos ? reference.slot : reference.slot.substr(0, slash);
+			if (base.find("enter:") == 0 || base.find("exit:") == 0) m_Doc->sel_slot = base;
+			else m_Doc->sel_slot.clear();
+		}
+	}
+	if (m_TaskReferences.empty() && m_TaskReferencesError.empty()) ImGui::TextDisabled("no typed references");
+	for (u32 i = 0; i < m_TaskReferenceDiagnostics.size(); ++i)
+	{
+		const xr_string text = m_TaskReferenceDiagnostics[i].Text();
+		ImGui::TextColored(ImVec4(1.f, 0.72f, 0.30f, 1.f), "%s", text.c_str());
+	}
+	ImGui::EndChild();
+	if (ImGui::Button("Close") || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+	ImGui::EndPopup();
 }
 
 //------------------------------------------------------------------------------
@@ -978,7 +1140,11 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 		if (t == "var_name") for (u32 i = 0; i < q.vars.size(); ++i) ids.push_back(q.vars[i].name);
 		if (t == "node_id")	for (u32 i = 0; i < q.nodes.size(); ++i) ids.push_back(q.nodes[i].id);
 		if (t == "ref_name") NqValidate::DeclaredRefs(q, ids);
-		if (t == "quest_id") { NqDocs::OtherQuestIds(m_Doc->path.c_str(), ids); ids.insert(ids.begin(), q.id); }
+		if (t == "quest_id")
+		{
+			if (m_ProjectQuestIdsSerial != NqProjectIndex::InvalidationSerial()) RefreshProjectQuestIds();
+			ids = m_ProjectQuestIds;
+		}
 		for (u32 i = 0; i < ids.size(); ++i)
 		{
 			if (m_Search[0] && !ContainsNoCaseAscii(ids[i], m_Search)) continue;
@@ -1044,10 +1210,23 @@ bool NqInspector::DrawPicked(LPCSTR label, LPCSTR type, xr_string& s)
 	ImGui::SameLine();
 	// the filter is cleared here, not on the appearing frame: the list is gathered
 	// before the popup opens, so a leftover query would decide its width
-	if (ImGui::SmallButton("...")) { m_Search[0] = 0; ImGui::OpenPopup("pick"); }
+	if (ImGui::SmallButton("..."))
+	{
+		m_Search[0] = 0;
+		if (0 == strcmp(type, "quest_id")) RefreshProjectQuestIds();
+		ImGui::OpenPopup("pick");
+	}
 	if (PickerPopup("pick", type, s)) ch = true;
 	ImGui::PopID();
 	return ch;
+}
+
+void NqInspector::RefreshProjectQuestIds()
+{
+	m_ProjectQuestIds.clear();
+	NqDocs::OtherQuestIds(m_Doc->path.c_str(), m_ProjectQuestIds);
+	m_ProjectQuestIds.insert(m_ProjectQuestIds.begin(), m_Doc->quest.id);
+	m_ProjectQuestIdsSerial = NqProjectIndex::InvalidationSerial();
 }
 
 bool NqInspector::DrawText(LPCSTR label, SNqValue& v, bool multiline)

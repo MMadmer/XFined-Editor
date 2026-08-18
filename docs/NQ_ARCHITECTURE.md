@@ -1080,6 +1080,9 @@ Python — записи в `TOOLS` + `CMD_MAP` (`tools/mcp/xfined_mcp.py`), та
 | `xfined_quest_layout` | `path` | авто-раскладка |
 | `xfined_quest_view` | `path`, `frame:"all"\|<node>`, `zoom_level`, `cx`/`cy` (перебивают `frame`), `slot:"enter:0"\|"exit:1"\|"none"` (открыть действие в инспекторе) | итоговые `zoom_level`/`center`/`selected`/`slot`; raw-ответ помечает отложенный первый `frame:all` как `pending:true`, Python bridge дочитывает вид после следующего Draw; затем `xfined_screenshot_editor` |
 | `xfined_quest_find` | `path`, `action`, `query`, `select`, `limit` | полнотекстовые результаты в порядке файла, активный результат и состояние вида; `get` с `query` атомарно меняет запрос без навигации, `next`/`previous` фокусируют ноду |
+| `xfined_quest_project_find` | `query`, `limit` | read-only поиск по прямому отсортированному скану всех `*.nqasset`, не открывающий документы; грязные документы — memory-overlay. Ответ: `source` на результате, `complete`/`diagnostics`, cache `generation` и детерминированный content `fingerprint` |
+| `xfined_quest_references` | `type`, `value`, `path?`, `limit?` | точные ссылки только по типам текущего каталога, включая вложенные `cond_list`/`cases_cond`; неизвестное, malformed, Lua и нечитаемые области явно делают результат неполным |
+| `xfined_quest_rename_task` | `path`, `from`, `to`, `ack_runtime_identity:true` | безопасное переименование task внутри документа: preflight всех каталог-типизированных областей, затем один `Snapshot` + одна мутация объявления/ссылок. При неизвестном/Lua/malformed/partial отказывает до снимка; ack обязателен из-за runtime/save identity |
 | `xfined_quest_bookmarks` | `path`, `action`, `node` | transient-закладки (`get/add/remove/toggle/next/previous/clear`) и состояние вида |
 | `xfined_quest_history` | `path`, `action` | transient-история (`get/back/forward/clear`) со всеми состояниями вида |
 | `xfined_quest_minimap` | `path`, `action` | видимость, границы графа/viewport и состояние вида (`get/show/hide/toggle`) |
@@ -1089,6 +1092,23 @@ Python — записи в `TOOLS` + `CMD_MAP` (`tools/mcp/xfined_mcp.py`), та
 Правило деструктивности: MCP-команды не показывают диалогов; `quest_close` без
 `discard` при dirty возвращает ошибку `unsaved`, `quest_write` перезаписывает
 документ (undo есть).
+
+`NqProjectIndex` не вызывает `NqDocs::Open`: он читает отсортированный список
+файлов напрямую и повторно использует разбор только при совпадении точного хеша
+содержимого. Открытый **dirty** документ накладывается на соответствующий файл
+read-only; чистый документ не скрывает внешнюю правку на диске. Fingerprint
+строится из нормализованных путей, полного content hash, источника и статуса
+разбираемости, поэтому одинаковый снимок проекта даёт одинаковое значение.
+
+`NqReferences` не выводит смысл из имён `task`, `id` и т. п.: ссылка существует
+только когда активный каталог объявил конкретный параметр как `task_id` (или
+другой запрошенный тип). Для `cond_list` и `cases_cond` вид каждого вложенного
+условия снова берётся из каталога. Неизвестный kind/параметр, неподходящая форма,
+кастомный Lua либо частично прочитанный файл означают неполное доказательство.
+Поэтому rename task сначала прогоняет весь документ на копии, и лишь при нуле
+диагностик создаёт один undo-снимок и меняет declaration + точные ссылки. UI
+ставит Cancel безопасной кнопкой по умолчанию и явно предупреждает, что task id
+уже записан в runtime/save state; существующее состояние не мигрирует.
 
 ---
 

@@ -7,6 +7,8 @@
 #include "NqPickers.h"
 #include "NqExport.h"
 #include "NqValidate.h"
+#include "NqProjectIndex.h"
+#include "NqReferences.h"
 #include "../EditorProject.h"
 
 namespace
@@ -43,6 +45,41 @@ namespace
 			out += ",\"undo\":";	NqUtil::JsonInt(out, d->UndoDepth());
 			out += ",\"redo\":";	NqUtil::JsonInt(out, d->RedoDepth());
 		}
+	}
+
+	void AppendIndexDiagnostics(xr_string& out, const xr_vector<NqProjectIndex::SDiagnostic>& diagnostics)
+	{
+		out += "[";
+		for (u32 i = 0; i < diagnostics.size(); ++i)
+		{
+			if (i) out += ",";
+			out += "{\"path\":"; NqUtil::JsonPath(out, NqUtil::ProjectRelative(diagnostics[i].path.c_str()).c_str());
+			out += ",\"code\":"; NqUtil::JsonString(out, diagnostics[i].code);
+			out += ",\"message\":"; NqUtil::JsonString(out, diagnostics[i].message);
+			out += ",\"source\":"; NqUtil::JsonString(out, diagnostics[i].source);
+			out += "}";
+		}
+		out += "]";
+	}
+
+	void AppendReferenceDiagnostics(xr_string& out, const xr_vector<NqReferences::SDiagnostic>& diagnostics)
+	{
+		out += "[";
+		for (u32 i = 0; i < diagnostics.size(); ++i)
+		{
+			const NqReferences::SDiagnostic& diagnostic = diagnostics[i];
+			if (i) out += ",";
+			out += "{\"path\":"; NqUtil::JsonPath(out, NqUtil::ProjectRelative(diagnostic.path.c_str()).c_str());
+			out += ",\"node\":"; NqUtil::JsonString(out, diagnostic.node);
+			out += ",\"slot\":"; NqUtil::JsonString(out, diagnostic.slot);
+			out += ",\"kind\":"; NqUtil::JsonString(out, diagnostic.kind);
+			out += ",\"param\":"; NqUtil::JsonString(out, diagnostic.param);
+			out += ",\"code\":"; NqUtil::JsonString(out, diagnostic.code);
+			out += ",\"message\":"; NqUtil::JsonString(out, diagnostic.message);
+			out += ",\"source\":"; NqUtil::JsonString(out, diagnostic.source);
+			out += "}";
+		}
+		out += "]";
 	}
 
 	bool NeedPath(LPCSTR raw, xr_string& path, xr_string& out)
@@ -337,6 +374,118 @@ namespace
 		out += ",\"log\":";			NqUtil::JsonStringArray(out, log);
 		out += "}";
 	}
+
+	void CmdProjectFind(LPCSTR raw, xr_string& out)
+	{
+		xr_string query;
+		if (!NqUtil::ArgString(raw, "query", query)) { NqUtil::JsonError(out, "missing 'query'"); return; }
+		NqProjectIndex::SSnapshot snapshot;
+		xr_string err;
+		if (!NqProjectIndex::Snapshot(snapshot, err)) { NqUtil::JsonError(out, err); return; }
+		NqProjectIndex::SFindResponse response;
+		NqProjectIndex::FindNodes(snapshot, query.c_str(), response);
+		const int limit = _max(1, _min(NqUtil::ArgInt(raw, "limit", 200), 1000));
+		const int count = _min(limit, static_cast<int>(response.results.size()));
+		out = "{\"ok\":true,\"query\":";
+		NqUtil::JsonString(out, query);
+		out += ",\"count\":"; NqUtil::JsonInt(out, static_cast<int>(response.results.size()));
+		out += ",\"returned\":"; NqUtil::JsonInt(out, count);
+		out += ",\"truncated\":"; NqUtil::JsonBool(out, count < static_cast<int>(response.results.size()));
+		out += ",\"complete\":"; NqUtil::JsonBool(out, response.complete);
+		out += ",\"generation\":"; NqUtil::JsonInt(out, static_cast<int>(response.generation));
+		out += ",\"fingerprint\":"; NqUtil::JsonString(out, NqProjectIndex::FingerprintText(response.fingerprint));
+		out += ",\"results\":[";
+		for (int i = 0; i < count; ++i)
+		{
+			const NqProjectIndex::SFindResult& result = response.results[i];
+			if (i) out += ",";
+			out += "{\"path\":"; NqUtil::JsonPath(out, NqUtil::ProjectRelative(result.path.c_str()).c_str());
+			out += ",\"node\":"; NqUtil::JsonString(out, result.node);
+			out += ",\"kind\":"; NqUtil::JsonString(out, result.kind);
+			out += ",\"title\":"; NqUtil::JsonString(out, result.title);
+			out += ",\"match\":"; NqUtil::JsonString(out, result.match);
+			out += ",\"source\":"; NqUtil::JsonString(out, result.source);
+			out += "}";
+		}
+		out += "],\"diagnostics\":";
+		AppendIndexDiagnostics(out, response.diagnostics);
+		out += "}";
+	}
+
+	void CmdReferences(LPCSTR raw, xr_string& out)
+	{
+		xr_string type, value, path;
+		if (!NqUtil::ArgString(raw, "type", type) || type.empty()) { NqUtil::JsonError(out, "missing 'type'"); return; }
+		if (!NqUtil::ArgString(raw, "value", value) || value.empty()) { NqUtil::JsonError(out, "missing 'value'"); return; }
+		NqUtil::ArgString(raw, "path", path);
+		xr_string scope, err;
+		if (!path.empty() && !NqDocs::Resolve(path.c_str(), scope, err)) { NqUtil::JsonError(out, err); return; }
+		NqProjectIndex::SSnapshot snapshot;
+		if (!NqProjectIndex::Snapshot(snapshot, err)) { NqUtil::JsonError(out, err); return; }
+		NqReferences::SResult result;
+		if (!NqReferences::Find(snapshot, type.c_str(), value.c_str(), scope.c_str(), result, err))
+		{
+			NqUtil::JsonError(out, err);
+			return;
+		}
+		const int limit = _max(1, _min(NqUtil::ArgInt(raw, "limit", 500), 2000));
+		const int count = _min(limit, static_cast<int>(result.references.size()));
+		out = "{\"ok\":true,\"type\":";
+		NqUtil::JsonString(out, type);
+		out += ",\"value\":"; NqUtil::JsonString(out, value);
+		out += ",\"path\":";
+		if (scope.empty()) out += "null";
+		else NqUtil::JsonPath(out, NqUtil::ProjectRelative(scope.c_str()).c_str());
+		out += ",\"count\":"; NqUtil::JsonInt(out, static_cast<int>(result.references.size()));
+		out += ",\"returned\":"; NqUtil::JsonInt(out, count);
+		out += ",\"truncated\":"; NqUtil::JsonBool(out, count < static_cast<int>(result.references.size()));
+		out += ",\"complete\":"; NqUtil::JsonBool(out, result.complete);
+		out += ",\"generation\":"; NqUtil::JsonInt(out, static_cast<int>(result.generation));
+		out += ",\"fingerprint\":"; NqUtil::JsonString(out, NqProjectIndex::FingerprintText(result.fingerprint));
+		out += ",\"catalog_generation\":"; NqUtil::JsonInt(out, static_cast<int>(result.catalog_generation));
+		out += ",\"references\":[";
+		for (int i = 0; i < count; ++i)
+		{
+			const NqReferences::SReference& reference = result.references[i];
+			if (i) out += ",";
+			out += "{\"path\":"; NqUtil::JsonPath(out, NqUtil::ProjectRelative(reference.path.c_str()).c_str());
+			out += ",\"node\":"; NqUtil::JsonString(out, reference.node);
+			out += ",\"slot\":"; NqUtil::JsonString(out, reference.slot);
+			out += ",\"kind\":"; NqUtil::JsonString(out, reference.kind);
+			out += ",\"param\":"; NqUtil::JsonString(out, reference.param);
+			out += ",\"source\":"; NqUtil::JsonString(out, reference.source);
+			out += "}";
+		}
+		out += "],\"diagnostics\":";
+		AppendReferenceDiagnostics(out, result.diagnostics);
+		out += "}";
+	}
+
+	void CmdRenameTask(LPCSTR raw, xr_string& out)
+	{
+		if (!NqUtil::ArgBool(raw, "ack_runtime_identity", false))
+		{
+			NqUtil::JsonError(out, "task rename changes runtime/save identity; pass ack_runtime_identity=true explicitly");
+			return;
+		}
+		xr_string path, from, to;
+		if (!NeedPath(raw, path, out)) return;
+		if (!NqUtil::ArgString(raw, "from", from) || from.empty()) { NqUtil::JsonError(out, "missing 'from'"); return; }
+		if (!NqUtil::ArgString(raw, "to", to) || to.empty()) { NqUtil::JsonError(out, "missing 'to'"); return; }
+		NqDoc* doc = OpenForEdit(path, out);
+		if (!doc) return;
+		xr_string err;
+		int updated = 0;
+		if (!doc->RenameTask(from.c_str(), to.c_str(), err, updated)) { NqUtil::JsonError(out, err); return; }
+		out = "{\"ok\":true,\"from\":";
+		NqUtil::JsonString(out, from);
+		out += ",\"to\":"; NqUtil::JsonString(out, to);
+		out += ",\"references_updated\":"; NqUtil::JsonInt(out, updated);
+		out += ",\"runtime_identity_changed\":true,";
+		AppendSummary(out, doc->path.c_str(), doc->quest, doc->problems, true, false);
+		AppendDocState(out, doc);
+		out += "}";
+	}
 }
 
 bool NqMcp::Handle(LPCSTR cmd, LPCSTR raw, xr_string& out)
@@ -358,6 +507,9 @@ bool NqMcp::Handle(LPCSTR cmd, LPCSTR raw, xr_string& out)
 	if (0 == strcmp(cmd, "quest_layout"))		{ CmdLayout(raw, out);				return true; }
 	if (0 == strcmp(cmd, "quest_lookup"))		{ NqPickers::McpLookup(raw, out);	return true; }
 	if (0 == strcmp(cmd, "quest_check_all"))	{ CmdCheckAll(out);					return true; }
+	if (0 == strcmp(cmd, "quest_project_find"))	{ CmdProjectFind(raw, out);			return true; }
+	if (0 == strcmp(cmd, "quest_references"))	{ CmdReferences(raw, out);			return true; }
+	if (0 == strcmp(cmd, "quest_rename_task"))	{ CmdRenameTask(raw, out);			return true; }
 	// quest_view is Phase 4 (UI); anything else quest_* is unknown here
 	return false;
 }

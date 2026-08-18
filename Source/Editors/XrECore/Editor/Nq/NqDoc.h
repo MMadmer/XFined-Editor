@@ -44,6 +44,7 @@ public:
 	bool			Reload			(xr_string& err);
 	bool			FileExists		() const;
 	bool			ModifiedExternally() const;
+	bool			ModelComplete	() const { return !m_Partial; }
 	// canonical text of the current content
 	xr_string		Text			() const;
 	xr_string		Outline			() const;
@@ -58,6 +59,9 @@ public:
 	bool			AddNode			(const SNqNode& n, xr_string& err);
 	bool			RemoveNodes		(const xr_vector<xr_string>& ids, xr_string& err);
 	bool			RenameNode		(LPCSTR id, LPCSTR new_id, xr_string& err);
+	// A task id is persisted in runtime/save state. The caller owns the explicit
+	// acknowledgement; this method only performs the proven all-or-nothing edit.
+	bool			RenameTask		(LPCSTR id, LPCSTR new_id, xr_string& err, int& references_updated);
 	bool			Connect			(LPCSTR from, LPCSTR pin, LPCSTR to, xr_string& err);
 	bool			Disconnect		(LPCSTR from, LPCSTR pin, LPCSTR to, xr_string& err);
 	bool			SetPos			(LPCSTR id, float x, float y, bool snapshot);

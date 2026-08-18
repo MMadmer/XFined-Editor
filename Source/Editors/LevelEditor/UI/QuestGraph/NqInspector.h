@@ -8,6 +8,7 @@
 
 #include "../../../XrECore/Editor/Nq/NqDoc.h"
 #include "../../../XrECore/Editor/Nq/NqCatalog.h"
+#include "../../../XrECore/Editor/Nq/NqReferences.h"
 
 class NqInspector
 {
@@ -37,6 +38,19 @@ private:
 	// the parameter table the current widget belongs to, so a `value` can ask what
 	// type the `name` beside it was declared with
 	SNqValue*		m_ParamsCtx;
+	bool			m_OpenTaskRename;
+	bool			m_OpenTaskReferences;
+	xr_string		m_TaskRenameFrom;
+	xr_string		m_TaskRenameTo;
+	xr_string		m_TaskRenameError;
+	xr_string		m_TaskReferencesId;
+	xr_string		m_TaskReferencesError;
+	xr_vector<NqReferences::SReference>	m_TaskReferences;
+	xr_vector<NqReferences::SDiagnostic>	m_TaskReferenceDiagnostics;
+	bool			m_TaskReferencesComplete;
+	u32			m_TaskReferencesGeneration;
+	xr_vector<xr_string>	m_ProjectQuestIds;
+	u32			m_ProjectQuestIdsSerial;
 
 	void			SyncNode		();
 	void			CommitNode		();
@@ -49,6 +63,10 @@ private:
 	// the quest's variables, in their own pane under the node - they are read and
 	// written from anywhere in the graph, so they are not a property of a node
 	void			DrawVarsSection	();
+	void			BeginTaskRename	(LPCSTR id);
+	void			DrawTaskRename	();
+	void			BeginTaskReferences(LPCSTR id);
+	void			DrawTaskReferences();
 	void			DrawHSplitter	(LPCSTR id, float& frac, float total);
 
 	// ---- variables -----------------------------------------------------------
@@ -79,4 +97,5 @@ private:
 	bool			DrawRaw			(LPCSTR label, SNqValue& v);
 	bool			DrawKindCombo	(LPCSTR label, u32 use_mask, xr_string& kind);
 	bool			PickerPopup		(LPCSTR popup, LPCSTR type, xr_string& out);
+	void			RefreshProjectQuestIds();
 };
