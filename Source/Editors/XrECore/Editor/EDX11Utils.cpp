@@ -1,4 +1,4 @@
-//---------------------------------------------------------------------------
+﻿//---------------------------------------------------------------------------
 #include "stdafx.h"
 #pragma hdrstop
 
@@ -20,6 +20,10 @@ namespace
 	u32		g_armed_until	= 0;	// GetTickCount() stamp
 	u32		g_armed_at		= 0;	// when the current arm window opened
 	u32		g_last_mirror	= 0;
+	// diagnosis of the last arm window, reported by DX11FrameCaptureWhy
+	u32			g_frames_armed	= 0;	// frames the render loop presented while armed
+	const char*	g_last_bail		= 0;	// why the newest of those frames mirrored nothing
+	bool		g_have_frame	= false;	// this arm window got a frame of its own
 
 	// Wall-clock, not frame counts: the arm window has to survive the gap between
 	// the request that arms it and the follow-up that reads the frame. Six
@@ -39,7 +43,13 @@ void	DX11ArmFrameCapture()
 	const u32 now = ::GetTickCount();
 	// a re-arm inside the window extends it without disowning the frame already
 	// mirrored for it - see the freshness rule in DX11GetFrameCapture
-	if (now > g_armed_until)	g_armed_at = now;
+	if (now > g_armed_until)
+	{
+		g_armed_at		= now;
+		g_frames_armed	= 0;
+		g_last_bail		= 0;
+		g_have_frame	= false;
+	}
 	g_armed_until	= now + CAPTURE_ARM_MS;
 
 	// The editor redraws on demand: sitting idle it produces no frames at all,
@@ -75,10 +85,13 @@ void	DX11MirrorBackbuffer()
 	// -trace: "frame not mirrored yet" has four possible causes and the caller
 	// cannot tell them apart. Only reports while armed, so it stays quiet.
 	static const bool s_trace = !!strstr(GetCommandLineA(), "-trace");
-#define MIRROR_BAIL(why)	do { if (s_trace) Msg("~ mirror: %s", why); return; } while(0)
+#define MIRROR_BAIL(why)	do { g_last_bail = why; if (s_trace) Msg("~ mirror: %s", why); return; } while(0)
 
 	const u32 now = ::GetTickCount();
 	if (now > g_armed_until)						return;		// not armed: silent
+	// counted before any other early-out: a capture that never gets here at all and
+	// one that gets here and bails are different faults with the same symptom
+	++g_frames_armed;
 	// a full readback every frame would stall the loop for as long as capture
 	// stays armed, and nothing needs that rate
 	if (g_last_mirror && (now - g_last_mirror) < CAPTURE_PERIOD_MS)	return;
@@ -96,10 +109,40 @@ void	DX11MirrorBackbuffer()
 		g_frame_w		= w;
 		g_frame_h		= h;
 		g_last_mirror	= now;
+		g_have_frame	= true;
 	}
-	else if (s_trace)	Msg("~ mirror: readback failed");
+	else
+	{
+		g_last_bail = "readback failed";
+		if (s_trace)	Msg("~ mirror: readback failed");
+	}
 	bb->Release();
 #undef MIRROR_BAIL
+}
+
+bool	DX11FrameCaptureWants()
+{
+	return ::GetTickCount() <= g_armed_until && !g_have_frame;
+}
+
+void	DX11FrameCaptureWhy(xr_string& out)
+{
+	const u32 now = ::GetTickCount();
+	if (now > g_armed_until)	{ out = "the arm window lapsed before a frame was read"; return; }
+	if (!g_frames_armed)
+	{
+		out = "the render loop has presented no frame since the capture was armed - "
+			  "the editor redraws on demand, so ask again after something makes it draw";
+		return;
+	}
+	if (g_last_bail)
+	{
+		out = "the render loop reached the mirror but it gave nothing back: ";
+		out += g_last_bail;
+		return;
+	}
+	if (!g_last_mirror)			{ out = "a frame was presented but nothing was mirrored from it"; return; }
+	out = "a frame was mirrored but it was too old to pass for what is on screen";
 }
 
 //------------------------------------------------------------------------------

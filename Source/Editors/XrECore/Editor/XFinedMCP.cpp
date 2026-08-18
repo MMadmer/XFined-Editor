@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "XFinedMCP.h"
 #include "EditorProject.h"
 #include "UI_ToolsCustom.h"
@@ -804,7 +804,13 @@ static void Execute(SMCPRequest& r)
 		// the two ways this fails are nothing alike, and one message for both
 		// sent the last debugging session chasing the wrong one
 		if (!DX11GetFrameCapture(px, w, h))
-			r.response = "{\"ok\":false,\"error\":\"capture just armed, no frame mirrored yet - ask again\"}";
+		{
+			xr_string why;
+			DX11FrameCaptureWhy(why);
+			r.response = "{\"ok\":false,\"error\":\"no frame mirrored yet - ";
+			r.response += why;
+			r.response += "\"}";
+		}
 		else if (!PixelsToPngBase64(px.data(), w, h, b64))
 		{
 			char msg[160];

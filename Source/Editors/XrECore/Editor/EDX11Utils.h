@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 //------------------------------------------------------------------------------
 // Offscreen rendering helpers for D3D11.
@@ -90,5 +90,13 @@ ECORE_API void	DX11ArmFrameCapture		();
 ECORE_API bool	DX11GetFrameCapture		(U32Vec& out, u32& w, u32& h);
 // called from CEditorRenderDevice::End() right before Present
 ECORE_API void	DX11MirrorBackbuffer	();
+// True while a capture is armed and still has no frame of its own. The editor does
+// not draw when its window is in the background, so without this a screenshot asked
+// for over MCP - the only way anything but a human asks - could never be answered.
+ECORE_API bool	DX11FrameCaptureWants	();
+// why the last DX11GetFrameCapture came back empty, in words. "not ready yet" and
+// "the render loop never reached the mirror" are nothing alike, and one message for
+// both is what made this undiagnosable without a rebuild.
+ECORE_API void	DX11FrameCaptureWhy		(xr_string& out);
 
 #endif	//	USE_DX11

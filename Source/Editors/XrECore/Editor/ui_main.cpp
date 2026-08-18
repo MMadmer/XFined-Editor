@@ -1,6 +1,7 @@
-//---------------------------------------------------------------------------
+﻿//---------------------------------------------------------------------------
 
 #include "stdafx.h"
+#include "EDX11Utils.h"
 #include "../../Public/xfined_resource.h"
 #pragma hdrstop
 
@@ -978,7 +979,16 @@ bool TUI::Idle()
     // draw path (and the Pump call inside it) stops for background windows
     XFinedMCP::Pump	();
 	SyncAppActivation();
-	if (m_bAppActive && !m_Flags.is(flNeedQuit) && !m_AppClosed)
+	// A background editor does not draw: repainting a window nobody is looking at
+	// would burn a core for nothing. An armed capture is the one exception - there
+	// is nothing to mirror without a presented frame, so every screenshot asked for
+	// over MCP failed for as long as the editor was not the foreground window, which
+	// is every time anything but a human asks. The exception ends with the frame.
+	bool draw = m_bAppActive;
+#if defined(USE_DX11)
+	if (!draw)	draw = DX11FrameCaptureWants();
+#endif
+	if (draw && !m_Flags.is(flNeedQuit) && !m_AppClosed)
 		RealRedrawScene();
 
     {
