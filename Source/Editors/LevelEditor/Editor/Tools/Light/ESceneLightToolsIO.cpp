@@ -15,6 +15,11 @@ enum{
 
 bool ESceneLightTool::LoadLTX(CInifile& ini)
 {
+	if (!ini.line_exist("main", "version") || !ini.line_exist("main", "flags") ||
+            !ini.line_exist("main", "sun_shadow_dir") ||
+            !ini.line_exist("main", "lcontrol_last_idx") || !ini.section_exist("lcontrols"))
+        return false;
+
 	u32 version 	= ini.r_u32("main", "version");
     if( version!=LIGHT_TOOLS_VERSION )
     {
@@ -22,7 +27,8 @@ bool ESceneLightTool::LoadLTX(CInifile& ini)
             return false;
         }
 
-	inherited::LoadLTX(ini);
+	if (!inherited::LoadLTX(ini))
+        return false;
 
   	m_Flags.assign		(ini.r_u32("main","flags"));
 

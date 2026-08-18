@@ -9,6 +9,17 @@ enum{
 };
 bool ESceneObjectTool::LoadLTX(CInifile& ini)
 {
+	if (!ini.line_exist("main", "version") || !ini.line_exist("main", "flags") ||
+            !ini.line_exist("appendrandom", "AppendRandomMinScale") ||
+            !ini.line_exist("appendrandom", "AppendRandomMaxScale") ||
+            !ini.line_exist("appendrandom", "AppendRandomMinRotation") ||
+            !ini.line_exist("appendrandom", "AppendRandomMaxRotation") ||
+            !ini.line_exist("appendrandom", "AppendRandomObjects_size"))
+    {
+        ELog.Msg(mtError, "%s tools: required settings are missing", ClassDesc());
+        return false;
+    }
+
 	u32 version 	= ini.r_u32("main", "version");
     if( version!=OBJECT_TOOLS_VERSION )
     {
@@ -16,7 +27,8 @@ bool ESceneObjectTool::LoadLTX(CInifile& ini)
             return false;
     }
 
-	inherited::LoadLTX		(ini);
+	if (!inherited::LoadLTX(ini))
+        return false;
 
    	m_Flags.assign			(ini.r_u32("main", "flags"));
 
@@ -30,6 +42,11 @@ bool ESceneObjectTool::LoadLTX(CInifile& ini)
     {
         string128 			buff;
         sprintf				(buff,"object_name_%d",i);
+        if (!ini.line_exist("appendrandom", buff))
+        {
+            ELog.Msg(mtError, "%s tools: required setting '%s' is missing", ClassDesc(), buff);
+            return false;
+        }
         shared_str s		= ini.r_string("AppendRandom", buff);
         m_AppendRandomObjects.push_back	(s);
     }

@@ -70,7 +70,13 @@ enum
     COMMAND_USE_SIMULATE_POSITIONS,
 	COMMAND_COMMAND_PALETTE,
 
-    COMMAND_MAIN_LAST
+	COMMAND_MAIN_LAST
+};
+
+enum ESceneLoadCommandFlags : u32
+{
+	flSceneLoadDiscard = 1 << 0,
+	flSceneLoadSuppressDialog = 1 << 1,
 };
 //------------------------------------------------------------------------------
 

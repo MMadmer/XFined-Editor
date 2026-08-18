@@ -10,6 +10,9 @@ enum
 
 bool ESceneSoundEnvTool::LoadLTX(CInifile& ini)
 {
+	if (!ini.line_exist("main", "version"))
+        return false;
+
 	u32 version 	= ini.r_u32("main","version");
     if( version!=SOUND_ENV_TOOLS_VERSION )
     {
@@ -17,7 +20,8 @@ bool ESceneSoundEnvTool::LoadLTX(CInifile& ini)
             return false;
     }
 
-	inherited::LoadLTX(ini);
+	if (!inherited::LoadLTX(ini))
+        return false;
 
 	return true;
 }

@@ -282,6 +282,9 @@ void CSpawnPoint::SSpawnData::get_bone_xform	(LPCSTR name, Fmatrix& xform)
 
 bool CSpawnPoint::SSpawnData::LoadLTX	(CInifile& ini, LPCSTR sect_name)
 {
+    if (!ini.section_exist(sect_name) || !ini.line_exist(sect_name, "name"))
+        return false;
+
     xr_string temp 		= ini.r_string		(sect_name, "name");
     Create				(temp.c_str());
 
@@ -338,15 +341,29 @@ void CSpawnPoint::SSpawnData::SaveStream(IWriter& F)
 bool CSpawnPoint::SSpawnData::LoadStream(IReader& F)
 {
     string64 			temp;
-    R_ASSERT			(F.find_chunk(SPAWNPOINT_CHUNK_ENTITYREF));
-    F.r_stringZ			(temp,sizeof(temp));
+	const u32 entityRefSize = F.find_chunk(SPAWNPOINT_CHUNK_ENTITYREF);
+    if (!entityRefSize || entityRefSize > sizeof(temp))
+        return false;
+    F.r(temp, entityRefSize);
+    if (temp[entityRefSize - 1])
+        return false;
 
-    if(F.find_chunk(SPAWNPOINT_CHUNK_FLAGS))
-		m_flags.assign	(F.r_u8());
+    const u32 flagsSize = F.find_chunk(SPAWNPOINT_CHUNK_FLAGS);
+    if (flagsSize)
+    {
+        if (flagsSize != sizeof(u8))
+            return false;
+        m_flags.assign(F.r_u8());
+    }
 
     NET_Packet 			Packet;
-    R_ASSERT(F.find_chunk(SPAWNPOINT_CHUNK_SPAWNDATA));
+    const u32 spawnDataSize = F.find_chunk(SPAWNPOINT_CHUNK_SPAWNDATA);
+    if (spawnDataSize < sizeof(Packet.B.count))
+        return false;
     Packet.B.count 		= F.r_u32();
+	if (Packet.B.count >= NET_PacketSizeLimit ||
+            Packet.B.count > spawnDataSize - sizeof(Packet.B.count))
+        return false;
     F.r					(Packet.B.data,Packet.B.count);
     Create				(temp);
     if (Valid())
@@ -980,20 +997,20 @@ bool CSpawnPoint::RayPick(float& distance, const Fvector& start, const Fvector& 
 
 bool CSpawnPoint::OnAppendObject(CCustomObject* object)
 {
-	R_ASSERT(!m_AttachedObject);
-    if (object->FClassID!=OBJCLASS_SHAPE) return false;
+    CEditShape* shape = dynamic_cast<CEditShape*>(object);
+	if (m_AttachedObject || !shape)
+        return false;
     // all right
     m_AttachedObject 		= object;
     object->m_pOwnerObject	= this;
     Scene->RemoveObject		(object, false, false);
 
-    CEditShape* sh = dynamic_cast<CEditShape*>(m_AttachedObject);
     if(m_SpawnData.Valid())
     {
         if(pSettings->line_exist(m_SpawnData.m_Data->name(),"shape_transp_color"))
         {
-            sh->m_DrawTranspColor = pSettings->r_color(m_SpawnData.m_Data->name(),"shape_transp_color");
-            sh->m_DrawEdgeColor = pSettings->r_color(m_SpawnData.m_Data->name(),"shape_edge_color");
+            shape->m_DrawTranspColor = pSettings->r_color(m_SpawnData.m_Data->name(),"shape_transp_color");
+            shape->m_DrawEdgeColor = pSettings->r_color(m_SpawnData.m_Data->name(),"shape_edge_color");
         }
     }
 
@@ -1002,6 +1019,8 @@ bool CSpawnPoint::OnAppendObject(CCustomObject* object)
 
 bool CSpawnPoint::LoadLTX(CInifile& ini, LPCSTR sect_name)
 {
+	if (!ini.line_exist(sect_name, "version"))
+        return false;
 
 	u32 version = ini.r_u32(sect_name, "version");
 
@@ -1011,7 +1030,10 @@ bool CSpawnPoint::LoadLTX(CInifile& ini, LPCSTR sect_name)
         return false;
     }
 
-	CCustomObject::LoadLTX(ini, sect_name);
+	if (!CCustomObject::LoadLTX(ini, sect_name))
+        return false;
+    if (!ini.line_exist(sect_name, "type"))
+        return false;
     m_Type 			= (EPointType)ini.r_u32(sect_name, "type");
 
     if (m_Type>=ptMaxType)
@@ -1034,16 +1056,34 @@ bool CSpawnPoint::LoadLTX(CInifile& ini, LPCSTR sect_name)
     }break;
     case ptRPoint:
         {
+            if (!ini.line_exist(sect_name, "team_id") ||
+                    !ini.line_exist(sect_name, "rp_type") ||
+                    !ini.line_exist(sect_name, "game_type") ||
+                    (version >= 0x0017 && !ini.line_exist(sect_name, "rp_profile")))
+                return false;
+
             if(version>=0x0017)
             	m_rpProfile				= ini.r_string(sect_name, "rp_profile");
                 
             m_RP_TeamID					= ini.r_u8	(sect_name, "team_id");
             m_RP_Type					= ini.r_u8	(sect_name, "rp_type");
-            m_GameType.LoadLTX			(ini, sect_name, (version==0x0014) );
+            if (!m_GameType.LoadLTX(ini, sect_name, version == 0x0014))
+                return false;
         }
     break;
     case ptEnvMod:
         {
+            if (!ini.line_exist(sect_name, "em_radius") ||
+                    !ini.line_exist(sect_name, "em_power") ||
+                    !ini.line_exist(sect_name, "view_dist") ||
+                    !ini.line_exist(sect_name, "fog_color") ||
+                    !ini.line_exist(sect_name, "fog_density") ||
+                    !ini.line_exist(sect_name, "ambient_color") ||
+                    !ini.line_exist(sect_name, "sky_color") ||
+                    !ini.line_exist(sect_name, "hemi_color") ||
+                    (version >= 0x0016 && !ini.line_exist(sect_name, "em_flags")))
+                return false;
+
             m_EM_Radius			= ini.r_float(sect_name, "em_radius");
             m_EM_Power			= ini.r_float(sect_name, "em_power");
             m_EM_ViewDist		= ini.r_float(sect_name, "view_dist");
@@ -1061,7 +1101,20 @@ bool CSpawnPoint::LoadLTX(CInifile& ini, LPCSTR sect_name)
 
 	// objects
     if(ini.line_exist(sect_name, "attached_count"))
-	    Scene->ReadObjectsLTX(ini, sect_name, "attached", EScene::TAppendObject(this, &CSpawnPoint::OnAppendObject),0);
+	{
+        const u32 objectCount = ini.r_u32(sect_name, "attached_count");
+        string128 objectSection;
+        for (u32 index = 0; index < objectCount; ++index)
+        {
+            sprintf(objectSection, "%s_attached_%d", sect_name, index);
+            if (!ini.section_exist(objectSection))
+                return false;
+        }
+
+	    if (!Scene->ReadObjectsLTX(ini, sect_name, "attached",
+            EScene::TAppendObject(this, &CSpawnPoint::OnAppendObject), nullptr))
+            return false;
+	}
 
 	UpdateTransform	();
 
@@ -1124,14 +1177,17 @@ bool CSpawnPoint::LoadStream(IReader& F)
 {
 	u16 version = 0;
 
-    R_ASSERT(F.r_chunk(SPAWNPOINT_CHUNK_VERSION,&version));
+    if (F.find_chunk(SPAWNPOINT_CHUNK_VERSION) != sizeof(version))
+        return false;
+    F.r(&version, sizeof(version));
     if(version<0x0014)
     {
         ELog.Msg( mtError, "SPAWNPOINT: Unsupported version.");
         return false;
     }
 
-	CCustomObject::LoadStream(F);
+	if (!CCustomObject::LoadStream(F))
+        return false;
 
     // new generation
     if (F.find_chunk(SPAWNPOINT_CHUNK_ENTITYREF))
@@ -1144,44 +1200,75 @@ bool CSpawnPoint::LoadStream(IReader& F)
         SetValid	(true);
         m_Type			= ptSpawnPoint;
     }else{
-	    if (F.find_chunk(SPAWNPOINT_CHUNK_TYPE))     m_Type 		= (EPointType)F.r_u32();
+        if (F.find_chunk(SPAWNPOINT_CHUNK_TYPE) != sizeof(u32))
+            return false;
+        m_Type = static_cast<EPointType>(F.r_u32());
         if (m_Type>=ptMaxType){
             ELog.Msg( mtError, "SPAWNPOINT: Unsupported spawn version.");
             return false;
         }
     	switch (m_Type){
         case ptRPoint:
-		    if (F.find_chunk(SPAWNPOINT_CHUNK_RPOINT))
-            {
+		{
+            const u32 rpointSize = F.find_chunk(SPAWNPOINT_CHUNK_RPOINT);
+            const u32 fixedSize = sizeof(m_RP_TeamID) + sizeof(m_RP_Type) + sizeof(u16);
+            if (rpointSize < fixedSize + (version >= 0x0017 ? 1 : 0))
+                return false;
 
-                m_RP_TeamID				= F.r_u8();
-                m_RP_Type				= F.r_u8();
-                m_GameType.LoadStream	(F);
-                if(version>=0x0017)
-                	F.r_stringZ			(m_rpProfile);
-            }
+            LPCSTR rpointData = static_cast<LPCSTR>(F.pointer());
+            if (version >= 0x0017 && rpointData[rpointSize - 1])
+                return false;
+
+            m_RP_TeamID = F.r_u8();
+            m_RP_Type = F.r_u8();
+            if (!m_GameType.LoadStream(F))
+                return false;
+            if(version>=0x0017)
+                m_rpProfile = static_cast<LPCSTR>(F.pointer());
+        }
         break;
         case ptEnvMod:
-		    if (F.find_chunk(SPAWNPOINT_CHUNK_ENVMOD)){
-                m_EM_Radius			= F.r_float();
-                m_EM_Power			= F.r_float();
-                m_EM_ViewDist		= F.r_float();
-                m_EM_FogColor		= F.r_u32();
-                m_EM_FogDensity		= F.r_float();
-                m_EM_AmbientColor	= F.r_u32();
-                m_EM_SkyColor		= F.r_u32();
-                if (F.find_chunk(SPAWNPOINT_CHUNK_ENVMOD2))
-                    m_EM_HemiColor	= F.r_u32();
-                if (F.find_chunk(SPAWNPOINT_CHUNK_ENVMOD3))
-                    m_EM_Flags.assign(F.r_u16());
+		{
+            const u32 envModSize = sizeof(m_EM_Radius) + sizeof(m_EM_Power) +
+                sizeof(m_EM_ViewDist) + sizeof(m_EM_FogColor) + sizeof(m_EM_FogDensity) +
+                sizeof(m_EM_AmbientColor) + sizeof(m_EM_SkyColor);
+            if (F.find_chunk(SPAWNPOINT_CHUNK_ENVMOD) != envModSize)
+                return false;
+
+            m_EM_Radius = F.r_float();
+            m_EM_Power = F.r_float();
+            m_EM_ViewDist = F.r_float();
+            m_EM_FogColor = F.r_u32();
+            m_EM_FogDensity = F.r_float();
+            m_EM_AmbientColor = F.r_u32();
+            m_EM_SkyColor = F.r_u32();
+
+            const u32 hemiSize = F.find_chunk(SPAWNPOINT_CHUNK_ENVMOD2);
+            if (hemiSize)
+            {
+                if (hemiSize != sizeof(m_EM_HemiColor))
+                    return false;
+                m_EM_HemiColor = F.r_u32();
             }
+
+            const u32 flagsSize = F.find_chunk(SPAWNPOINT_CHUNK_ENVMOD3);
+            if (flagsSize)
+            {
+                if (flagsSize != sizeof(u16))
+                    return false;
+                m_EM_Flags.assign(F.r_u16());
+            }
+        }
         break;
-        default: THROW;
+        default:
+            return false;
         }
     }
 
 	// objects
-    Scene->ReadObjectsStream(F,SPAWNPOINT_CHUNK_ATTACHED_OBJ, EScene::TAppendObject(this, &CSpawnPoint::OnAppendObject),0);
+    if (!Scene->ReadObjectsStream(F, SPAWNPOINT_CHUNK_ATTACHED_OBJ,
+            EScene::TAppendObject(this, &CSpawnPoint::OnAppendObject), nullptr))
+        return false;
 
 	UpdateTransform	();
 

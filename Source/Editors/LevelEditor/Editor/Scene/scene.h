@@ -118,8 +118,8 @@ struct st_LevelOptions{
 	void 			Save			(IWriter&);
 	void 			SaveLTX			(CInifile&);
 
-	void 			Read			(IReader&);
-	void 			ReadLTX			(CInifile&);
+	bool 			Read			(IReader&);
+	bool 			ReadLTX			(CInifile&);
     void			Reset			();
 };
 
@@ -187,7 +187,8 @@ public:
 
 	bool 			ReadObjectStream(IReader& F, CCustomObject*& O);
 	bool 			ReadObjectLTX(CInifile& ini, LPCSTR sect_name, CCustomObject*& O);
-	bool 			ReadObjectsStream(IReader& F, u32 chunk_id, TAppendObject on_append, SPBItem* pb);
+	bool 			ReadObjectsStream(IReader& F, u32 chunk_id, TAppendObject on_append, SPBItem* pb,
+		u32* decoded_count = nullptr);
 	bool 			ReadObjectsLTX(CInifile& ini, LPCSTR sect_name_parent, LPCSTR sect_name_prefix, TAppendObject on_append, SPBItem* pb);
 
 
@@ -199,21 +200,21 @@ public:
 	xr_string		LevelPartPath(LPCSTR map_name);
 	xr_string		LevelPartName(LPCSTR map_name, ObjClassID cls);
 
-	BOOL			LoadLevelPart(ESceneToolBase* M, LPCSTR map_name);
-	BOOL			LoadLevelPartStream(ESceneToolBase* M, LPCSTR map_name);
-	BOOL			LoadLevelPartLTX(ESceneToolBase* M, LPCSTR map_name);
+	BOOL			LoadLevelPart(ESceneToolBase* M, LPCSTR map_name, xr_string* error = nullptr);
+	BOOL			LoadLevelPartStream(ESceneToolBase* M, LPCSTR map_name, xr_string* error = nullptr);
+	BOOL			LoadLevelPartLTX(ESceneToolBase* M, LPCSTR map_name, xr_string* error = nullptr);
 
-	BOOL			LoadLevelPart(LPCSTR map_name, ObjClassID cls);
+	BOOL			LoadLevelPart(LPCSTR map_name, ObjClassID cls, xr_string* error = nullptr);
 	BOOL		 	UnloadLevelPart(ESceneToolBase* M);
 	BOOL			UnloadLevelPart(LPCSTR map_name, ObjClassID cls);
 public:
 	bool			ExportGame(SExportStreams* F);
 
-	bool 			Load(LPCSTR map_name, bool bUndo);
-	bool 			LoadLTX(LPCSTR map_name, bool bUndo);
-	// Is this file loadable as a scene at all? A load clears the open scene
-	// before it reads anything, so an untrusted name (MCP, recent list, a
-	// double click on the wrong asset) has to be rejected before that happens.
+	bool 			Load(LPCSTR map_name, bool bUndo, xr_string* error = nullptr);
+	bool 			LoadLTX(LPCSTR map_name, bool bUndo, xr_string* error = nullptr);
+	bool			LoadTransactional(LPCSTR map_name, xr_string& error);
+	bool			LastLoadRollbackSucceeded() const { return m_LastLoadRollbackSucceeded; }
+	// Reject unrelated files before a transactional load captures and mutates the scene.
 	static bool		IsSceneFile(LPCSTR full_name, xr_string& why);
 
 	bool 			Save(LPCSTR map_name, bool bUndo, bool bForceSaveAll, xr_string* error = nullptr);
@@ -340,7 +341,7 @@ public:
 	void 			OnCreate();
 	void 			OnDestroy();
 	void 			Modified();
-	bool 			IfModified();
+	bool 			IfModified(bool* discarded = nullptr);
 	bool 			IsUnsaved();
 	bool 			IsModified();
 
@@ -399,6 +400,10 @@ public:
 	void            RegisterSubstObjectName(const xr_string& from, const xr_string& to);
 	bool            GetSubstObjectName(const xr_string& from, xr_string& to) const;
 private:
+	bool			CaptureLoadRollback(CMemoryWriter& snapshot, xr_string& error);
+	bool			RestoreLoadRollback(IReader& snapshot, xr_string& error);
+	void			ClearLoadCandidate();
+	void			InvalidateBuildCaches();
 	bool			SaveUndoSnapshot(UndoItem& item);
 	EUndoApplyResult ApplyUndoTransforms(const xr_vector<UndoTransformItem>& transforms, bool before, bool validateEdge);
 	bool			RestoreUndoSnapshot(const UndoItem& snapshot, const xr_vector<const UndoItem*>& replay);
@@ -415,6 +420,7 @@ private:
 
 	CGameGraphBuilder m_graph_builder;
 	CFromBuilder m_cfrom_builder;
+	bool m_LastLoadRollbackSucceeded = true;
 };
 
 

@@ -127,17 +127,25 @@ void  CGroupObject::SetRefName(LPCSTR nm)
 
 bool CGroupObject::LoadLTX(CInifile& ini, LPCSTR sect_name)
 {
+    if (!ini.line_exist(sect_name, "version"))
+        return false;
+
     u32 version = ini.r_u32(sect_name, "version");
     if (version<0x0011)
     {
         ELog.DlgMsg( mtError, "CGroupObject: unsupported file version. Object can't load.");
         return false;
     }
-	CCustomObject::LoadLTX(ini, sect_name);
+	if (!CCustomObject::LoadLTX(ini, sect_name))
+        return false;
 
     Flags32 tmp_flags;tmp_flags.zero();
     if(version<0x0012)
-    	tmp_flags.assign(ini.r_u32(sect_name, "flags") );
+	{
+        if (!ini.line_exist(sect_name, "flags"))
+            return false;
+	    tmp_flags.assign(ini.r_u32(sect_name, "flags") );
+	}
 
 	// objects
     if(/*IsOpened()*/ tmp_flags.test((1<<0)))
@@ -158,13 +166,41 @@ bool CGroupObject::LoadLTX(CInifile& ini, LPCSTR sect_name)
 */        
     }else
     {
-	    Scene->ReadObjectsLTX			(ini, sect_name, "ingroup", EScene::TAppendObject(this, &CGroupObject::AppendObjectLoadCB), 0);
-    }
-    VERIFY(m_ObjectsInGroup.size());
+	    if (!ini.line_exist(sect_name, "ingroup_count"))
+            return false;
 
-   	SetRefName(ini.r_string	(sect_name, "ref_name")) ;
+        const u32 objectCount = ini.r_u32(sect_name, "ingroup_count");
+        string128 objectSection;
+        for (u32 index = 0; index < objectCount; ++index)
+        {
+            sprintf(objectSection, "%s_ingroup_%d", sect_name, index);
+            if (!ini.section_exist(objectSection))
+                return false;
+        }
+
+	    if (!Scene->ReadObjectsLTX(ini, sect_name, "ingroup",
+            EScene::TAppendObject(this, &CGroupObject::AppendObjectLoadCB), nullptr))
+        {
+            ClearInternal(m_ObjectsInGroup);
+            return false;
+        }
+    }
+    if (m_ObjectsInGroup.empty())
+        return false;
+
+	if (!ini.line_exist(sect_name, "ref_name"))
+    {
+        ClearInternal(m_ObjectsInGroup);
+        return false;
+    }
+
+	SetRefName(ini.r_string	(sect_name, "ref_name")) ;
 	if (!m_ReferenceName_.size())
+    {
         ELog.Msg			(mtError,"ERROR: group '%s' - has empty reference. Corrupted file?", GetName());
+        ClearInternal(m_ObjectsInGroup);
+        return false;
+    }
     
 
     if(version<0x0012)
@@ -204,17 +240,28 @@ bool CGroupObject::LoadStream(IReader& F)
 {
     u16 version=0;
 
-    R_ASSERT(F.r_chunk(GROUPOBJ_CHUNK_VERSION,&version));
+    if (F.find_chunk(GROUPOBJ_CHUNK_VERSION) != sizeof(version))
+        return false;
+    F.r(&version, sizeof(version));
     if (version<0x0011)
     {
         ELog.DlgMsg( mtError, "CGroupObject: unsupported file version. Object can't load.");
         return false;
     }
-	CCustomObject::LoadStream(F);
+	if (!CCustomObject::LoadStream(F))
+        return false;
 
     Flags32 tmp_flags; tmp_flags.zero();
     if(version<0x0012)
-    	F.r_chunk(GROUPOBJ_CHUNK_FLAGS,&tmp_flags);
+	{
+        const u32 flagsSize = F.find_chunk(GROUPOBJ_CHUNK_FLAGS);
+        if (flagsSize)
+        {
+            if (flagsSize != sizeof(tmp_flags))
+                return false;
+            F.r(&tmp_flags, sizeof(tmp_flags));
+        }
+	}
 
 	// objects
     if (tmp_flags.test(1<<0))
@@ -232,16 +279,31 @@ bool CGroupObject::LoadStream(IReader& F)
 */        
     }else
     {
-	    Scene->ReadObjectsStream(F,GROUPOBJ_CHUNK_OBJECT_LIST, EScene::TAppendObject(this, &CGroupObject::AppendObjectLoadCB),0);
+	    if (!Scene->ReadObjectsStream(F, GROUPOBJ_CHUNK_OBJECT_LIST,
+            EScene::TAppendObject(this, &CGroupObject::AppendObjectLoadCB), nullptr))
+        {
+            ClearInternal(m_ObjectsInGroup);
+            return false;
+        }
     }
-    VERIFY(m_ObjectsInGroup.size());
+    if (m_ObjectsInGroup.empty())
+        return false;
 
-    if (F.find_chunk(GROUPOBJ_CHUNK_REFERENCE))	
+    const u32 referenceSize = F.find_chunk(GROUPOBJ_CHUNK_REFERENCE);
+    if (!referenceSize)
     {
-    	shared_str rn;
-    	F.r_stringZ	(rn);
-        SetRefName(rn.c_str());
-     }
+        ClearInternal(m_ObjectsInGroup);
+        return false;
+    }
+
+    LPCSTR reference = static_cast<LPCSTR>(F.pointer());
+    if (!reference[0] || reference[referenceSize - 1])
+    {
+        ClearInternal(m_ObjectsInGroup);
+        return false;
+    }
+
+    SetRefName(reference);
      
     if(version<0x0012)
     {

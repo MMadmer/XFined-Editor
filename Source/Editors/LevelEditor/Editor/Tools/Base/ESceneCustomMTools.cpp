@@ -45,6 +45,9 @@ void ESceneToolBase::OnDestroy()
 
 bool ESceneToolBase::LoadLTX(CInifile& ini)
 {
+    if (!ini.line_exist("modif", "name") || !ini.line_exist("modif", "time"))
+        return false;
+
     m_ModifName 	= ini.r_string("modif", "name");
     m_ModifTime 	= ini.r_u32("modif", "time");
 	return 			true;

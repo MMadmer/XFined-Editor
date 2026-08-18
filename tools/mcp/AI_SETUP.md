@@ -76,7 +76,7 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_object_info` | one object by exact `name`: class, selected/visible, transform |
 | `xfined_list_projects` | recent projects (name + folder path) |
 | `xfined_open_project` | open a project by `path`; its last scene auto-loads |
-| `xfined_open_scene` | load a `.level` scene in the active project (synchronous) |
+| `xfined_open_scene` | load a `.level` scene in the active project (synchronous); refuses to replace unsaved work unless `discard=true`, and preserves the current scene if loading fails |
 | `xfined_list_objects` | scene object names; filters: `class`, `name_contains`, `limit` |
 | `xfined_focus_object` | frame the camera on object `name` like the F key; `select=true` also selects it |
 | `xfined_mod_manifest` | XMS mod manifest of the active project: id, name, version, target game `mode`, declared `provides_mode` list, requires/after/before/conflicts, existing module dirs |

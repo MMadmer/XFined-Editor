@@ -28,14 +28,20 @@ bool ESceneCustomOTool::OnLoadAppendObject(CCustomObject* O)
 bool ESceneCustomOTool::LoadSelection(IReader& F)
 {
     int count					= 0;
-	F.r_chunk					(CHUNK_OBJECT_COUNT,&count);
+	if (F.find_chunk(CHUNK_OBJECT_COUNT) != sizeof(count))
+        return false;
+	F.r						(&count, sizeof(count));
+    if (count < 0 || (count && !F.find_chunk(CHUNK_OBJECTS)))
+        return false;
 
     // Empty tools are common, and opening a console for them costs more than the load.
     SPBItem* pb 				= count ? UI->ProgressStart(count,xr_string().sprintf("Loading %s(stream)...",ClassDesc()).c_str()) : nullptr;
-    Scene->ReadObjectsStream	(F,CHUNK_OBJECTS, EScene::TAppendObject(this, &ESceneCustomOTool::OnLoadSelectionAppendObject),pb);
+    u32 decodedCount = 0;
+    const bool loaded = Scene->ReadObjectsStream(F, CHUNK_OBJECTS,
+        EScene::TAppendObject(this, &ESceneCustomOTool::OnLoadSelectionAppendObject), pb, &decodedCount);
     if (pb) UI->ProgressEnd	(pb);
 
-    return true;
+    return loaded && decodedCount == static_cast<u32>(count);
 }
 
 
@@ -59,47 +65,76 @@ void ESceneCustomOTool::SaveSelection(IWriter& F)
 
 bool ESceneCustomOTool::LoadLTX(CInifile& ini)
 {
-	inherited::LoadLTX	(ini);
+	if (!inherited::LoadLTX(ini))
+    {
+        ELog.Msg(mtError, "%s tools: required metadata is missing", ClassDesc());
+        return false;
+    }
+
+    if (!ini.line_exist("main", "objects_count"))
+    {
+        ELog.Msg(mtError, "%s tools: required objects_count is missing", ClassDesc());
+        return false;
+    }
 
     u32 count			= ini.r_u32("main", "objects_count");
 
 	SPBItem* pb 		= count ? UI->ProgressStart(count,xr_string().sprintf("Loading %s(ltx)...",ClassDesc()).c_str()) : nullptr;
 
-    u32 i				= 0;
     string128			buff;
+    bool loaded = true;
 
-      for(i=0; i<count; ++i)
-      {
-      	
-        
-          CCustomObject* obj	= NULL;
-          sprintf				(buff, "object_%d", i);
-          if( Scene->ReadObjectLTX(ini, buff, obj) )
-          {
-              if (!OnLoadAppendObject(obj))
-                  xr_delete(obj);
-          }
-          if (pb) pb->Inc();
-		  UI->ProgressCheckpoint();
-      }
+	for (u32 i = 0; i < count; ++i)
+    {
+        CCustomObject* obj = nullptr;
+        sprintf(buff, "object_%d", i);
+        if (!ini.section_exist(buff))
+        {
+            ELog.Msg(mtError, "%s tools: required section '%s' is missing", ClassDesc(), buff);
+            loaded = false;
+        }
+        else if (!Scene->ReadObjectLTX(ini, buff, obj))
+        {
+            ELog.Msg(mtError, "%s tools: object section '%s' is invalid", ClassDesc(), buff);
+            loaded = false;
+        }
+        else if (!OnLoadAppendObject(obj))
+        {
+            ELog.Msg(mtError, "%s tools: object section '%s' was rejected", ClassDesc(), buff);
+            xr_delete(obj);
+            loaded = false;
+        }
+
+        if (pb) pb->Inc();
+		UI->ProgressCheckpoint();
+        if (!loaded)
+            break;
+    }
 
 	if (pb) UI->ProgressEnd(pb);
 
-    return true;
+    return loaded;
 }
 
 bool ESceneCustomOTool::LoadStream(IReader& F)
 {
-	inherited::LoadStream		(F);
+	if (!inherited::LoadStream(F))
+        return false;
 
     int count					= 0;
-	F.r_chunk					(CHUNK_OBJECT_COUNT,&count);
+	if (F.find_chunk(CHUNK_OBJECT_COUNT) != sizeof(count))
+        return false;
+	F.r						(&count, sizeof(count));
+    if (count < 0 || (count && !F.find_chunk(CHUNK_OBJECTS)))
+        return false;
 
     SPBItem* pb 				= count ? UI->ProgressStart(count,xr_string().sprintf("Loading %s...",ClassDesc()).c_str()) : nullptr;
-    Scene->ReadObjectsStream	(F,CHUNK_OBJECTS, EScene::TAppendObject(this, &ESceneCustomOTool::OnLoadAppendObject),pb);
+    u32 decodedCount = 0;
+    const bool loaded = Scene->ReadObjectsStream(F, CHUNK_OBJECTS,
+        EScene::TAppendObject(this, &ESceneCustomOTool::OnLoadAppendObject), pb, &decodedCount);
     if (pb) UI->ProgressEnd	(pb);
 
-    return true;
+    return loaded && (!count || decodedCount == static_cast<u32>(count));
 }
 
 
@@ -130,8 +165,6 @@ void ESceneCustomOTool::SaveStream(IWriter& F)
 {
 	inherited::SaveStream	(F);
 
-    int Objcount		= 0;
-
 	F.open_chunk		(CHUNK_OBJECTS);
     int count			= 0;
     for(ObjectIt it = m_Objects.begin();it!=m_Objects.end();++it)
@@ -142,10 +175,10 @@ void ESceneCustomOTool::SaveStream(IWriter& F)
         F.open_chunk			(count++);
         Scene->SaveObjectStream	(*it,F);
         F.close_chunk			();
-    }
+	}
 	F.close_chunk	();
 
-	F.w_chunk		(CHUNK_OBJECT_COUNT,&Objcount,sizeof(Objcount));
+	F.w_chunk		(CHUNK_OBJECT_COUNT, &count, sizeof(count));
 }
 
 

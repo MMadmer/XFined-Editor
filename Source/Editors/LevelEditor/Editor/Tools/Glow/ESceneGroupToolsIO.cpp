@@ -26,6 +26,9 @@ bool ESceneGroupTool::LoadStream(IReader& F)
 bool ESceneGroupTool::LoadLTX(CInifile& ini)
 {
 	LPCSTR section = "main";
+	if (!ini.line_exist(section, "version"))
+        return false;
+
 	u16 version 	= ini.r_u16(section, "version");
 
     if( version!=GROUP_TOOLS_VERSION )

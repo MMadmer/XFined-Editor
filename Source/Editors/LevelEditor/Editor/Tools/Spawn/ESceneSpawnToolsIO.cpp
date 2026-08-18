@@ -11,6 +11,9 @@ enum
 
 bool ESceneSpawnTool::LoadLTX(CInifile& ini)
 {
+	if (!ini.line_exist("main", "version") || !ini.line_exist("main", "flags"))
+        return false;
+
 	u32 version 	= ini.r_u32("main","version");
     if( version!=SPAWN_TOOLS_VERSION )
     {
@@ -18,7 +21,8 @@ bool ESceneSpawnTool::LoadLTX(CInifile& ini)
         return false;
     }
 
-	inherited::LoadLTX	(ini);
+	if (!inherited::LoadLTX(ini))
+        return false;
 
    	m_Flags.assign	(ini.r_u32("main","flags"));
 

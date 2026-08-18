@@ -383,6 +383,71 @@ static bool SkipJsonValue(const char*& cursor, u32 depth)
 	}
 	return SkipJsonNumber(cursor);
 }
+
+static bool ReadOptionalJsonBool(LPCSTR raw, LPCSTR field, bool& value)
+{
+	if (!raw || !field || !*field)
+		return false;
+
+	bool found = false;
+	const char* cursor = raw;
+	SkipJsonWhitespace(cursor);
+	if ('{' != *cursor)
+		return false;
+	++cursor;
+	SkipJsonWhitespace(cursor);
+
+	if ('}' != *cursor)
+	{
+		for (;;)
+		{
+			xr_string key;
+			if (!ParseJsonString(cursor, &key))
+				return false;
+			SkipJsonWhitespace(cursor);
+			if (':' != *cursor)
+				return false;
+			++cursor;
+			SkipJsonWhitespace(cursor);
+
+			if (key == field)
+			{
+				if (found)
+					return false;
+				if (!strncmp(cursor, "true", 4))
+				{
+					value = true;
+					cursor += 4;
+				}
+				else if (!strncmp(cursor, "false", 5))
+				{
+					value = false;
+					cursor += 5;
+				}
+				else
+				{
+					return false;
+				}
+				found = true;
+			}
+			else if (!SkipJsonValue(cursor, 1))
+			{
+				return false;
+			}
+
+			SkipJsonWhitespace(cursor);
+			if ('}' == *cursor)
+				break;
+			if (',' != *cursor)
+				return false;
+			++cursor;
+			SkipJsonWhitespace(cursor);
+		}
+	}
+	++cursor;
+	SkipJsonWhitespace(cursor);
+	return !*cursor;
+}
 }
 
 bool XFinedMCP::GetArg(LPCSTR raw, LPCSTR field, char* dst, u32 dst_size)
@@ -805,6 +870,12 @@ static void Execute(SMCPRequest& r)
 			r.response = "{\"ok\":false,\"error\":\"missing 'scene' argument\"}";
 		else
 		{
+			bool discard = false;
+			if (!ReadOptionalJsonBool(r.raw.c_str(), "discard", discard))
+			{
+				r.response = "{\"ok\":false,\"error\":\"'discard' must be a boolean\"}";
+				return;
+			}
 			for (char* p = scene; *p; ++p) if (*p == '/') *p = '\\';
 			const char* slash = strrchr(scene, '\\');
 			const char* extension = strrchr(scene, '.');
@@ -843,19 +914,33 @@ static void Execute(SMCPRequest& r)
 			const DWORD attributes = ::GetFileAttributesA(full);
 			if (INVALID_FILE_ATTRIBUTES != attributes && !(attributes & FILE_ATTRIBUTE_DIRECTORY))
 			{
+				if (UI && UI->IsModified() && !discard)
+				{
+					r.response = "{\"ok\":false,\"error\":\"scene has unsaved changes; pass discard=true to replace it\"}";
+					return;
+				}
 				// COMMAND_LOAD refuses a file that is not a scene (and says so in
 				// the log) instead of loading it; report what actually happened
 				// rather than a blanket ok
-				const bool loaded = !!(BOOL)ExecCommand(COMMAND_LOAD, xr_string(full));
+				const u32 load_flags = flSceneLoadSuppressDialog | (discard ? flSceneLoadDiscard : 0);
+				const bool loaded = !!(BOOL)ExecCommand(COMMAND_LOAD, xr_string(full), load_flags);
 				if (loaded)
 					r.response = "{\"ok\":true}";
 				else
 				{
-					char esc[MAX_PATH * 2];
-					JsonEscapePath(full, esc, sizeof(esc));
-					r.response = "{\"ok\":false,\"error\":\"not a loadable scene: ";
-					r.response += esc;
-					r.response += "\"}";
+					xr_string load_status;
+					if (s_Handler && s_Handler("scene_load_status", "{}", load_status) && !load_status.empty())
+					{
+						r.response = load_status;
+					}
+					else
+					{
+						char esc[MAX_PATH * 2];
+						JsonEscapePath(full, esc, sizeof(esc));
+						r.response = "{\"ok\":false,\"error\":\"not a loadable scene: ";
+						r.response += esc;
+						r.response += "\"}";
+					}
 				}
 			}
 			else

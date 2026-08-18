@@ -387,24 +387,28 @@ void EScene::Modified()
 
 bool EScene::IsUnsaved()
 {
-    return (m_RTFlags.is(flRT_Unsaved) && (ObjCount()||!Tools->GetEditFileName().empty()));
+	return m_RTFlags.is(flRT_Unsaved);
 }
 bool EScene::IsModified()
 {
     return (m_RTFlags.is(flRT_Modified));
 }
 
-bool EScene::IfModified()
+bool EScene::IfModified(bool* discarded)
 {
-	if (locked()){ 
+	if (discarded)
+		*discarded = false;
+	if (locked()){
         ELog.DlgMsg( mtError, "Scene sharing violation" );
         return false;
     }
-    if (m_RTFlags.is(flRT_Unsaved) && (ObjCount()||!Tools->GetEditFileName().empty())){
+	if (m_RTFlags.is(flRT_Unsaved)){
         int mr = ELog.DlgMsg(mtConfirmation, "The scene has been modified. Do you want to save your changes?");
         switch(mr){
         case mrYes: if (!ExecCommand(COMMAND_SAVE)) return false; break;
 		case mrNo:{ 
+			if (discarded)
+				*discarded = true;
         	m_RTFlags.set(flRT_Unsaved,FALSE); 
             ExecCommand	(COMMAND_UPDATE_CAPTION);
         }break;

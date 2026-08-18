@@ -173,18 +173,43 @@ CCommandVar CommandUnloadLevelPart(CCommandVar p1, CCommandVar p2)
         return			Scene->UnloadLevelPart(temp_fn.c_str(),p1);
     return				TRUE;
 }
-static bool s_LoadClearingScene = false;
 static bool s_SuppressRecoveryCleanup = false;
 static bool s_SuppressSceneSaveMetadata = false;
 static bool s_SuppressSceneSaveDialog = false;
 static xr_string s_LastSceneSaveError;
+static bool s_LastSceneLoadAttempted = false;
+static bool s_LastSceneLoadSucceeded = false;
+static bool s_LastSceneLoadRollbackOk = true;
+static xr_string s_LastSceneLoadPath;
+static xr_string s_LastSceneLoadError;
 
 CCommandVar CommandLoad(CCommandVar p1, CCommandVar p2)
 {
+	const u32 load_flags = p2.IsInteger() ? u32(p2) : 0;
+	const bool authorized_discard = !!(load_flags & flSceneLoadDiscard);
+	const bool suppress_dialog = !!(load_flags & flSceneLoadSuppressDialog);
+	if (p1.IsString())
+	{
+		s_LastSceneLoadAttempted = true;
+		s_LastSceneLoadSucceeded = false;
+		s_LastSceneLoadRollbackOk = true;
+		s_LastSceneLoadPath = xr_string(p1);
+		xr_strlwr(s_LastSceneLoadPath);
+		s_LastSceneLoadError.clear();
+	}
     xr_string recovery_error;
     if (!EditorRecovery::CanReplaceScene(recovery_error))
     {
-        ELog.DlgMsg(mtError, "%s", recovery_error.c_str());
+		s_LastSceneLoadAttempted = true;
+		s_LastSceneLoadSucceeded = false;
+		s_LastSceneLoadRollbackOk = true;
+		if (!p1.IsString())
+			s_LastSceneLoadPath.clear();
+		s_LastSceneLoadError = recovery_error;
+		if (suppress_dialog)
+			Msg("! %s", recovery_error.c_str());
+		else
+			ELog.DlgMsg(mtError, "%s", recovery_error.c_str());
         return FALSE;
     }
     if( !Scene->locked() )
@@ -198,55 +223,40 @@ CCommandVar CommandLoad(CCommandVar p1, CCommandVar p2)
         {
 	        xr_string temp_fn		= p1;
             xr_strlwr				(temp_fn);
+			s_LastSceneLoadAttempted = true;
+			s_LastSceneLoadSucceeded = false;
+			s_LastSceneLoadRollbackOk = true;
+			s_LastSceneLoadPath = temp_fn;
+			s_LastSceneLoadError.clear();
 
-            // COMMAND_CLEAR below throws the open scene away, so a name that is
-            // not a scene at all must be refused BEFORE that - it used to reach
-            // EScene::Load and take the editor down with it
             xr_string why;
             if (!EScene::IsSceneFile(temp_fn.c_str(), why))
             {
-                ELog.DlgMsg			(mtError, "Can't load map '%s': %s", temp_fn.c_str(), why.c_str());
+				s_LastSceneLoadError = why;
+				if (suppress_dialog)
+					Msg("! Can't load map '%s': %s", temp_fn.c_str(), why.c_str());
+				else
+					ELog.DlgMsg(mtError, "Can't load map '%s': %s", temp_fn.c_str(), why.c_str());
                 return FALSE;
             }
 
-            if (!Scene->IfModified())
+			bool discarded_changes = false;
+			if (!authorized_discard && !Scene->IfModified(&discarded_changes))
+			{
+				s_LastSceneLoadError = "Scene replacement was cancelled";
             	return FALSE;
+			}
 
             SProgressOperation operation(*UI, false);
             UI->SetStatus			("Level loading...");
-            const bool previous_clearing = s_LoadClearingScene;
-            s_LoadClearingScene = true;
-            CCommandVar clear_result = ExecCommand(COMMAND_CLEAR);
-            s_LoadClearingScene = previous_clearing;
-            if (!(BOOL)clear_result)
-            {
-                UI->ResetStatus();
-                return FALSE;
-            }
-
-			IReader* R = FS.r_open	(temp_fn.c_str());
-            if (!R)
-            {
-                UI->ResetStatus();
-                ExecCommand(COMMAND_UPDATE_PROPERTIES);
-                UI->RedrawScene();
-                return FALSE;
-            }
-            char ch;
-            R->r(&ch, sizeof(ch));
-            bool is_ltx = (ch=='[');
-            FS.r_close(R);
-            bool res;
-            LTools->m_LastFileName	= temp_fn.c_str();
-
-            if(is_ltx)
-            	res = Scene->LoadLTX(temp_fn.c_str(), false);
-            else
-            	res = Scene->Load(temp_fn.c_str(), false);
+			xr_string load_error;
+			const bool res = Scene->LoadTransactional(temp_fn.c_str(), load_error);
+			UI->ResetStatus();
 
             if (res)
             {
-                UI->ResetStatus		();
+				LTools->m_LastFileName = temp_fn.c_str();
+				LTools->m_LastSelectionName.clear();
                 Scene->UndoClear	();
                 
                 BOOL bk1 			= Scene->m_RTFlags.test(EScene::flRT_Unsaved);
@@ -259,14 +269,29 @@ CCommandVar CommandLoad(CCommandVar p1, CCommandVar p2)
 
 				ExecCommand			(COMMAND_CLEAN_LIBRARY);
                 ExecCommand			(COMMAND_UPDATE_CAPTION);
-                ExecCommand			(COMMAND_CHANGE_ACTION,etaSelect);
+				ExecCommand(COMMAND_CHANGE_TARGET, OBJCLASS_SCENEOBJECT);
+				ExecCommand(COMMAND_CHANGE_ACTION, etaSelect, estDefault);
                 EPrefs->AppendRecentFile(temp_fn.c_str());
                 EditorRecovery::OnSceneReplaced();
+				s_LastSceneLoadSucceeded = true;
+				s_LastSceneLoadError.clear();
             }else
             {
-                UI->ResetStatus		();
-                ELog.DlgMsg	( mtError, "Can't load map '%s'", temp_fn.c_str() );
-                LTools->m_LastFileName = "";
+				s_LastSceneLoadRollbackOk = Scene->LastLoadRollbackSucceeded();
+				s_LastSceneLoadError = load_error.empty() ? "Scene load failed" : load_error;
+				if (s_LastSceneLoadRollbackOk && discarded_changes)
+				{
+					Scene->m_RTFlags.set(EScene::flRT_Unsaved | EScene::flRT_Modified, TRUE);
+					ExecCommand(COMMAND_UPDATE_CAPTION);
+					EditorRecovery::RequestSnapshot();
+				}
+				if (!s_LastSceneLoadRollbackOk)
+					EditorRecovery::RequestSnapshot();
+				if (suppress_dialog)
+					Msg("! Can't load map '%s': %s", temp_fn.c_str(), s_LastSceneLoadError.c_str());
+				else
+					ELog.DlgMsg(mtError, "Can't load map '%s': %s", temp_fn.c_str(),
+						s_LastSceneLoadError.c_str());
             }
             // update props
             ExecCommand			(COMMAND_UPDATE_PROPERTIES);
@@ -274,7 +299,14 @@ CCommandVar CommandLoad(CCommandVar p1, CCommandVar p2)
             return res ? TRUE : FALSE;
         }
     } else {
-        ELog.DlgMsg( mtError, "Scene sharing violation" );
+		s_LastSceneLoadAttempted = true;
+		s_LastSceneLoadSucceeded = false;
+		s_LastSceneLoadRollbackOk = true;
+		s_LastSceneLoadError = "Scene sharing violation";
+		if (suppress_dialog)
+			Msg("! Scene sharing violation");
+		else
+			ELog.DlgMsg(mtError, "Scene sharing violation");
         return FALSE;
     }
     return TRUE;
@@ -391,8 +423,7 @@ CCommandVar CommandClear(CCommandVar p1, CCommandVar p2)
         ExecCommand				(COMMAND_CHANGE_ACTION,etaSelect,estDefault);
         ExecCommand				(COMMAND_UPDATE_PROPERTIES,1);
         Scene->UndoSave			();
-        if (!s_LoadClearingScene)
-            EditorRecovery::OnSceneReplaced();
+		EditorRecovery::OnSceneReplaced();
         return 					TRUE;
     } else {
         ELog.DlgMsg( mtError, "Scene sharing violation" );
@@ -1527,6 +1558,23 @@ static void RespondRecoveryJson(xr_string& out, bool ok, LPCSTR request_error = 
     out += "}";
 }
 
+static void RespondSceneLoadJson(xr_string& out)
+{
+	out = "{\"ok\":";
+	out += s_LastSceneLoadAttempted && !s_LastSceneLoadSucceeded ? "false" : "true";
+	out += ",\"attempted\":";
+	out += s_LastSceneLoadAttempted ? "true" : "false";
+	out += ",\"loaded\":";
+	out += s_LastSceneLoadSucceeded ? "true" : "false";
+	out += ",\"rollback_ok\":";
+	out += s_LastSceneLoadRollbackOk ? "true" : "false";
+	out += ",\"path\":\"";
+	out += JsonStr(s_LastSceneLoadPath.c_str());
+	out += "\",\"error\":\"";
+	out += JsonStr(s_LastSceneLoadError.c_str());
+	out += "\"}";
+}
+
 static bool IsBrowserTokenTerminator(LPCSTR cursor)
 {
 	while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') ++cursor;
@@ -1720,6 +1768,12 @@ static void RespondObjectJson(xr_string& out, CCustomObject* obj)
 
 bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
 {
+	if (0 == xr_strcmp(cmd, "scene_load_status"))
+	{
+		RespondSceneLoadJson(out);
+		return true;
+	}
+
 	if (0 == xr_strcmp(cmd, "frame_pacing"))
 	{
 		if (!EPrefs)

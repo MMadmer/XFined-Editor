@@ -77,10 +77,16 @@ TOOLS = [
     {
         "name": "xfined_open_scene",
         "description": "Load a scene in the active project (name relative to the project's rawdata/levels, or a full path). "
-                       "Synchronous — big scenes take a while.",
+                       "Synchronous — big scenes take a while. Unsaved scene changes are preserved unless discard=true is explicit.",
         "inputSchema": {
             "type": "object",
-            "properties": {"scene": {"type": "string", "description": "scene file (.level)"}},
+            "properties": {
+                "scene": {"type": "string", "description": "scene file (.level)"},
+                "discard": {
+                    "type": "boolean",
+                    "description": "explicitly discard unsaved scene changes after the replacement scene validates; default false",
+                },
+            },
             "required": ["scene"],
         },
     },

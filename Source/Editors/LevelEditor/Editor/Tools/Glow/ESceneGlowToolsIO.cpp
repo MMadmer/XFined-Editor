@@ -11,6 +11,9 @@ enum{
 
 bool ESceneGlowTool::LoadLTX(CInifile& ini)
 {
+	if (!ini.line_exist("main", "glow_tool_version") || !ini.line_exist("main", "flags"))
+        return false;
+
 	u16 version 	= ini.r_u32("main","glow_tool_version");
 
     if( version!=GLOW_TOOLS_VERSION )
