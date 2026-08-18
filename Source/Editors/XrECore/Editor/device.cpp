@@ -799,6 +799,12 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 	}
 	break;
 	}
+	if (msg == WM_CLOSE && UI)
+	{
+		if (ExecCommand(COMMAND_EXIT))
+			ExecCommand(COMMAND_QUIT);
+		return 0;
+	}
 	if (UI &&UI->WndProcHandler(hWnd, msg, wParam, lParam))
 		return true;
 

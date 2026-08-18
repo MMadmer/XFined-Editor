@@ -136,6 +136,9 @@
     <Filter Include="Editor\Scene">
       <UniqueIdentifier>{cb1a7ab4-054e-4e2c-a8f8-446920bd11d2}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Editor\Recovery">
+      <UniqueIdentifier>{68e84345-27b6-4d85-a35b-ec178e6508cf}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Editor\Tools">
       <UniqueIdentifier>{db555b5d-bba3-42b7-ba08-b75a7e73c6cd}</UniqueIdentifier>
     </Filter>
@@ -322,6 +325,9 @@
     </ClCompile>
     <ClCompile Include="Editor\UI_LevelMain.cpp">
       <Filter>Editor</Filter>
+    </ClCompile>
+    <ClCompile Include="Editor\Recovery\EditorRecovery.cpp">
+      <Filter>Editor\Recovery</Filter>
     </ClCompile>
     <ClCompile Include="Editor\UI_LevelTools.cpp">
       <Filter>Editor</Filter>
@@ -913,6 +919,9 @@
     </ClInclude>
     <ClInclude Include="Editor\Scene\scene.h">
       <Filter>Editor\Scene</Filter>
+    </ClInclude>
+    <ClInclude Include="Editor\Recovery\EditorRecovery.h">
+      <Filter>Editor\Recovery</Filter>
     </ClInclude>
     <ClInclude Include="Editor\Scene\SceneGraph.h">
       <Filter>Editor\Scene</Filter>

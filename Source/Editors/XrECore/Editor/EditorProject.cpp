@@ -895,7 +895,10 @@ bool EditorProject::DrawBrowser()
 	}
 	ImGui::SameLine(0, 24);
 	if (ImGui::Button("Exit", ImVec2(100, 0)))
-		UI->Quit();
+	{
+		if (ExecCommand(COMMAND_EXIT))
+			ExecCommand(COMMAND_QUIT);
+	}
 
 	ImGui::EndPopup();
 	return true;
@@ -967,10 +970,8 @@ bool EditorProject::DrawGameLink()
 	ImGui::SameLine(0, 24);
 	if (ImGui::Button("Exit Editor", ImVec2(140, 0)))
 	{
-		// same command as File\Quit; CommandQuit only forwards to UI->Quit()
-		// when the scene is dirty, so back it up - nobody may get stuck here
-		ExecCommand(COMMAND_QUIT);
-		if (UI) UI->Quit();
+		if (ExecCommand(COMMAND_EXIT))
+			ExecCommand(COMMAND_QUIT);
 	}
 	ImGui::SameLine(0, 24);
 	ImGui::TextDisabled("project: %s", s_Project);

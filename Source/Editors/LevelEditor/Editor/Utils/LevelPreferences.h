@@ -22,6 +22,10 @@ public:
 	u32  QuestInspectorSplit;
 	// height of the variables pane inside that inspector, permille of the column
 	u32  QuestVarsSplit;
+	BOOL RecoveryEnabled = TRUE;
+	u32 RecoveryIntervalMinutes = 10;
+	u32 RecoveryInteractionDelaySeconds = 15;
+	u32 RecoveryRetention = 10;
 	// GPU the render device is created on, by adapter description; empty means
 	// the system default. Applied on the next start - D3D9 cannot move a live
 	// device to another adapter.

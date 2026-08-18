@@ -803,6 +803,25 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_recovery",
+        "description": "Inspect or operate project-scoped crash recovery. action=get reports ownership, dirty state, "
+                       "availability, pending operation id, source/snapshot paths and errors. action=snapshot creates a "
+                       "synchronous non-mutating snapshot without changing the scene file, name, recents or dirty flag. "
+                       "restore/discard only act on the validated startup offer and never overwrite the source scene; "
+                       "they are deferred to the editor draw loop and may return pending.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["get", "snapshot", "restore", "discard"],
+                    "description": "default: get",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "xfined_outliner_show",
         "description": "Open or close the World Outliner panel in the editor. open=false closes it (default true).",
         "inputSchema": {
@@ -1169,6 +1188,7 @@ CMD_MAP = {
     "xfined_rename_object": "rename_object",
     "xfined_delete_selected": "delete_selected",
     "xfined_save_scene": "save_scene",
+    "xfined_recovery": "recovery",
     "xfined_outliner_show": "outliner_show",
     "xfined_outliner_filter": "outliner_filter",
     "xfined_game_modes": "game_modes",
@@ -1236,6 +1256,25 @@ def tool_result(name: str, args: dict) -> dict:
             data = editor_call("quest_view", {"path": args["path"]})
             if not data.get("ok"):
                 break
+    if name == "xfined_recovery" and args.get("action", "get") in ("restore", "discard") \
+            and data.get("ok") and data.get("pending"):
+        operation_id = data.get("operation_id")
+        deadline = time.monotonic() + 3.0
+        while data.get("pending") and time.monotonic() < deadline:
+            time.sleep(0.02)
+            current = editor_call("recovery", {"action": "get"})
+            if not current.get("ok"):
+                data = current
+                break
+            if current.get("operation_id") != operation_id:
+                data = current
+                data["ok"] = False
+                data["error"] = "recovery operation was superseded before completion"
+                break
+            data = current
+        if data.get("state") == "error":
+            data["ok"] = False
+            data["error"] = data.get("last_error") or "recovery operation failed"
     png = data.pop("png_base64", None)
     content = []
     if png and data.get("ok"):

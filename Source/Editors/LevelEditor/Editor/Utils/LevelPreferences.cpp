@@ -29,6 +29,15 @@ void CLevelPreferences::Load(CInifile* I)
         QuestVarsSplit = R_U32_SAFE("windows", "quest_vars_split", 300);
     }
     {
+        RecoveryEnabled = R_BOOL_SAFE("recovery", "enabled", true);
+        RecoveryIntervalMinutes = R_U32_SAFE("recovery", "interval_minutes", 10);
+        RecoveryInteractionDelaySeconds = R_U32_SAFE("recovery", "interaction_delay_seconds", 15);
+        RecoveryRetention = R_U32_SAFE("recovery", "retention", 10);
+        RecoveryIntervalMinutes = clampr(RecoveryIntervalMinutes, 1u, 120u);
+        RecoveryInteractionDelaySeconds = clampr(RecoveryInteractionDelaySeconds, 0u, 120u);
+        RecoveryRetention = clampr(RecoveryRetention, 2u, 64u);
+    }
+    {
         // an empty value reads back as a null pointer, not as "" - assigning that
         // to a string is what made the editor die on startup.
         // r_string_wb, not r_string: adapter names contain spaces, and the ini
@@ -57,6 +66,10 @@ void CLevelPreferences::Save(CInifile* I)
     I->w_u32("windows", "content_browser_tree_width", ContentBrowserTreeWidth);
     I->w_u32("windows", "quest_inspector_split", QuestInspectorSplit);
     I->w_u32("windows", "quest_vars_split", QuestVarsSplit);
+    I->w_bool("recovery", "enabled", RecoveryEnabled);
+    I->w_u32("recovery", "interval_minutes", RecoveryIntervalMinutes);
+    I->w_u32("recovery", "interaction_delay_seconds", RecoveryInteractionDelaySeconds);
+    I->w_u32("recovery", "retention", RecoveryRetention);
     // only write a real choice: a key with an empty value is what the reader
     // above chokes on, and "no key" already means "system default".
     // quoted on disk - the ini parser eats spaces in unquoted values, and
@@ -87,6 +100,10 @@ void CLevelPreferences::OnReadonlyChange(PropValue* prop)
 void CLevelPreferences::FillProp(PropItemVec& items)
 {
 	inherited::FillProp	(items);
+    PHelper().CreateBOOL(items, "Recovery\\Enabled", &RecoveryEnabled);
+    PHelper().CreateU32(items, "Recovery\\Interval (minutes)", &RecoveryIntervalMinutes, 1, 120);
+    PHelper().CreateU32(items, "Recovery\\Interaction delay (seconds)", &RecoveryInteractionDelaySeconds, 0, 120);
+    PHelper().CreateU32(items, "Recovery\\Snapshots retained", &RecoveryRetention, 2, 64);
     SceneToolsMapPairIt _I 	= Scene->FirstTool();
     SceneToolsMapPairIt _E 	= Scene->LastTool();
     for (; _I!=_E; _I++)

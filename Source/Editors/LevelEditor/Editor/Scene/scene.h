@@ -180,6 +180,7 @@ public:
 	static bool		IsSceneFile(LPCSTR full_name, xr_string& why);
 
 	void 			Save(LPCSTR map_name, bool bUndo, bool bForceSaveAll);
+	void			SaveUndoStream(IWriter& writer, bool bForceSaveAll);
 	void 			SaveLTX(LPCSTR map_name, bool bUndo, bool bForceSaveAll);
 
 	bool 			LoadSelection(LPCSTR fname);

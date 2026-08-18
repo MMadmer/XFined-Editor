@@ -806,14 +806,42 @@ static void Execute(SMCPRequest& r)
 		else
 		{
 			for (char* p = scene; *p; ++p) if (*p == '/') *p = '\\';
+			const char* slash = strrchr(scene, '\\');
+			const char* extension = strrchr(scene, '.');
+			if (!extension || (slash && extension < slash))
+			{
+				if (xr_strlen(scene) + sizeof(".level") > sizeof(scene))
+				{
+					r.response = "{\"ok\":false,\"error\":\"scene path is too long\"}";
+					return;
+				}
+				strcat_s(scene, ".level");
+			}
+			else if (0 != _stricmp(extension, ".level"))
+			{
+				r.response = "{\"ok\":false,\"error\":\"scene must use the .level extension\"}";
+				return;
+			}
 			// COMMAND_LOAD does FS.r_open on the string as-is and returns false
 			// silently on a miss, so a bare scene name must be resolved against
 			// the project's $maps$ before it goes in - "worked" bare names were
 			// really files lying in the editor's CWD
 			string_path full;
-			if (strchr(scene, ':'))		strcpy_s(full, scene);
-			else						FS.update_path(full, "$maps$", scene);
-			if (FS.exist(full))
+			const bool absolute = strchr(scene, ':') || (scene[0] == '\\' && scene[1] == '\\');
+			if (absolute)
+				strcpy_s(full, scene);
+			else
+			{
+				FS_Path* maps = FS.get_path("$maps$");
+				if (!maps || xr_strlen(maps->m_Path) + xr_strlen(scene) >= sizeof(full))
+				{
+					r.response = "{\"ok\":false,\"error\":\"resolved scene path is too long\"}";
+					return;
+				}
+				FS.update_path(full, "$maps$", scene);
+			}
+			const DWORD attributes = ::GetFileAttributesA(full);
+			if (INVALID_FILE_ATTRIBUTES != attributes && !(attributes & FILE_ATTRIBUTE_DIRECTORY))
 			{
 				// COMMAND_LOAD refuses a file that is not a scene (and says so in
 				// the log) instead of loading it; report what actually happened

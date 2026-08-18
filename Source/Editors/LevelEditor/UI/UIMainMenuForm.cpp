@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\Editor\EditorModScene.h"
+#include "..\Editor\Recovery\EditorRecovery.h"
 UIMainMenuForm::UIMainMenuForm()
 {
 }
@@ -20,6 +21,10 @@ void UIMainMenuForm::Draw()
             if (ImGui::MenuItem("Open...", "")) { ExecCommand(COMMAND_LOAD); }
             if (ImGui::MenuItem("Save", "")) { ExecCommand(COMMAND_SAVE, xr_string(LTools->m_LastFileName.c_str())); }
             if (ImGui::MenuItem("Save As ...", "")) { ExecCommand(COMMAND_SAVE, 0,1); }
+            ImGui::BeginDisabled(!EditorRecovery::CanCreateSnapshot());
+            if (ImGui::MenuItem("Create Crash Recovery Snapshot", ""))
+                EditorRecovery::RequestSnapshot();
+            ImGui::EndDisabled();
             ImGui::Separator();
             if (ImGui::MenuItem("Open Selection...", "")) { ExecCommand(COMMAND_LOAD_SELECTION); }
             if (ImGui::MenuItem("Save Selection As...", "")) { ExecCommand(COMMAND_SAVE_SELECTION); }
@@ -56,7 +61,8 @@ void UIMainMenuForm::Draw()
                 ImGui::EndMenu();
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Quit", "")) { ExecCommand(COMMAND_QUIT); }
+            if (ImGui::MenuItem("Quit", "") && ExecCommand(COMMAND_EXIT))
+                ExecCommand(COMMAND_QUIT);
             ImGui::EndMenu();
         }
 

@@ -3,6 +3,7 @@
 #include "..\..\XrECore\Editor\EditorGameConfigs.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\Editor\EditorModScene.h"
+#include "..\Editor\Recovery\EditorRecovery.h"
 #include "..\Editor\Utils\XrSEFactoryManager.h"
 #include "..\Editor\Tools\Spawn\ESceneSpawnTools.h"
 
@@ -94,6 +95,7 @@ UIMainForm::~UIMainForm()
     dynamic_cast<CLevelPreferences*>(EPrefs)->OpenContentBrowser = UIContentBrowser::IsOpen();
     dynamic_cast<CLevelPreferences*>(EPrefs)->OpenWorldOutliner = UIWorldOutliner::IsOpen();
     XFinedMCP::Stop();
+    EditorRecovery::Shutdown();
     EditorProject::Close();		// preview + manifest while the device is alive
     UIContentBrowser::Close();
     UIWorldOutliner::Close();
@@ -200,6 +202,8 @@ void UIMainForm::Draw()
     // scene's spawn entities would be built by a factory reading the wrong
     // game's sections. Fingerprinted, so every later frame is a no-op.
     SyncGameConfigs();
+    if (EditorRecovery::DrawStartupRecovery())
+        return;
     // deferred last-scene autoload — first clean frame after the browser closed
     if (LPCSTR pending = EditorProject::PopPendingScene())
         ExecCommand(COMMAND_LOAD, xr_string(pending));
@@ -215,8 +219,12 @@ bool UIMainForm::Frame()
 {
     // Idle pumps MCP before drawing, so linked configs must be ready before a remote scene load.
     SyncGameConfigs();
-    if(UI)  return UI->Idle();
-    return false;
+    if (!UI)
+        return false;
+    const bool keep_running = UI->Idle();
+    if (keep_running)
+        EditorRecovery::Tick();
+    return keep_running;
 }
 
 void UIMainForm::DrawContextMenu()

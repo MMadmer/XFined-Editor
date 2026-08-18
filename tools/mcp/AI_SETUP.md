@@ -109,6 +109,7 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_rename_object` | rename a scene object (`name` -> `new_name`, must be unique) |
 | `xfined_delete_selected` | delete every selected object; returns the removed count; undoable |
 | `xfined_save_scene` | save the opened scene (its current file, or an explicit `file`) |
+| `xfined_recovery` | project-scoped crash recovery: `get` reports the session owner, dirty/pending state, validated snapshot and last error; `snapshot` synchronously writes a non-mutating crash snapshot; `restore`/`discard` accept only the startup offer and are deferred to the next safe draw |
 | `xfined_outliner_show` | open (`open=true`, default) or close the World Outliner panel |
 | `xfined_game_modes` | game modes a module can target, scanned from the LINKED game: campaigns only (rule options like "one life" are excluded, so are checkboxes the game comments out), each with `id`, `caption` (what the player sees), `key` and `source`. A module's target is set in the manifest and the module export refuses to run without one |
 | `xfined_outliner_filter` | drive the outliner's search box and funnels: `text` (Unreal grammar - every word must match, `-word` excludes, `"two words"` match together), `types` (`;`-separated classes to show, empty shows all), `selected_only`, `visibility` (`all`/`visible`/`hidden`); omitted fields keep their state and an invalid type/mode changes nothing; returns the complete filter state plus `shown`/`total` |
@@ -151,6 +152,14 @@ Replace `<repo>` with the folder the editor is installed in.
 
 Everything that writes is clamped to the project folder: the linked game install
 and the shared SDK library are sources you copy **out of**, never into.
+
+`xfined_recovery` has no path or force argument. A snapshot preserves the current
+scene file name, recents and dirty state. Restore first validates and loads the
+recorded source scene, then overlays the validated editable snapshot and leaves
+the result dirty; it never writes the source. Discard only tombstones and removes
+recovery generations. The bridge briefly polls an accepted restore/discard by its
+`operation_id`; if the draw has not completed, it returns truthful `pending:true`
+for a later `action=get` poll.
 
 While a guarded main-thread operation is running, the editor extracts only
 `xfined_progress` requests from the MCP queue. Scene/object mutations remain queued

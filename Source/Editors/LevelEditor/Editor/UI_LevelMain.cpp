@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Recovery/EditorRecovery.h"
 #include "..\..\XrAPI\xrGameManager.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\..\XrECore\Editor\EditorGameContent.h"
@@ -172,8 +173,17 @@ CCommandVar CommandUnloadLevelPart(CCommandVar p1, CCommandVar p2)
         return			Scene->UnloadLevelPart(temp_fn.c_str(),p1);
     return				TRUE;
 }
+static bool s_LoadClearingScene = false;
+static bool s_SuppressRecoveryCleanup = false;
+
 CCommandVar CommandLoad(CCommandVar p1, CCommandVar p2)
 {
+    xr_string recovery_error;
+    if (!EditorRecovery::CanReplaceScene(recovery_error))
+    {
+        ELog.DlgMsg(mtError, "%s", recovery_error.c_str());
+        return FALSE;
+    }
     if( !Scene->locked() )
     {
     	if (!p1.IsString())
@@ -199,12 +209,26 @@ CCommandVar CommandLoad(CCommandVar p1, CCommandVar p2)
             if (!Scene->IfModified())
             	return FALSE;
 
-			SProgressOperation operation(*UI, false);
+            SProgressOperation operation(*UI, false);
             UI->SetStatus			("Level loading...");
-            ExecCommand				(COMMAND_CLEAR);
+            const bool previous_clearing = s_LoadClearingScene;
+            s_LoadClearingScene = true;
+            CCommandVar clear_result = ExecCommand(COMMAND_CLEAR);
+            s_LoadClearingScene = previous_clearing;
+            if (!(BOOL)clear_result)
+            {
+                UI->ResetStatus();
+                return FALSE;
+            }
 
 			IReader* R = FS.r_open	(temp_fn.c_str());
-            if (!R)return false;
+            if (!R)
+            {
+                UI->ResetStatus();
+                ExecCommand(COMMAND_UPDATE_PROPERTIES);
+                UI->RedrawScene();
+                return FALSE;
+            }
             char ch;
             R->r(&ch, sizeof(ch));
             bool is_ltx = (ch=='[');
@@ -234,14 +258,17 @@ CCommandVar CommandLoad(CCommandVar p1, CCommandVar p2)
                 ExecCommand			(COMMAND_UPDATE_CAPTION);
                 ExecCommand			(COMMAND_CHANGE_ACTION,etaSelect);
                 EPrefs->AppendRecentFile(temp_fn.c_str());
+                EditorRecovery::OnSceneReplaced();
             }else
             {
+                UI->ResetStatus		();
                 ELog.DlgMsg	( mtError, "Can't load map '%s'", temp_fn.c_str() );
                 LTools->m_LastFileName = "";
             }
             // update props
             ExecCommand			(COMMAND_UPDATE_PROPERTIES);
             UI->RedrawScene		();             
+            return res ? TRUE : FALSE;
         }
     } else {
         ELog.DlgMsg( mtError, "Scene sharing violation" );
@@ -249,12 +276,21 @@ CCommandVar CommandLoad(CCommandVar p1, CCommandVar p2)
     }
     return TRUE;
 }
+
 CCommandVar CommandSaveBackup(CCommandVar p1, CCommandVar p2)
 {
     string_path 	fn;
     strconcat(sizeof(fn),fn,Core.CompName,"_",Core.UserName,"_backup.level");
     FS.update_path	(fn,_maps_,fn);
-    return 			ExecCommand(COMMAND_SAVE,xr_string(fn));
+    const bool previous = s_SuppressRecoveryCleanup;
+    const BOOL was_unsaved = Scene->m_RTFlags.test(EScene::flRT_Unsaved);
+    s_SuppressRecoveryCleanup = true;
+    CCommandVar result = ExecCommand(COMMAND_SAVE,xr_string(fn));
+    s_SuppressRecoveryCleanup = previous;
+    Scene->m_RTFlags.set(EScene::flRT_Unsaved, was_unsaved);
+    if ((BOOL)result)
+        EditorRecovery::OnBackupSaved();
+    return result;
 }
 CCommandVar CommandSave(CCommandVar p1, CCommandVar p2)
 {
@@ -297,6 +333,11 @@ CCommandVar CommandSave(CCommandVar p1, CCommandVar p2)
                 }
                 ExecCommand		(COMMAND_UPDATE_CAPTION);
                 EPrefs->AppendRecentFile(temp_fn.c_str());
+                if (!s_SuppressRecoveryCleanup)
+                {
+                    Scene->m_RTFlags.set(EScene::flRT_Unsaved, FALSE);
+                    EditorRecovery::OnSceneSaved();
+                }
                 return 			TRUE;
             }
         }
@@ -308,6 +349,12 @@ CCommandVar CommandSave(CCommandVar p1, CCommandVar p2)
 
 CCommandVar CommandClear(CCommandVar p1, CCommandVar p2)
 {
+    xr_string recovery_error;
+    if (!EditorRecovery::CanReplaceScene(recovery_error))
+    {
+        ELog.DlgMsg(mtError, "%s", recovery_error.c_str());
+        return FALSE;
+    }
     if( !Scene->locked() ){
         if (!Scene->IfModified()) return TRUE;
         EDevice->m_Camera.Reset	();
@@ -320,8 +367,10 @@ CCommandVar CommandClear(CCommandVar p1, CCommandVar p2)
         ExecCommand				(COMMAND_UPDATE_CAPTION);
         ExecCommand				(COMMAND_CHANGE_TARGET,OBJCLASS_SCENEOBJECT);
         ExecCommand				(COMMAND_CHANGE_ACTION,etaSelect,estDefault);
-	    ExecCommand				(COMMAND_UPDATE_PROPERTIES,1);
+        ExecCommand				(COMMAND_UPDATE_PROPERTIES,1);
         Scene->UndoSave			();
+        if (!s_LoadClearingScene)
+            EditorRecovery::OnSceneReplaced();
         return 					TRUE;
     } else {
         ELog.DlgMsg( mtError, "Scene sharing violation" );
@@ -1412,6 +1461,39 @@ static void RespondProgressJson(xr_string& out)
 	out += "]}";
 }
 
+static void RespondRecoveryJson(xr_string& out, bool ok, LPCSTR request_error = nullptr)
+{
+    EditorRecovery::SStatus status;
+    EditorRecovery::GetStatus(status);
+    char values[768];
+    sprintf_s(values,
+        "{\"ok\":%s,\"state\":\"%s\",\"operation_id\":%llu,\"pending\":%s,"
+        "\"enabled\":%s,\"owns_session\":%s,\"shared_session\":%s,\"dirty\":%s,"
+        "\"can_snapshot\":%s,\"can_restore\":%s,\"can_discard\":%s,"
+        "\"snapshot_available\":%s,\"source_newer\":%s,\"saved_at\":%llu,\"source\":\"",
+        ok ? "true" : "false", status.state.c_str(),
+        static_cast<unsigned long long>(status.operation_id), status.pending ? "true" : "false",
+        status.enabled ? "true" : "false", status.owns_session ? "true" : "false",
+        status.shared_session ? "true" : "false", status.dirty ? "true" : "false",
+        status.can_snapshot ? "true" : "false", status.can_restore ? "true" : "false",
+        status.can_discard ? "true" : "false", status.snapshot_available ? "true" : "false",
+        status.source_newer ? "true" : "false", static_cast<unsigned long long>(status.saved_at));
+    out = values;
+    out += JsonStr(status.source.c_str());
+    out += "\",\"snapshot\":\"";
+    out += JsonStr(status.snapshot.c_str());
+    out += "\",\"last_error\":\"";
+    out += JsonStr(status.last_error.c_str());
+    out += "\"";
+    if (request_error && request_error[0])
+    {
+        out += ",\"error\":\"";
+        out += JsonStr(request_error);
+        out += "\"";
+    }
+    out += "}";
+}
+
 static bool IsBrowserTokenTerminator(LPCSTR cursor)
 {
 	while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') ++cursor;
@@ -2031,6 +2113,30 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     {
         UI->RequestDockLayoutReset();
         out = "{\"ok\":true,\"note\":\"default arrangement rebuilt on the next frame\"}";
+        return true;
+    }
+    if (0 == xr_strcmp(cmd, "recovery"))
+    {
+        char action[32] = {};
+        XFinedMCP::GetArg(raw, "action", action, sizeof(action));
+        if (!action[0])
+            xr_strcpy(action, "get");
+
+        xr_string error;
+        u64 operation_id = 0;
+        bool success = true;
+        if (0 == _stricmp(action, "snapshot"))
+            success = EditorRecovery::SnapshotNow(operation_id, error);
+        else if (0 == _stricmp(action, "restore"))
+            success = EditorRecovery::RequestRestore(operation_id, error);
+        else if (0 == _stricmp(action, "discard"))
+            success = EditorRecovery::RequestDiscard(operation_id, error);
+        else if (0 != _stricmp(action, "get"))
+        {
+            out = "{\"ok\":false,\"error\":\"action must be get, snapshot, restore, or discard\"}";
+            return true;
+        }
+        RespondRecoveryJson(out, success, success ? nullptr : error.c_str());
         return true;
     }
     if (0 == xr_strcmp(cmd, "mod_export_spawn"))	{ EditorModScene::McpExportSpawn(raw, out);	return true; }

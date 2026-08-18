@@ -472,52 +472,41 @@ void EScene::Save(LPCSTR map_name, bool bUndo, bool bForceSaveAll)
 {
 	R_ASSERT		(bUndo);
 	VERIFY			(map_name);
+	IWriter* writer = FS.w_open(map_name);
+	R_ASSERT		(writer);
+	SaveUndoStream	(*writer, bForceSaveAll);
+	FS.w_close		(writer);
+}
 
-    CTimer 			T;
-    T.Start			();
-    xr_string 		full_name;
-	full_name		= map_name;
-    
-    xr_string 		part_prefix;
+void EScene::SaveUndoStream(IWriter& writer, bool bForceSaveAll)
+{
+	writer.open_chunk	(CHUNK_VERSION);
+	writer.w_u32		(CURRENT_FILE_VERSION);
+	writer.close_chunk	();
 
-    bool bSaveMain	= true;
-    
-	IWriter* F			= 0;
+	writer.open_chunk	(CHUNK_LEVELOP);
+	m_LevelOp.Save		(writer);
+	writer.close_chunk	();
 
-    if (bSaveMain)
-    {
-	    F				= FS.w_open(full_name.c_str()); R_ASSERT(F);
-        
-        F->open_chunk	(CHUNK_VERSION);
-        F->w_u32		(CURRENT_FILE_VERSION);
-        F->close_chunk	();
+	writer.open_chunk	(CHUNK_TOOLS_GUID);
+	writer.w			(&m_GUID, sizeof(m_GUID));
+	writer.close_chunk	();
 
-        F->open_chunk	(CHUNK_LEVELOP);
-        m_LevelOp.Save	(*F);
-        F->close_chunk	();
+	writer.open_chunk	(CHUNK_LEVEL_TAG);
+	writer.w_stringZ	(m_OwnerName);
+	writer.w			(&m_CreateTime, sizeof(m_CreateTime));
+	writer.close_chunk	();
 
-        F->open_chunk	(CHUNK_TOOLS_GUID);
-        F->w			(&m_GUID,sizeof(m_GUID));
-        F->close_chunk	();
+	writer.open_chunk	(CHUNK_CAMERA);
+	writer.w_fvector3	(EDevice->m_Camera.GetHPB());
+	writer.w_fvector3	(EDevice->m_Camera.GetPosition());
+	writer.close_chunk	();
 
-        F->open_chunk	(CHUNK_LEVEL_TAG);
-        F->w_stringZ	(m_OwnerName);
-        F->w			(&m_CreateTime,sizeof(m_CreateTime));
-        F->close_chunk	();
-    
-		F->open_chunk	(CHUNK_CAMERA);
-        F->w_fvector3	(EDevice->m_Camera.GetHPB());
-        F->w_fvector3	(EDevice->m_Camera.GetPosition());
-        F->close_chunk	();
-
-        F->open_chunk		(CHUNK_SNAPOBJECTS);
-        F->w_u32			(m_ESO_SnapObjects.size());
-
-        for(ObjectIt _F=m_ESO_SnapObjects.begin();_F!=m_ESO_SnapObjects.end();++_F)
-            F->w_stringZ	((*_F)->GetName());
-
-        F->close_chunk		();
-    }
+	writer.open_chunk	(CHUNK_SNAPOBJECTS);
+	writer.w_u32		(m_ESO_SnapObjects.size());
+	for (ObjectIt object = m_ESO_SnapObjects.begin(); object != m_ESO_SnapObjects.end(); ++object)
+		writer.w_stringZ	((*object)->GetName());
+	writer.close_chunk	();
 
     m_SaveCache.clear		();
 
@@ -538,17 +527,14 @@ void EScene::Save(LPCSTR map_name, bool bUndo, bool bForceSaveAll)
             	if (_I->second->IsNeedSave())
                 {
                     _I->second->SaveStream	(m_SaveCache);
-                    F->open_chunk			(CHUNK_TOOLS_DATA+_I->first);
-                    F->w					(m_SaveCache.pointer(),m_SaveCache.size());
-                    F->close_chunk			();
+                    writer.open_chunk		(CHUNK_TOOLS_DATA+_I->first);
+                    writer.w				(m_SaveCache.pointer(),m_SaveCache.size());
+                    writer.close_chunk		();
                 }
             }
 			m_SaveCache.clear	();
         }
     }
-        
-    // save data
-    if (bSaveMain)		FS.w_close(F);
 }
 
 
