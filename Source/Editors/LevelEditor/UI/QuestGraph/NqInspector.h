@@ -86,8 +86,9 @@ private:
 	bool			DrawText		(LPCSTR label, SNqValue& v, bool multiline);
 	bool			DrawPicked		(LPCSTR label, LPCSTR type, xr_string& s);
 	bool			DrawDuration	(LPCSTR label, SNqValue& v);
-	bool			DrawNpcRef		(LPCSTR label, SNqValue& v, bool with_smart, bool with_spawn);
+	bool			DrawNpcRef		(LPCSTR label, SNqValue& v, bool target, bool kill);
 	bool			DrawPlace		(LPCSTR label, SNqValue& v);
+	bool			DrawPosition	(SNqValue& v);
 	bool			DrawSpawnSpec	(LPCSTR label, SNqValue& v);
 	bool			DrawCases		(LPCSTR label, SNqValue& v, bool weights);
 	bool			DrawCondList	(xr_vector<SNqCond>& conds, LPCSTR id_prefix, int depth);

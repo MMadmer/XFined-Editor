@@ -19,6 +19,7 @@ namespace
 	const char* kTypeNames[NqPickers::tCount] =
 	{
 		"item_section", "squad_section", "level", "smart", "story_id", "profile", "community", "info", "spot_type",
+		"restrictor",
 	};
 
 	xr_string CurrentKey()
@@ -497,6 +498,23 @@ namespace
 		EditorGameContent::FreeBytes(bytes);
 	}
 
+	bool ReadTextFile(LPCSTR path, DWORD max_size, xr_string& text)
+	{
+		text.clear();
+		HANDLE h = ::CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (INVALID_HANDLE_VALUE == h) return false;
+		const DWORD size = ::GetFileSize(h, NULL);
+		bool ok = false;
+		if (size && size != INVALID_FILE_SIZE && size < max_size)
+		{
+			xr_vector<char> buf(size + 1, 0);
+			DWORD got = 0;
+			if (::ReadFile(h, buf.data(), size, &got, NULL)) { text.assign(buf.data(), buf.data() + got); ok = true; }
+		}
+		::CloseHandle(h);
+		return ok;
+	}
+
 	// [story_object] story_id = ... inside the project's spawn\custom_data\*.ltx
 	void BuildProjectStories()
 	{
@@ -507,17 +525,8 @@ namespace
 		NqUtil::ListFiles(dir, ".ltx", files);
 		for (u32 f = 0; f < files.size(); ++f)
 		{
-			xr_string text, err;
-			HANDLE h = ::CreateFileA(files[f].c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-			if (INVALID_HANDLE_VALUE == h) continue;
-			const DWORD size = ::GetFileSize(h, NULL);
-			if (size && size != INVALID_FILE_SIZE && size < (1 << 20))
-			{
-				xr_vector<char> buf(size + 1, 0);
-				DWORD got = 0;
-				if (::ReadFile(h, buf.data(), size, &got, NULL)) text.assign(buf.data(), buf.data() + got);
-			}
-			::CloseHandle(h);
+			xr_string text;
+			if (!ReadTextFile(files[f].c_str(), 1 << 20, text)) continue;
 			bool in_story = false;
 			size_t pos = 0;
 			while (pos < text.size())
@@ -536,6 +545,65 @@ namespace
 				if (NqUtil::Trim(line.substr(0, eq)) != "story_id") continue;
 				Add(NqPickers::tStory, NqUtil::Trim(line.substr(eq + 1)), xr_string(), xr_string("project"));
 			}
+		}
+	}
+
+	// A restrictor is an ordinary spawn point of section "space_restrictor" placed in a
+	// level; the runtime looks it up by OBJECT NAME (db.zone_by_name), so the name in
+	// the level's spawn is the id, and no config section carries it. Only the project
+	// can answer: rawdata\levels\<level>\spawn.part is plain ltx text.
+	void BuildProjectRestrictors()
+	{
+		if (!EditorProject::Active()) return;
+		string_path dir;
+		sprintf_s(dir, "%s\\rawdata\\levels", EditorProject::Root());
+		xr_vector<xr_string> files;
+		NqUtil::ListFiles(dir, ".part", files);
+		for (u32 f = 0; f < files.size(); ++f)
+		{
+			if (0 != _stricmp(NqUtil::BaseName(files[f].c_str()).c_str(), "spawn")) continue;
+			xr_string text;
+			if (!ReadTextFile(files[f].c_str(), 64u << 20, text)) continue;
+
+			// the level a spawn.part belongs to is its own folder
+			xr_string level = files[f];
+			size_t cut = level.find_last_of("\\/");
+			if (cut != xr_string::npos) level.erase(cut);
+			cut = level.find_last_of("\\/");
+			if (cut != xr_string::npos) level.erase(0, cut + 1);
+
+			// [object_N_spawndata] is positional: 000002 is the spawn section and 000003
+			// the object name the runtime looks a zone up by. The [object_N] header is
+			// no use here - an attached shape sits between it and the spawndata, and
+			// every one of those is just called "shape".
+			xr_string section, name;
+			bool in_spawndata = false;
+			size_t pos = 0;
+			while (pos < text.size())
+			{
+				size_t eol = text.find('\n', pos);
+				if (eol == xr_string::npos) eol = text.size();
+				xr_string line = NqUtil::Trim(text.substr(pos, eol - pos));
+				pos = eol + 1;
+				if (line.empty()) continue;
+				if (line[0] == '[')
+				{
+					if (section == "space_restrictor") Add(NqPickers::tRestrictor, name, xr_string(), level);
+					section.clear(); name.clear();
+					in_spawndata = line.size() > 11 && 0 == _strnicmp(line.c_str(), "[object_", 8) &&
+						0 == _stricmp(line.c_str() + line.size() - 11, "_spawndata]");
+					continue;
+				}
+				if (!in_spawndata) continue;
+				const size_t eq = line.find('=');
+				if (eq == xr_string::npos) continue;
+				const xr_string key = NqUtil::Trim(line.substr(0, eq));
+				if (key != "000002" && key != "000003") continue;
+				xr_string value = NqUtil::Trim(line.substr(eq + 1));
+				if (value.size() >= 2 && value[0] == '"') value = value.substr(1, value.size() - 2);
+				if (key == "000002") section = value; else name = value;
+			}
+			if (section == "space_restrictor") Add(NqPickers::tRestrictor, name, xr_string(), level);
 		}
 	}
 
@@ -635,39 +703,50 @@ namespace
 
 		xr_string mount_err;
 		const bool game_configs = EditorGameConfigs::ActiveFingerprint() && EditorGameConfigs::ActiveFingerprint()[0];
-		if (!EditorProject::Active() || !EditorProject::GameLinked() || !game_configs ||
-			!EditorGameContent::EnsureMounted(mount_err))
+		const bool with_game = EditorProject::Active() && EditorProject::GameLinked() && game_configs &&
+			EditorGameContent::EnsureMounted(mount_err);
+		if (!with_game)
 		{
-			// no game: only the fixed lists exist, and W060 stays quiet
+			// no game: only the fixed lists and whatever the project itself holds,
+			// and W060 stays quiet
 			BuildSpots();
-			return;
 		}
-		s_Available = true;
-		if (!LoadCache())
+		else
 		{
-			TStrings st, profiles;
-			LoadStringTable(st);
-			BuildProfiles(st, profiles);	// must precede the story ids that borrow from it
-			// placed objects first: a template id looks identical in the list but
-			// resolves to nothing at runtime, so the entry that works is offered first
-			BuildSpawnStories(st, profiles);
-			BuildFromSettings(st, profiles);
-			BuildLevels(st);
-			BuildSmarts(st);
-			BuildCommunities(st);
-			BuildInfos();
-			BuildSpots();
-			for (int t = 0; t < NqPickers::tCount; ++t)
-				std::sort(s_Index[t].begin(), s_Index[t].end(),
-						  [](const NqPickers::SEntry& a, const NqPickers::SEntry& b) { return a.id < b.id; });
-			SaveCache();
-			Msg("* nq: game index built (%d items, %d squads, %d levels, %d smarts, %d story ids, %d profiles, %d infos)",
-				(int)s_Index[NqPickers::tItem].size(), (int)s_Index[NqPickers::tSquad].size(),
-				(int)s_Index[NqPickers::tLevel].size(), (int)s_Index[NqPickers::tSmart].size(),
-				(int)s_Index[NqPickers::tStory].size(), (int)s_Index[NqPickers::tProfile].size(),
-				(int)s_Index[NqPickers::tInfo].size());
+			s_Available = true;
+			if (!LoadCache())
+			{
+				TStrings st, profiles;
+				LoadStringTable(st);
+				BuildProfiles(st, profiles);	// must precede the story ids that borrow from it
+				// placed objects first: a template id looks identical in the list but
+				// resolves to nothing at runtime, so the entry that works is offered first
+				BuildSpawnStories(st, profiles);
+				BuildFromSettings(st, profiles);
+				BuildLevels(st);
+				BuildSmarts(st);
+				BuildCommunities(st);
+				BuildInfos();
+				BuildSpots();
+				for (int t = 0; t < NqPickers::tCount; ++t)
+					std::sort(s_Index[t].begin(), s_Index[t].end(),
+							  [](const NqPickers::SEntry& a, const NqPickers::SEntry& b) { return a.id < b.id; });
+				SaveCache();
+				Msg("* nq: game index built (%d items, %d squads, %d levels, %d smarts, %d story ids, %d profiles, %d infos)",
+					(int)s_Index[NqPickers::tItem].size(), (int)s_Index[NqPickers::tSquad].size(),
+					(int)s_Index[NqPickers::tLevel].size(), (int)s_Index[NqPickers::tSmart].size(),
+					(int)s_Index[NqPickers::tStory].size(), (int)s_Index[NqPickers::tProfile].size(),
+					(int)s_Index[NqPickers::tInfo].size());
+			}
 		}
 		BuildProjectStories();
+		BuildProjectRestrictors();
+		// the project sources run after the game index was sorted (and after the cache,
+		// so a freshly placed object never needs a reindex), so they sort themselves
+		const NqPickers::EType project_fed[] = { NqPickers::tStory, NqPickers::tRestrictor };
+		for (u32 i = 0; i < sizeof(project_fed) / sizeof(project_fed[0]); ++i)
+			std::sort(s_Index[project_fed[i]].begin(), s_Index[project_fed[i]].end(),
+					  [](const NqPickers::SEntry& a, const NqPickers::SEntry& b) { return a.id < b.id; });
 	}
 
 	void Ensure()

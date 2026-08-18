@@ -1286,12 +1286,15 @@ bool NqInspector::DrawDuration(LPCSTR label, SNqValue& v)
 	return ch;
 }
 
-bool NqInspector::DrawNpcRef(LPCSTR label, SNqValue& v, bool with_smart, bool with_spawn)
+bool NqInspector::DrawNpcRef(LPCSTR label, SNqValue& v, bool target, bool kill)
 {
 	xr_vector<xr_string> modes = Items("story", "ref", "profile", "community");
-	if (with_smart) modes.push_back("smart");
-	if (with_spawn) modes.push_back("spawn");
+	// a target names a spot as well as a creature: the runtime resolves a zone by
+	// name and anchors a bare position with a restrictor it creates itself
+	if (target) { modes.push_back("smart"); modes.push_back("restrictor"); modes.push_back("pos"); }
+	if (kill) modes.push_back("spawn");
 	xr_string mode = ModeOf(v, modes);
+	if (mode.empty() && target && v.IsTable() && v.Has("pos")) mode = "pos";
 	bool ch = false;
 	ImGui::PushID(label);
 	xr_string lt;
@@ -1307,15 +1310,24 @@ bool NqInspector::DrawNpcRef(LPCSTR label, SNqValue& v, bool with_smart, bool wi
 		{
 			SNqValue t = SNqValue::Table();
 			if (m == "spawn") { SNqValue s = SNqValue::Table(); s.Set("section", SNqValue::String("")); s.Set("smart", SNqValue::String("")); t.Set("spawn", s); }
+			else if (m == "pos")
+			{
+				t.Set("level", SNqValue::String(NqDocs::CurrentLevel()));
+				SNqValue p = SNqValue::Table();
+				for (int i = 0; i < 3; ++i) p.Push(SNqValue::Number(0));
+				t.Set("pos", p);
+				t.Set("radius", SNqValue::Number(5));
+			}
 			else t.Set(m.c_str(), SNqValue::String(""));
 			v = t;
 		}
 		mode = m;
 	}
-	if (!mode.empty() && mode != "spawn")
+	if (mode == "pos") ch |= DrawPosition(v);
+	else if (!mode.empty() && mode != "spawn")
 	{
 		xr_string s = v.GetString(mode.c_str());
-		LPCSTR type = mode == "story" ? "story_id" : mode == "ref" ? "ref_name" : mode == "smart" ? "smart" : mode.c_str();
+		LPCSTR type = mode == "story" ? "story_id" : mode == "ref" ? "ref_name" : mode.c_str();
 		if (DrawPicked("##value", type, s)) { v.Set(mode.c_str(), SNqValue::String(s)); ch = true; }
 		if (mode == "community")
 		{
@@ -1376,42 +1388,49 @@ bool NqInspector::DrawPlace(LPCSTR label, SNqValue& v)
 		}
 		mode = m;
 	}
-	if (mode == "pos")
-	{
-		ImGui::Indent();
-		xr_string lvl = v.GetString("level");
-		if (DrawPicked("level", "level", lvl)) { v.Set("level", SNqValue::String(lvl)); ch = true; }
-		SNqValue* pos = v.Get("pos");
-		float xyz[3] = { 0, 0, 0 };
-		if (pos && pos->IsTable()) for (u32 i = 0; i < 3 && i < pos->arr.size(); ++i) xyz[i] = (float)pos->arr[i].AsNumber();
-		if (ImGui::InputFloat3("x y z", xyz))
-		{
-			SNqValue p = SNqValue::Table();
-			for (int i = 0; i < 3; ++i) p.Push(SNqValue::Number(xyz[i]));
-			v.Set("pos", p); ch = true;
-		}
-		float r = (float)v.GetNumber("radius", 5.0);
-		if (ImGui::InputFloat("radius", &r)) { v.Set("radius", SNqValue::Number(r)); ch = true; }
-		if (ImGui::SmallButton("from camera"))
-		{
-			// the current scene level and the viewport camera position
-			SNqValue p = SNqValue::Table();
-			p.Push(SNqValue::Number(EDevice->vCameraPosition.x));
-			p.Push(SNqValue::Number(EDevice->vCameraPosition.y));
-			p.Push(SNqValue::Number(EDevice->vCameraPosition.z));
-			v.Set("pos", p);
-			xr_string cl = NqDocs::CurrentLevel();
-			if (!cl.empty()) v.Set("level", SNqValue::String(cl));
-			ch = true;
-		}
-		ImGui::Unindent();
-	}
+	if (mode == "pos") ch |= DrawPosition(v);
 	else if (!mode.empty())
 	{
+		// the mode name doubles as the picker type: "smart", "restrictor"
 		xr_string s = v.GetString(mode.c_str());
-		if (DrawPicked("##value", mode == "smart" ? "smart" : "string", s)) { v.Set(mode.c_str(), SNqValue::String(s)); ch = true; }
+		if (DrawPicked("##value", mode.c_str(), s)) { v.Set(mode.c_str(), SNqValue::String(s)); ch = true; }
 	}
 	ImGui::PopID();
+	return ch;
+}
+
+// Shared by every variant that spells a spot out by hand: place{pos} and a task
+// target{pos}, which the runtime anchors with a restrictor of its own.
+bool NqInspector::DrawPosition(SNqValue& v)
+{
+	bool ch = false;
+	ImGui::Indent();
+	xr_string lvl = v.GetString("level");
+	if (DrawPicked("level", "level", lvl)) { v.Set("level", SNqValue::String(lvl)); ch = true; }
+	SNqValue* pos = v.Get("pos");
+	float xyz[3] = { 0, 0, 0 };
+	if (pos && pos->IsTable()) for (u32 i = 0; i < 3 && i < pos->arr.size(); ++i) xyz[i] = (float)pos->arr[i].AsNumber();
+	if (ImGui::InputFloat3("x y z", xyz))
+	{
+		SNqValue p = SNqValue::Table();
+		for (int i = 0; i < 3; ++i) p.Push(SNqValue::Number(xyz[i]));
+		v.Set("pos", p); ch = true;
+	}
+	float r = (float)v.GetNumber("radius", 5.0);
+	if (ImGui::InputFloat("radius", &r)) { v.Set("radius", SNqValue::Number(r)); ch = true; }
+	if (ImGui::SmallButton("from camera"))
+	{
+		// the current scene level and the viewport camera position
+		SNqValue p = SNqValue::Table();
+		p.Push(SNqValue::Number(EDevice->vCameraPosition.x));
+		p.Push(SNqValue::Number(EDevice->vCameraPosition.y));
+		p.Push(SNqValue::Number(EDevice->vCameraPosition.z));
+		v.Set("pos", p);
+		xr_string cl = NqDocs::CurrentLevel();
+		if (!cl.empty()) v.Set("level", SNqValue::String(cl));
+		ch = true;
+	}
+	ImGui::Unindent();
 	return ch;
 }
 

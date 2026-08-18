@@ -938,7 +938,8 @@ struct SNqQuest  { int nq; xr_string id, title, activation; xr_vector<SNqVar> va
 
 ### 13.6 Пикеры игровых данных (`NqPickers`)
 
-Индексы строятся лениво из подключённой игры, кэш в `_appdata_\nq_index_<hash>.ltx`:
+Индексы строятся лениво из подключённой игры, кэш в `_appdata_\nq_index_<hash>.ltx`
+(проектные источники — `story_id` из `custom_data` и весь `restrictor` — идут мимо кэша):
 
 | Тип | Источник |
 |---|---|
@@ -951,6 +952,7 @@ struct SNqQuest  { int nq; xr_string id, title, activation; xr_vector<SNqVar> va
 | `community` | `configs\creatures\game_relations.ltx [communities]` |
 | `info` | `[info_portions] files` → `gameplay\info_*.xml` |
 | `spot_type` | фиксированный список ядра |
+| `restrictor` | **только проект**: `rawdata\levels\<уровень>\spawn.part` (обычный ltx-текст), объекты со спавн-секцией `space_restrictor` — берётся имя объекта (ключ `000003`), потому что рантайм ищет зону по ИМЕНИ (`db.zone_by_name`), а не по story id. Строится мимо кэша, так что только что поставленный рестриктор виден сразу; `extra` = уровень |
 | `quest_id`/`task_id`/`var_name`/`ref_name`/`node id` | из открытого документа и других `.nqasset` проекта |
 
 Пикер = комбо с поиском; всегда допускает ручной ввод (значение вне индекса — W060).

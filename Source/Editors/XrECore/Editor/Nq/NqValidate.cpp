@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "NqValidate.h"
 #include "NqCatalog.h"
 #include "NqPickers.h"
@@ -75,7 +75,11 @@ namespace
 		if (!c.pickers || value.empty() || t == NqPickers::tCount) return;
 		if (NqPickers::Index(t).empty()) return;
 		if (NqPickers::Known(t, value.c_str())) return;
-		WARN(c, "W060", node, slot, "'%s' is not a known %s of the linked game", value.c_str(), NqPickers::TypeName(t));
+		// restrictors are the one index the project fills, not the game
+		if (t == NqPickers::tRestrictor)
+			WARN(c, "W060", node, slot, "'%s' is not a restrictor placed in this project's levels", value.c_str());
+		else
+			WARN(c, "W060", node, slot, "'%s' is not a known %s of the linked game", value.c_str(), NqPickers::TypeName(t));
 	}
 
 	// ---- W040 -----------------------------------------------------------------------
@@ -130,7 +134,12 @@ namespace
 		// a target_ref may also name a place: the runtime anchors a space_restrictor on a
 		// { level, pos } target and takes an existing restrictor by name
 		// (xms_nq_task.script target_object_id)
-		if (allow_smart && v.Has("restrictor")) { ++alts; if (!v.Get("restrictor")->IsString()) ERR(c, "E006", node, slot, "restrictor must be a string"); }
+		if (allow_smart && v.Has("restrictor"))
+		{
+			++alts;
+			if (!v.Get("restrictor")->IsString()) ERR(c, "E006", node, slot, "restrictor must be a string");
+			else CheckIndexed(c, NqPickers::tRestrictor, v.GetString("restrictor"), node, slot);
+		}
 		if (allow_smart && v.Has("pos"))
 		{
 			++alts;
@@ -179,7 +188,12 @@ namespace
 			ERR(c, "E006", node, slot, "expected a place { level = ..., pos = { x, y, z }, radius = r } / { restrictor = ... } / { smart = ... }");
 			return false;
 		}
-		if (v.Has("restrictor"))	{ if (!v.Get("restrictor")->IsString()) ERR(c, "E006", node, slot, "restrictor must be a string"); return true; }
+		if (v.Has("restrictor"))
+		{
+			if (!v.Get("restrictor")->IsString()) ERR(c, "E006", node, slot, "restrictor must be a string");
+			else CheckIndexed(c, NqPickers::tRestrictor, v.GetString("restrictor"), node, slot);
+			return true;
+		}
 		if (v.Has("smart"))			{ CheckIndexed(c, NqPickers::tSmart, v.GetString("smart"), node, slot); return true; }
 		if (v.Has("level") || v.Has("pos"))
 		{

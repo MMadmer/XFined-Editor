@@ -15,7 +15,7 @@ namespace
 			"place", "spawn_spec", "item_section", "squad_section", "level", "smart", "story_id",
 			"profile", "community", "info", "var_name", "task_id", "quest_id", "ref_name",
 			"signal_name", "spot_type", "relation", "lua", "cases", "cases_cond", "cases_weight",
-			"kill_target", "count_or_all", "value", "cond_list", "node_id",
+			"kill_target", "count_or_all", "value", "cond_list", "node_id", "restrictor",
 		};
 		for (u32 i = 0; i < sizeof(types) / sizeof(types[0]); ++i)
 			if (type == types[i]) return true;
@@ -308,7 +308,7 @@ namespace
 			}
 			if (target && value.Has("smart")) WalkStringLeaf(kind, param, value, "smart", "smart", false, node, slot);
 			if (target && value.Has("restrictor"))
-				WalkStringLeaf(kind, param, value, "restrictor", "string", false, node, slot);
+				WalkStringLeaf(kind, param, value, "restrictor", "restrictor", false, node, slot);
 			if (target && value.Has("pos")) WalkPosition(kind, param, value, node, slot);
 			if (target && value.Has("radius"))
 			{
@@ -342,7 +342,7 @@ namespace
 				WalkRadius(kind, param, value, node, slot);
 			}
 			if (value.Has("restrictor"))
-				WalkStringLeaf(kind, param, value, "restrictor", "string", false, node, slot);
+				WalkStringLeaf(kind, param, value, "restrictor", "restrictor", false, node, slot);
 			if (value.Has("smart")) WalkStringLeaf(kind, param, value, "smart", "smart", false, node, slot);
 		}
 

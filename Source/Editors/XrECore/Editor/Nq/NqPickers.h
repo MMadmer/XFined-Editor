@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // NQ - game data indexes behind the parameter pickers (docs/NQ_ARCHITECTURE.md
 // par. 13.6): items, squads, levels, smarts, story ids, profiles, communities,
@@ -6,7 +6,9 @@
 // the game's system.ltx once EditorGameConfigs activated it; XML and ltx that
 // system.ltx does not include come through EditorGameContent), cached on disk
 // in <sdk>\_appdata_\nq_index_<hash>.txt keyed by the game-config fingerprint.
-// Story ids also come from the project's own spawn\custom_data\*.ltx.
+// Story ids also come from the project's own spawn\custom_data\*.ltx, and
+// restrictors only from the project: the runtime finds a zone by OBJECT NAME
+// (db.zone_by_name), which lives in the level's spawn, not in any config.
 //
 // Captions come from the game's own string table (configs\text\<lang>\*.xml,
 // cp1251), reached the same way the game reaches them: items and quest objects
@@ -29,6 +31,7 @@ public:
 		tCommunity,		// community
 		tInfo,			// info
 		tSpot,			// spot_type
+		tRestrictor,	// restrictor
 		tCount
 	};
 
