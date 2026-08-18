@@ -47,3 +47,7 @@ gamedata/textures/
 
 # local documentation search index, not project content
 /docs/index.bleve/
+
+# Python bytecode from tools/mcp
+__pycache__/
+*.pyc
