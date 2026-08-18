@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 
 UIAIMapTool::UIAIMapTool()
 {
@@ -18,7 +18,7 @@ void UIAIMapTool::Draw()
 	ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
 	if (ImGui::TreeNode("Commands"))
 	{
-		ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
 		{
 			if (ImGui::Button("Generate Full", ImVec2(-1, 0)))
 			{
@@ -43,25 +43,25 @@ void UIAIMapTool::Draw()
 			if (ImGui::Button("Reset Selected", ImVec2(-1, 0)))tool->ResetNodes();
 		}
 		ImGui::Separator();
-		ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
 		ImGui::TreePop();
 	}
 	ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
 	if (ImGui::TreeNode("AI Map Nodes"))
 	{
-		ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
 		{
 			ImGui::Checkbox("Ignore Constraints",&m_IgnoreConstraints);
 			ImGui::Checkbox("Auto Link", &m_AutoLink);
 		}
 		ImGui::Separator();
-		ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
 		ImGui::TreePop();
 	}
 	ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
 	if (ImGui::TreeNode("Ignore materials"))
 	{
-		ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
 		{
 			if (ImGui::Button("Add"))
 			{
@@ -84,13 +84,13 @@ void UIAIMapTool::Draw()
 				&m_IgnoreMaterialsList, m_IgnoreMaterialsList.size(), 7);
 		}
 		ImGui::Separator();
-		ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
 		ImGui::TreePop();
 	}
 	ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
 	if (ImGui::TreeNode("Link Commands"))
 	{
-		ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
 		ImGui::PushItemWidth(-1);
 		{
 			{
@@ -132,7 +132,7 @@ void UIAIMapTool::Draw()
 			}
 		}
 
-		ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
 		ImGui::TreePop();
 	}
 }

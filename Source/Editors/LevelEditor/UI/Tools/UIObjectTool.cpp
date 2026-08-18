@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 UIObjectTool::UIObjectTool()
 {
     m_selPercent = 0.f;
@@ -35,7 +35,7 @@ void UIObjectTool::Draw()
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Commands"))
     {
-        ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
         {
             if (ImGui::Button("Multiple Append", ImVec2(-1, 0)))
             {
@@ -61,26 +61,26 @@ void UIObjectTool::Draw()
             }
         }
         ImGui::Separator();
-        ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
     }
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Reference Select"))
     {
-        ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
         {
             ImGui::Text("Select by Current: "); ImGui::SameLine(); if (ImGui::Button(" +")) { SelByRefObject(true); } ImGui::SameLine(); if (ImGui::Button(" -")) { SelByRefObject(false); }
             ImGui::Text("Select by Selected:"); ImGui::SameLine(); if (ImGui::Button("=%")) { MultiSelByRefObject(true); } ImGui::SameLine(); if (ImGui::Button("+%")) { MultiSelByRefObject(false); } ImGui::SameLine(); ImGui::SetNextItemWidth(-ImGui::GetTextLineHeight() - 8); ImGui::DragFloat("%", &m_selPercent, 1, 0, 100, "%.1f");
         }
         ImGui::Separator();
-        ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
     }
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Surface"))
     {
 
-        ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
         {
             if (ImGui::Button("Clear Surface in select", ImVec2(-1, 0)))
             {
@@ -98,14 +98,14 @@ void UIObjectTool::Draw()
             }
         }
         ImGui::Separator();
-        ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
     }
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Current Object"))
     {
 
-        ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
         {
             if (ImGui::Button("Select ...", ImVec2(-1, 0)))
             {
@@ -118,13 +118,13 @@ void UIObjectTool::Draw()
             }
         }
         ImGui::Separator();
-        ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
     }
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Preview"))
     {
-        ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
 #if defined(USE_DX11)
         // ImGui binds a shader resource view, not the texture object behind it
         ImGui::Image(m_RealTexture ? m_RealTexture : m_TextureNull->get_SRView(), ImVec2(128, 128));
@@ -135,16 +135,16 @@ void UIObjectTool::Draw()
         ImGui::BeginChild("Props", ImVec2(0,128));
         m_Props->Draw();
         ImGui::EndChild();
-        ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
 	}
 	ImGui::Separator();
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Object List"))
 	{
-		ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
 		m_ObjectList->Draw();
-		ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
     }
 }

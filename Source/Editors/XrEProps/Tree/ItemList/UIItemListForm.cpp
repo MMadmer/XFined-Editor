@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 
 
 UIItemListForm::UIItemListForm():m_RootItem("")
@@ -16,7 +16,15 @@ void UIItemListForm::Draw()
 
 	static ImGuiTableFlags flags = ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersH | ImGuiTableFlags_RowBg | ImGuiTableFlags_NoBordersInBody | ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX | ImGuiTableFlags_SizingFixedFit;
 
-	if (ImGui::BeginTable("objects", 1, flags))
+	// A table with ScrollY and no size takes whatever is left of the window, which at
+	// the bottom of a packed panel is a couple of rows - and because it scrolls itself,
+	// the panel around it never grows a scrollbar either, so the list could not be
+	// reached at all. It asks for a usable height instead and lets the panel scroll.
+	const float rows = _max(1.f, float(m_Items.size()));
+	const float line = ImGui::GetTextLineHeightWithSpacing();
+	const float wanted = (rows + 1.f) * line + ImGui::GetStyle().FramePadding.y * 2.f;
+	const float height = _min(_max(wanted, line * 10.f), line * 24.f);
+	if (ImGui::BeginTable("objects", 1, flags, ImVec2(0.f, height)))
 	{
 		ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed);
 		ImGui::TableHeadersRow();

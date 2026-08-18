@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 UIFogVolTool::UIFogVolTool()
 {
 }
@@ -12,7 +12,7 @@ void UIFogVolTool::Draw()
 	ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
 	if (ImGui::TreeNode("Commands"))
 	{
-		ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
 		ImGui::PushItemWidth(-1);
 		float size = float(ImGui::CalcItemWidth());
 		{
@@ -21,7 +21,7 @@ void UIFogVolTool::Draw()
 			if (ImGui::Button("UnGroup Selected", ImVec2(size / 2, 0)))ParentTools->UnGroupCurrent();
 		}
 
-		ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
 		ImGui::TreePop();
 	}
 }

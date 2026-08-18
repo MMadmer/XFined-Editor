@@ -10,7 +10,12 @@ enum TShiftState_
 	ssMiddle = 32,
 };
 using TShiftState = int;
-constexpr int UIToolBarSize = 24;
+// The toolbar was 24 pixels flat. That stopped fitting the moment the UI scaled:
+// 20px icons plus a button frame do not go into 24 minus padding, so the row was
+// cut off at the bottom and the icons stayed tiny however large the font got.
+// Both follow the font now, and the dockspace below reserves what they actually take.
+XREUI_API float UIToolBarIconSize();
+XREUI_API float UIToolBarHeight();
 class XREUI_API XrUIManager
 {
 public:

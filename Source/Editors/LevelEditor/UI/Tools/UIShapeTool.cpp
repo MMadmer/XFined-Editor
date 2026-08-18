@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 
 UIShapeTool::UIShapeTool()
 {
@@ -15,7 +15,7 @@ void UIShapeTool::Draw()
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Commands"))
     {
-        ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
         {
             if (ImGui::RadioButton("Sphere", m_SphereMode))
             {
@@ -27,13 +27,13 @@ void UIShapeTool::Draw()
             }
         }
         ImGui::Separator();
-        ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
     }
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Edit"))
     {
-        ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
         {
             if (ImGui::Checkbox("Attach Shape...", &m_AttachShape))
             {
@@ -55,13 +55,13 @@ void UIShapeTool::Draw()
             }
         }
         ImGui::Separator();
-        ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
     }
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Level Bound"))
     {
-        ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
         {
             if (ImGui::Checkbox("Edit Level Bound", &EditLevelBound))
             {
@@ -75,7 +75,7 @@ void UIShapeTool::Draw()
             }
         }
         ImGui::Separator();
-        ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
     }
 }

@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 UIDOTool::UIDOTool()
 {
 	m_DOShuffle = false;
@@ -13,7 +13,7 @@ void UIDOTool::Draw()
 	ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
 	if (ImGui::TreeNode("Commands"))
 	{
-		ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
 		{
 			if (ImGui::Button("First Initialize", ImVec2(-1, 0)))
 			{
@@ -61,7 +61,7 @@ void UIDOTool::Draw()
 			if (ImGui::Button("Object List", ImVec2(-1, 0))) { m_DOShuffle = true; UIDOShuffle::Show(DM); }
 		}
 
-		ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
 		ImGui::TreePop();
 	}
 }

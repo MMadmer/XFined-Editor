@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 
 UILeftBarForm::UILeftBarForm()
 {
@@ -17,7 +17,7 @@ void UILeftBarForm::Draw()
 	ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
 	if (ImGui::TreeNode("Tools"))
 	{
-		ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
 		static ObjClassID Tools[OBJCLASS_COUNT+1] = {
 													OBJCLASS_SCENEOBJECT,
 													OBJCLASS_LIGHT,
@@ -74,12 +74,12 @@ void UILeftBarForm::Draw()
 		ImGui::PopStyleVar(2);
 		ImGui::TreePop();
 
-		ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
 	}
 	ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
 	if (ImGui::TreeNode("Snap List"))
 	{
-		ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
 		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 1));
 		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 4));
@@ -145,7 +145,7 @@ void UILeftBarForm::Draw()
 		ImGui::TreePop();
 		ImGui::PopStyleVar(2);
 
-		ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
 	}
 	// the panel below belongs to whichever tool the radio selected - say whose
 	// it is, otherwise "Object List" reads as a generic scene list

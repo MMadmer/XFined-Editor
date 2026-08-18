@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 
 UISpawnTool::UISpawnTool()
 {
@@ -20,19 +20,19 @@ void UISpawnTool::Draw()
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Reference Select"))
     {
-        ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
         {
             ImGui::Text("Select by Current: "); ImGui::SameLine(); if (ImGui::Button(" +")) { SelByRefObject(true); } ImGui::SameLine(); if (ImGui::Button(" -")) { SelByRefObject(false); }
             ImGui::Text("Select by Selected:"); ImGui::SameLine(); if (ImGui::Button("=%")) { MultiSelByRefObject(true); } ImGui::SameLine(); if (ImGui::Button("+%")) { MultiSelByRefObject(false); } ImGui::SameLine(); ImGui::SetNextItemWidth(-ImGui::GetTextLineHeight() - 8); ImGui::DragFloat("%", &m_selPercent, 1, 0, 100, "%.1f");
         }
         ImGui::Separator();
-        ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
     } 
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Commands"))
     {
-        ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
         {
             float size = float(ImGui::CalcItemWidth());
             {
@@ -57,16 +57,16 @@ void UISpawnTool::Draw()
 
             }
         }
-        ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
 	}
 	ImGui::Separator();
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Object List"))
 	{
-		ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
 		m_SpawnList->Draw();
-		ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
     }
 }

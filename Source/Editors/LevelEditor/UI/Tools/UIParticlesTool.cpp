@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 
 UIParticlesTool::UIParticlesTool()
 {
@@ -28,7 +28,7 @@ void UIParticlesTool::Draw()
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Commands"))
     {
-        ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
         {
             ImGui::Text("Ref's Select:   "); ImGui::SameLine(); if (ImGui::Button("+", ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) { SelByRef(true); }; ImGui::SameLine(); if (ImGui::Button("-", ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) { SelByRef(false); };
             ImGui::Text("Selected:       "); ImGui::SameLine();
@@ -51,16 +51,16 @@ void UIParticlesTool::Draw()
                 }
             }
         }
-        ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
 	}
 	ImGui::Separator();
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Particles"))
 	{
-		ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
 		m_ParticlesList->Draw();
-		ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
+		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
     }
 }

@@ -213,6 +213,21 @@ void XrUIManager::DockLayoutPlace(const char* window_name, EDockSlot slot)
 	ImGui::DockBuilderDockWindow(window_name, (ImGuiID)m_DockNodes[slot]);
 }
 
+// Icons scale with the font: the toolbar is the one row that is all icon, so a
+// fixed pixel size makes them shrink to nothing next to scaled-up text.
+float UIToolBarIconSize()
+{
+	return _max(20.f, ImGui::GetFontSize() * 1.35f);
+}
+
+// What the row actually needs: the icon, the button frame around it, and the
+// window padding above and below.
+float UIToolBarHeight()
+{
+	const ImGuiStyle& st = ImGui::GetStyle();
+	return UIToolBarIconSize() + st.FramePadding.y * 2.f + st.WindowPadding.y * 2.f;
+}
+
 void XrUIManager::DockNextWindowWith(const char* next_to)
 {
 	if (!next_to) return;
@@ -243,8 +258,11 @@ void XrUIManager::Draw()
    // ImGui::DockSpaceOverViewport();
     {
         ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos( ImVec2(viewport->Pos.x, viewport->Pos.y+ UIToolBarSize));
-        ImGui::SetNextWindowSize( ImVec2(viewport->Size.x, viewport->Size.y- UIToolBarSize));
+        // menu bar AND toolbar: reserving only the toolbar's height put the dockspace
+        // over the bottom of the toolbar, which is what cut the Build Mod button in half
+        const float top = GetMenuBarHeight() + UIToolBarHeight();
+        ImGui::SetNextWindowPos( ImVec2(viewport->Pos.x, viewport->Pos.y + top));
+        ImGui::SetNextWindowSize( ImVec2(viewport->Size.x, viewport->Size.y - top));
         ImGui::SetNextWindowViewport(viewport->ID);
         ImGuiWindowFlags window_flags = 0
             | ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking
