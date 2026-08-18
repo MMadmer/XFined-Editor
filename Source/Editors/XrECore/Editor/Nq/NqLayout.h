@@ -1,8 +1,9 @@
 #pragma once
 
 // NQ - deterministic top-down auto layout (docs/NQ_ARCHITECTURE.md par. 13.8):
-// a pin-aware spanning forest keeps complete branch bounds apart, then packs
-// complete trigger trees with a larger gap. Same graph -> same layout.
+// a pin-aware dominator tree keeps complete branch bounds apart and promotes
+// shared descendants into merge blocks between their contributing branches.
+// Exclusive trigger trees and root-level merge blocks use a larger gap.
 
 #include "NqAsset.h"
 

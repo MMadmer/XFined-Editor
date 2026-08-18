@@ -1027,7 +1027,8 @@ TOOLS = [
     {
         "name": "xfined_quest_layout",
         "description": "Deterministic pin-aware top-down graph layout. Children follow the visible canvas pin order; "
-                       "complete nested branch bounds stay apart, and complete trigger trees use a larger gap. "
+                       "complete nested branch bounds stay apart, exclusive trigger trees use a larger gap, and "
+                       "shared descendants become merge blocks between their incoming branches. "
                        "all=false places only nodes without pos. Returns the positions; the document stays dirty.",
         "inputSchema": {
             "type": "object",

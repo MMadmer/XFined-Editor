@@ -13,17 +13,25 @@ Fvector2 NqLayout::NodeSize(const SNqNode& n)
 
 namespace
 {
+	struct SEdge
+	{
+		int from, to;
+		float side, order;
+		bool active;
+	};
+
 	struct SLayoutNode
 	{
-		int		layer;
-		int		parent;
-		int		root;
-		float	side_sum;
-		int		side_count;
-		float	x, y, w, h;
-		float	center_x;
-		float	offset_x;
-		float	min_x, max_x;
+		int layer;
+		int parent;
+		int file_order;
+		float side_sum;
+		int side_count;
+		float order_key;
+		float x, y, w, h;
+		float center_x;
+		float offset_x;
+		float min_x, max_x;
 		xr_vector<int> children;
 	};
 
@@ -31,6 +39,12 @@ namespace
 	{
 		float min_x, max_x;
 		SBlock() : min_x(0.f), max_x(0.f) {}
+	};
+
+	struct SVisit
+	{
+		int node;
+		u32 next_edge;
 	};
 
 	float Snap(float v) { return floorf(v / NqLayout::kGrid + 0.5f) * NqLayout::kGrid; }
@@ -106,6 +120,15 @@ namespace
 		const float shift = -cursor * 0.5f;
 		for (u32 i = 0; i < roots.size(); ++i) nodes[roots[i]].center_x += shift;
 	}
+
+	int BranchUnder(int ancestor, int node, const xr_vector<SLayoutNode>& nodes)
+	{
+		if (node == ancestor) return -1;
+		int current = node;
+		while (nodes[current].parent >= 0 && nodes[current].parent != ancestor)
+			current = nodes[current].parent;
+		return nodes[current].parent == ancestor ? current : -1;
+	}
 }
 
 float NqLayout::Sane(float v)
@@ -143,98 +166,247 @@ int NqLayout::Run(SNqQuest& q, bool only_missing)
 	if (!count) return 0;
 	SanePositions(q);
 
-	xr_vector<SLayoutNode> layout(count);
-	for (u32 i = 0; i < count; ++i)
+	const int virtual_root = (int)count;
+	xr_vector<SLayoutNode> layout(count + 1);
+	for (u32 i = 0; i <= count; ++i)
 	{
 		SLayoutNode& node = layout[i];
-		node.layer = -1;
+		node.layer = 0;
 		node.parent = -1;
-		node.root = -1;
+		node.file_order = (int)i;
 		node.side_sum = 0.f;
 		node.side_count = 0;
+		node.order_key = (float)i;
 		node.x = node.y = node.center_x = node.offset_x = 0.f;
-		const Fvector2 size = NodeSize(q.nodes[i]);
-		node.w = size.x;
-		node.h = size.y;
-		node.min_x = -size.x * 0.5f;
-		node.max_x = size.x * 0.5f;
+		node.w = node.h = 0.f;
+		node.min_x = node.max_x = 0.f;
+		if (i < count)
+		{
+			const Fvector2 size = NodeSize(q.nodes[i]);
+			node.w = size.x;
+			node.h = size.y;
+			node.min_x = -size.x * 0.5f;
+			node.max_x = size.x * 0.5f;
+		}
 	}
 
-	xr_vector<int> roots;
-	xr_vector<int> orphan_roots;
-	xr_vector<int> queue;
-	xr_vector<int> order;
-	int max_layer = -1;
-	for (u32 i = 0; i < count; ++i)
-		if (NqText::IsTrigger(q.nodes[i].kind.c_str()))
-		{
-			layout[i].layer = 0;
-			layout[i].root = (int)i;
-			roots.push_back((int)i);
-			queue.push_back((int)i);
-			order.push_back((int)i);
-			max_layer = 0;
-		}
-
-	auto expand = [&](xr_vector<int>& work)
+	xr_vector<SEdge> edges;
+	xr_vector<xr_vector<int> > outgoing(count);
+	xr_vector<xr_string> pins;
+	for (u32 source_index = 0; source_index < count; ++source_index)
 	{
-		xr_vector<xr_string> pins;
-		for (u32 qi = 0; qi < work.size(); ++qi)
+		const SNqNode& source = q.nodes[source_index];
+		BuildPinOrder(source, pins);
+		for (u32 visual_pin = 0; visual_pin < pins.size(); ++visual_pin)
 		{
-			const int current = work[qi];
-			const SNqNode& source = q.nodes[current];
-			BuildPinOrder(source, pins);
-			for (u32 visual_pin = 0; visual_pin < pins.size(); ++visual_pin)
+			const SNqPin* output = 0;
+			for (u32 p = 0; p < source.out.size(); ++p)
+				if (source.out[p].first == pins[visual_pin]) { output = &source.out[p]; break; }
+			if (!output) continue;
+			for (u32 target_order = 0; target_order < output->second.size(); ++target_order)
 			{
-				const SNqPin* output = 0;
-				for (u32 p = 0; p < source.out.size(); ++p)
-					if (source.out[p].first == pins[visual_pin]) { output = &source.out[p]; break; }
-				if (!output) continue;
-				const float side = PinSide((int)visual_pin, (int)pins.size());
-				for (u32 t = 0; t < output->second.size(); ++t)
-				{
-					const int target = q.NodeIndex(output->second[t].c_str());
-					if (target < 0 || NqText::IsTrigger(q.nodes[target].kind.c_str())) continue;
-					SLayoutNode& child = layout[target];
-					if (child.layer < 0)
-					{
-						child.layer = layout[current].layer + 1;
-						child.parent = current;
-						child.root = layout[current].root;
-						layout[current].children.push_back(target);
-						work.push_back(target);
-						order.push_back(target);
-						max_layer = std::max(max_layer, child.layer);
-					}
-					if (child.parent == current)
-					{
-						child.side_sum += side;
-						++child.side_count;
-					}
-				}
+				const int target = q.NodeIndex(output->second[target_order].c_str());
+				if (target < 0 || NqText::IsTrigger(q.nodes[target].kind.c_str())) continue;
+				SEdge edge;
+				edge.from = (int)source_index;
+				edge.to = target;
+				edge.side = PinSide((int)visual_pin, (int)pins.size());
+				edge.order = (float)visual_pin + float(target_order + 1) / float(output->second.size() + 1);
+				edge.active = false;
+				outgoing[source_index].push_back((int)edges.size());
+				edges.push_back(edge);
 			}
 		}
-	};
-
-	expand(queue);
-	const int orphan_layer = roots.empty() ? 0 : max_layer + 1;
-	for (u32 i = 0; i < count; ++i)
-	{
-		if (layout[i].layer >= 0) continue;
-		layout[i].layer = orphan_layer;
-		layout[i].root = (int)i;
-		orphan_roots.push_back((int)i);
-		order.push_back((int)i);
-		queue.clear();
-		queue.push_back((int)i);
-		max_layer = std::max(max_layer, orphan_layer);
-		expand(queue);
 	}
 
-	// Children are processed before parents, so each packed block uses complete descendant bounds.
-	for (int oi = (int)order.size() - 1; oi >= 0; --oi)
+	// Only DFS back-edges are removed; all other shared paths remain structural.
+	xr_vector<u8> color(count, 0);
+	xr_vector<int> finish;
+	xr_vector<SVisit> stack;
+	auto visit = [&](int start)
 	{
-		const int index = order[oi];
+		stack.clear();
+		SVisit first;
+		first.node = start;
+		first.next_edge = 0;
+		stack.push_back(first);
+		color[start] = 1;
+		while (!stack.empty())
+		{
+			SVisit& frame = stack.back();
+			if (frame.next_edge >= outgoing[frame.node].size())
+			{
+				color[frame.node] = 2;
+				finish.push_back(frame.node);
+				stack.pop_back();
+				continue;
+			}
+			SEdge& edge = edges[outgoing[frame.node][frame.next_edge++]];
+			if (color[edge.to] == 1) continue;
+			edge.active = true;
+			if (color[edge.to] != 0) continue;
+			color[edge.to] = 1;
+			SVisit child;
+			child.node = edge.to;
+			child.next_edge = 0;
+			stack.push_back(child);
+		}
+	};
+	for (u32 i = 0; i < count; ++i)
+		if (NqText::IsTrigger(q.nodes[i].kind.c_str()) && color[i] == 0) visit((int)i);
+	for (u32 i = 0; i < count; ++i)
+		if (color[i] == 0) visit((int)i);
+
+	xr_vector<int> topo;
+	for (int i = (int)finish.size() - 1; i >= 0; --i) topo.push_back(finish[i]);
+	xr_vector<xr_vector<int> > incoming(count);
+	xr_vector<xr_vector<int> > unique_parents(count);
+	for (u32 edge_index = 0; edge_index < edges.size(); ++edge_index)
+	{
+		const SEdge& edge = edges[edge_index];
+		if (!edge.active) continue;
+		incoming[edge.to].push_back((int)edge_index);
+		bool found = false;
+		for (u32 p = 0; p < unique_parents[edge.to].size(); ++p)
+			if (unique_parents[edge.to][p] == edge.from) { found = true; break; }
+		if (!found) unique_parents[edge.to].push_back(edge.from);
+	}
+
+	int max_layer = 0;
+	for (u32 oi = 0; oi < topo.size(); ++oi)
+	{
+		const int source = topo[oi];
+		for (u32 e = 0; e < outgoing[source].size(); ++e)
+		{
+			const SEdge& edge = edges[outgoing[source][e]];
+			if (!edge.active) continue;
+			layout[edge.to].layer = std::max(layout[edge.to].layer, layout[source].layer + 1);
+			max_layer = std::max(max_layer, layout[edge.to].layer);
+		}
+	}
+
+	// A DAG dominator tree owns exclusive branches and promotes every join into one merge block.
+	xr_vector<xr_vector<u8> > dominators(count + 1, xr_vector<u8>(count + 1, 0));
+	xr_vector<int> dominator_count(count + 1, 0);
+	dominators[virtual_root][virtual_root] = 1;
+	dominator_count[virtual_root] = 1;
+	for (u32 oi = 0; oi < topo.size(); ++oi)
+	{
+		const int node_index = topo[oi];
+		xr_vector<u8>& current = dominators[node_index];
+		if (unique_parents[node_index].empty())
+			current = dominators[virtual_root];
+		else
+		{
+			current = dominators[unique_parents[node_index][0]];
+			for (u32 p = 1; p < unique_parents[node_index].size(); ++p)
+			{
+				const xr_vector<u8>& other = dominators[unique_parents[node_index][p]];
+				for (u32 d = 0; d <= count; ++d) current[d] = current[d] && other[d];
+			}
+		}
+		current[node_index] = 1;
+		int best = virtual_root;
+		int best_depth = dominator_count[virtual_root];
+		int depth = 0;
+		for (u32 d = 0; d <= count; ++d)
+		{
+			if (current[d]) ++depth;
+			if ((int)d != node_index && current[d] && dominator_count[d] > best_depth)
+			{
+				best = (int)d;
+				best_depth = dominator_count[d];
+			}
+		}
+		dominator_count[node_index] = depth;
+		layout[node_index].parent = best;
+	}
+
+	xr_vector<float> order_min(count, 1.0e30f);
+	xr_vector<float> order_max(count, -1.0e30f);
+	for (u32 edge_index = 0; edge_index < edges.size(); ++edge_index)
+	{
+		const SEdge& edge = edges[edge_index];
+		if (!edge.active || unique_parents[edge.to].size() != 1 || layout[edge.to].parent != edge.from) continue;
+		SLayoutNode& child = layout[edge.to];
+		child.side_sum += edge.side;
+		++child.side_count;
+		order_min[edge.to] = std::min(order_min[edge.to], edge.order);
+		order_max[edge.to] = std::max(order_max[edge.to], edge.order);
+	}
+	for (u32 i = 0; i < count; ++i)
+		if (unique_parents[i].size() == 1 && order_min[i] <= order_max[i])
+			layout[i].order_key = (order_min[i] + order_max[i]) * 0.5f;
+
+	float root_order = 0.f;
+	for (u32 i = 0; i < count; ++i)
+		if (NqText::IsTrigger(q.nodes[i].kind.c_str()) && layout[i].parent == virtual_root)
+			layout[i].order_key = root_order++;
+	for (u32 i = 0; i < count; ++i)
+		if (!NqText::IsTrigger(q.nodes[i].kind.c_str()) && unique_parents[i].empty() && layout[i].parent == virtual_root)
+			layout[i].order_key = root_order++;
+
+	for (u32 oi = 0; oi < topo.size(); ++oi)
+	{
+		const int node_index = topo[oi];
+		if (unique_parents[node_index].size() <= 1) continue;
+		const int ancestor = layout[node_index].parent;
+		xr_vector<int> branches;
+		float min_key = 1.0e30f, max_key = -1.0e30f;
+		float min_side = 1.0e30f, max_side = -1.0e30f;
+		for (u32 p = 0; p < unique_parents[node_index].size(); ++p)
+		{
+			const int parent = unique_parents[node_index][p];
+			const int branch = BranchUnder(ancestor, parent, layout);
+			if (branch >= 0)
+			{
+				bool found = false;
+				for (u32 b = 0; b < branches.size(); ++b)
+					if (branches[b] == branch) { found = true; break; }
+				if (found) continue;
+				branches.push_back(branch);
+				const SLayoutNode& anchor = layout[branch];
+				const float side = anchor.side_count ? anchor.side_sum / float(anchor.side_count) : 0.f;
+				min_key = std::min(min_key, anchor.order_key);
+				max_key = std::max(max_key, anchor.order_key);
+				min_side = std::min(min_side, side);
+				max_side = std::max(max_side, side);
+				continue;
+			}
+			for (u32 e = 0; e < incoming[node_index].size(); ++e)
+			{
+				const SEdge& edge = edges[incoming[node_index][e]];
+				if (edge.from != ancestor) continue;
+				min_key = std::min(min_key, edge.order);
+				max_key = std::max(max_key, edge.order);
+				min_side = std::min(min_side, edge.side);
+				max_side = std::max(max_side, edge.side);
+			}
+		}
+		if (min_key <= max_key) layout[node_index].order_key = (min_key + max_key) * 0.5f;
+		if (min_side <= max_side)
+		{
+			layout[node_index].side_sum = (min_side + max_side) * 0.5f;
+			layout[node_index].side_count = 1;
+		}
+	}
+
+	for (u32 i = 0; i < count; ++i) layout[layout[i].parent].children.push_back((int)i);
+	for (u32 i = 0; i <= count; ++i)
+	{
+		xr_vector<int>& children = layout[i].children;
+		std::stable_sort(children.begin(), children.end(), [&](int a, int b)
+		{
+			if (layout[a].order_key != layout[b].order_key) return layout[a].order_key < layout[b].order_key;
+			if (layout[a].layer != layout[b].layer) return layout[a].layer < layout[b].layer;
+			return layout[a].file_order < layout[b].file_order;
+		});
+	}
+
+	// Children are processed before dominators, so every packed block uses complete descendant bounds.
+	for (int oi = (int)topo.size() - 1; oi >= 0; --oi)
+	{
+		const int index = topo[oi];
 		SLayoutNode& node = layout[index];
 		xr_vector<int> left, middle, right;
 		for (u32 c = 0; c < node.children.size(); ++c)
@@ -283,12 +455,11 @@ int NqLayout::Run(SNqQuest& q, bool only_missing)
 		if (!right.empty()) { node.min_x = std::min(node.min_x, right_block.min_x); node.max_x = std::max(node.max_x, right_block.max_x); }
 	}
 
-	PackRoots(layout, roots);
-	PackRoots(layout, orphan_roots);
-	for (u32 i = 0; i < order.size(); ++i)
+	PackRoots(layout, layout[virtual_root].children);
+	for (u32 oi = 0; oi < topo.size(); ++oi)
 	{
-		SLayoutNode& node = layout[order[i]];
-		if (node.parent >= 0) node.center_x = layout[node.parent].center_x + node.offset_x;
+		SLayoutNode& node = layout[topo[oi]];
+		if (node.parent != virtual_root) node.center_x = layout[node.parent].center_x + node.offset_x;
 	}
 
 	xr_vector<float> row_height(max_layer + 1, 0.f);
