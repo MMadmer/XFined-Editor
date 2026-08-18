@@ -82,7 +82,14 @@ bool EScene::SaveUndoSnapshot(UndoItem& item)
 	item = {};
 	item.Type = EUndoItemType::Snapshot;
 	item.FileName = fileName;
-	Save(item.FileName.c_str(), true, true);
+	xr_string error;
+	if (!Save(item.FileName.c_str(), true, true, &error))
+	{
+		unlink(item.FileName.c_str());
+		item = {};
+		Msg("! Failed to save undo snapshot: %s", error.empty() ? "unknown error" : error.c_str());
+		return false;
+	}
 	return true;
 }
 

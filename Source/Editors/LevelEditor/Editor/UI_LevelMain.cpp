@@ -175,6 +175,9 @@ CCommandVar CommandUnloadLevelPart(CCommandVar p1, CCommandVar p2)
 }
 static bool s_LoadClearingScene = false;
 static bool s_SuppressRecoveryCleanup = false;
+static bool s_SuppressSceneSaveMetadata = false;
+static bool s_SuppressSceneSaveDialog = false;
+static xr_string s_LastSceneSaveError;
 
 CCommandVar CommandLoad(CCommandVar p1, CCommandVar p2)
 {
@@ -283,9 +286,12 @@ CCommandVar CommandSaveBackup(CCommandVar p1, CCommandVar p2)
     strconcat(sizeof(fn),fn,Core.CompName,"_",Core.UserName,"_backup.level");
     FS.update_path	(fn,_maps_,fn);
     const bool previous = s_SuppressRecoveryCleanup;
+    const bool previous_metadata = s_SuppressSceneSaveMetadata;
     const BOOL was_unsaved = Scene->m_RTFlags.test(EScene::flRT_Unsaved);
     s_SuppressRecoveryCleanup = true;
+    s_SuppressSceneSaveMetadata = true;
     CCommandVar result = ExecCommand(COMMAND_SAVE,xr_string(fn));
+    s_SuppressSceneSaveMetadata = previous_metadata;
     s_SuppressRecoveryCleanup = previous;
     Scene->m_RTFlags.set(EScene::flRT_Unsaved, was_unsaved);
     if ((BOOL)result)
@@ -294,6 +300,7 @@ CCommandVar CommandSaveBackup(CCommandVar p1, CCommandVar p2)
 }
 CCommandVar CommandSave(CCommandVar p1, CCommandVar p2)
 {
+	s_LastSceneSaveError.clear();
     if( !Scene->locked() )
     {
         if (p2==1)
@@ -317,22 +324,36 @@ CCommandVar CommandSave(CCommandVar p1, CCommandVar p2)
                 xr_strlwr(temp_fn);
 
                 UI->SetStatus("Level saving...");
+				xr_string save_error;
+				bool saved = false;
                 if (xrGameManager::GetGame() == EGame::SHOC)
                 {
-                    Scene->Save(temp_fn.c_str(), true, (p2 == 66));
+					saved = Scene->Save(temp_fn.c_str(), true, (p2 == 66), &save_error);
                 }
                 else
                 {
-                    Scene->SaveLTX(temp_fn.c_str(), false, (p2 == 66));
+					saved = Scene->SaveLTX(temp_fn.c_str(), false, (p2 == 66), &save_error);
                 }
                 UI->ResetStatus	();
-                // set new name
-                if (0!=xr_strcmp(Tools->m_LastFileName.c_str(),temp_fn.c_str()))
+				if (!saved)
+				{
+					s_LastSceneSaveError = save_error.empty() ? "Scene save failed" : save_error;
+					if (s_SuppressSceneSaveDialog)
+						Msg("! %s", s_LastSceneSaveError.c_str());
+					else
+						ELog.DlgMsg(mtError, "%s", s_LastSceneSaveError.c_str());
+					return FALSE;
+				}
+				s_LastSceneSaveError.clear();
+                if (!s_SuppressSceneSaveMetadata && 0!=xr_strcmp(Tools->m_LastFileName.c_str(),temp_fn.c_str()))
                 {
     	            Tools->m_LastFileName 	= temp_fn.c_str();
                 }
-                ExecCommand		(COMMAND_UPDATE_CAPTION);
-                EPrefs->AppendRecentFile(temp_fn.c_str());
+                if (!s_SuppressSceneSaveMetadata)
+                {
+                    ExecCommand		(COMMAND_UPDATE_CAPTION);
+                    EPrefs->AppendRecentFile(temp_fn.c_str());
+                }
                 if (!s_SuppressRecoveryCleanup)
                 {
                     Scene->m_RTFlags.set(EScene::flRT_Unsaved, FALSE);
@@ -342,6 +363,7 @@ CCommandVar CommandSave(CCommandVar p1, CCommandVar p2)
             }
         }
     } else {
+        s_LastSceneSaveError = "Scene sharing violation";
         ELog.DlgMsg			( mtError, "Scene sharing violation" );
         return				FALSE;
     }
@@ -3541,7 +3563,17 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             return true;
         }
         for (u32 i = 0; i < fn.size(); ++i) if (fn[i] == '/') fn[i] = '\\';
-        ExecCommand(COMMAND_SAVE, fn);
+		const bool previous_dialog_suppression = s_SuppressSceneSaveDialog;
+		s_SuppressSceneSaveDialog = true;
+        CCommandVar save_result = ExecCommand(COMMAND_SAVE, fn);
+		s_SuppressSceneSaveDialog = previous_dialog_suppression;
+		if (!(BOOL)save_result)
+		{
+			out = "{\"ok\":false,\"error\":\"";
+			out += JsonStr(s_LastSceneSaveError.empty() ? "scene save failed" : s_LastSceneSaveError.c_str());
+			out += "\"}";
+			return true;
+		}
         out = "{\"ok\":true,\"file\":\"";
         for (u32 i = 0; i < fn.size(); ++i) out += (fn[i] == '\\') ? '/' : fn[i];
         out += "\"}";

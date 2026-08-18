@@ -156,42 +156,143 @@ CCustomObject* ESceneGroupTool::CreateObject(LPVOID data, LPCSTR name)
 
 void ESceneGroupTool::ReloadRefsSelectedObject()
 {
-    ObjectList lst 				= m_Objects;
-    int sel_cnt					= 0;
-    if (!lst.empty())
+    xr_vector<CGroupObject*> selected_groups;
+    for (CCustomObject* object : m_Objects)
     {
-        string_path				temp_file_name_sector,temp_file_name_portal;
-        GetTempFileName			( FS.get_path(_temp_)->m_Path, "tmp_sector", 0, temp_file_name_sector );
-        Scene->SaveToolLTX		(OBJCLASS_SECTOR, temp_file_name_sector);
+        if (!object->Selected())
+            continue;
 
-        GetTempFileName			( FS.get_path(_temp_)->m_Path, "tmp_portal", 0, temp_file_name_portal );
-        Scene->SaveToolLTX		(OBJCLASS_PORTAL, temp_file_name_portal);
-
-   		bool bModif	= false;
-        for (ObjectIt it=lst.begin(); it!=lst.end(); ++it)
-		{
-        	if ((*it)->Selected())
-            {
-			    sel_cnt++;
-            	CGroupObject* obj 	= dynamic_cast<CGroupObject*>(*it); 
-                VERIFY				(obj);
-                if (obj->UpdateReference(true))
-                {
-                    bModif		= true;
-                }else
-                {
-                    ELog.Msg	(mtError,"Can't reload group: '%s'.",obj->GetName());
-                }
-            }
-        }
-	    if(bModif) 
-        	Scene->UndoSave		();
-
-		Scene->LoadToolLTX		(OBJCLASS_SECTOR, temp_file_name_sector);
-		Scene->LoadToolLTX		(OBJCLASS_PORTAL, temp_file_name_portal);
+        CGroupObject* group = dynamic_cast<CGroupObject*>(object);
+        VERIFY(group);
+        selected_groups.push_back(group);
     }
-    if (0==sel_cnt)	
-    	ELog.Msg	(mtError,"Nothing selected.");
+
+    if (selected_groups.empty())
+    {
+        ELog.Msg(mtError, "Nothing selected.");
+        return;
+    }
+
+	FS_Path* temp_path = FS.get_path(_temp_);
+	if (!temp_path)
+	{
+		ELog.DlgMsg(mtError, "Can't reload groups: temporary path is unavailable.");
+		return;
+	}
+
+	string_path temp_file_name_group = {};
+	string_path temp_file_name_sector = {};
+	string_path temp_file_name_portal = {};
+	auto remove_tool_files = [](LPCSTR base, int count)
+	{
+		for (int i = 0; i < count; ++i)
+		{
+			string_path file_name;
+			if (i)
+				xr_sprintf(file_name, "%s%d", base, i);
+			else
+				xr_strcpy(file_name, base);
+			unlink(file_name);
+		}
+	};
+	auto remove_temp_files = [&]()
+	{
+		if (temp_file_name_group[0])
+			remove_tool_files(temp_file_name_group, Scene->GetTool(OBJCLASS_GROUP)->SaveFileCount());
+		if (temp_file_name_sector[0])
+			remove_tool_files(temp_file_name_sector, Scene->GetTool(OBJCLASS_SECTOR)->SaveFileCount());
+		if (temp_file_name_portal[0])
+			remove_tool_files(temp_file_name_portal, Scene->GetTool(OBJCLASS_PORTAL)->SaveFileCount());
+	};
+
+	xr_string save_error;
+	if (!GetTempFileNameA(temp_path->m_Path, "grp_group", 0, temp_file_name_group) ||
+		!Scene->SaveToolLTX(OBJCLASS_GROUP, temp_file_name_group, &save_error))
+	{
+		remove_temp_files();
+		ELog.DlgMsg(mtError, "%s", save_error.empty() ?
+			"Can't preserve groups before reloading their references." : save_error.c_str());
+		return;
+	}
+
+	if (!GetTempFileNameA(temp_path->m_Path, "grp_sector", 0, temp_file_name_sector) ||
+		!Scene->SaveToolLTX(OBJCLASS_SECTOR, temp_file_name_sector, &save_error))
+	{
+		remove_temp_files();
+		ELog.DlgMsg(mtError, "%s", save_error.empty() ?
+			"Can't preserve sectors before reloading groups." : save_error.c_str());
+		return;
+	}
+
+	if (!GetTempFileNameA(temp_path->m_Path, "grp_portal", 0, temp_file_name_portal) ||
+		!Scene->SaveToolLTX(OBJCLASS_PORTAL, temp_file_name_portal, &save_error))
+	{
+		remove_temp_files();
+		ELog.DlgMsg(mtError, "%s", save_error.empty() ?
+			"Can't preserve portals before reloading groups." : save_error.c_str());
+		return;
+	}
+
+	const BOOL was_unsaved = Scene->m_RTFlags.test(EScene::flRT_Unsaved);
+	const BOOL was_modified = Scene->m_RTFlags.test(EScene::flRT_Modified);
+	auto rollback_tools = [&](LPCSTR reason)
+	{
+		const bool group_restored = Scene->LoadToolLTX(OBJCLASS_GROUP, temp_file_name_group);
+		const bool sector_restored = Scene->LoadToolLTX(OBJCLASS_SECTOR, temp_file_name_sector);
+		const bool portal_restored = Scene->LoadToolLTX(OBJCLASS_PORTAL, temp_file_name_portal);
+		const bool restored = group_restored && sector_restored && portal_restored;
+		if (restored)
+		{
+			Scene->m_RTFlags.set(EScene::flRT_Unsaved, was_unsaved);
+			Scene->m_RTFlags.set(EScene::flRT_Modified, was_modified);
+		}
+		else
+		{
+			Scene->Modified();
+		}
+		LTools->Reset();
+		ExecCommand(COMMAND_CHANGE_ACTION, etaSelect);
+		ExecCommand(COMMAND_UPDATE_PROPERTIES, 1);
+		ExecCommand(COMMAND_UPDATE_CAPTION);
+		UI->UpdateScene(true);
+		UI->RedrawScene(true);
+
+		if (restored)
+		{
+			remove_temp_files();
+			ELog.DlgMsg(mtError, "%s\nThe affected scene tools were restored.", reason);
+			return;
+		}
+
+		ELog.DlgMsg(mtError,
+			"%s\nAutomatic rollback failed. Recovery copies were kept:\nGroups: %s\nSectors: %s\nPortals: %s",
+			reason, temp_file_name_group, temp_file_name_sector, temp_file_name_portal);
+	};
+
+    for (CGroupObject* group : selected_groups)
+	{
+        if (!group->UpdateReference(true))
+        {
+			xr_string error;
+			error.sprintf("Can't reload group: '%s'.", group->GetName());
+			rollback_tools(error.c_str());
+			return;
+        }
+    }
+
+	if (!Scene->LoadToolLTX(OBJCLASS_SECTOR, temp_file_name_sector))
+	{
+		rollback_tools("Can't restore sectors after reloading groups.");
+		return;
+	}
+	if (!Scene->LoadToolLTX(OBJCLASS_PORTAL, temp_file_name_portal))
+	{
+		rollback_tools("Can't restore portals after reloading groups.");
+		return;
+	}
+
+	remove_temp_files();
+	Scene->UndoSave();
 }
 
 

@@ -216,14 +216,14 @@ public:
 	// double click on the wrong asset) has to be rejected before that happens.
 	static bool		IsSceneFile(LPCSTR full_name, xr_string& why);
 
-	void 			Save(LPCSTR map_name, bool bUndo, bool bForceSaveAll);
+	bool 			Save(LPCSTR map_name, bool bUndo, bool bForceSaveAll, xr_string* error = nullptr);
 	void			SaveUndoStream(IWriter& writer, bool bForceSaveAll);
-	void 			SaveLTX(LPCSTR map_name, bool bUndo, bool bForceSaveAll);
+	bool 			SaveLTX(LPCSTR map_name, bool bUndo, bool bForceSaveAll, xr_string* error = nullptr);
 
 	bool 			LoadSelection(LPCSTR fname);
 	void 			SaveSelection(ObjClassID classfilter, LPCSTR fname);
 
-	void			SaveToolLTX(ObjClassID clsid, LPCSTR fn);
+	bool			SaveToolLTX(ObjClassID clsid, LPCSTR fn, xr_string* error = nullptr);
 	bool			LoadToolLTX(ObjClassID clsid, LPCSTR fn);
 
 	void 			Unload(BOOL bEditableToolsOnly);

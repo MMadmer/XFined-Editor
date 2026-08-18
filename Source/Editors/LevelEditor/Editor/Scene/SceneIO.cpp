@@ -33,6 +33,489 @@
 #define CHUNK_MAP_USAGE			0x7852
 #define CHUNK_LO_MAP_VER	 	0x7853
 
+namespace
+{
+void SetSaveError(xr_string* error, LPCSTR message, LPCSTR path)
+{
+	if (!error)
+		return;
+	*error = message;
+	*error += path;
+}
+
+void SetWindowsSaveError(xr_string* error, LPCSTR operation, LPCSTR path, DWORD code)
+{
+	if (!error)
+		return;
+	error->sprintf("%s '%s' (Windows error %lu)", operation, path, static_cast<unsigned long>(code));
+}
+
+bool QuerySaveFile(LPCSTR path, bool& exists, xr_string* error)
+{
+	const DWORD attributes = ::GetFileAttributesA(path);
+	if (attributes != INVALID_FILE_ATTRIBUTES)
+	{
+		if (attributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			SetSaveError(error, "Save target is a directory: ", path);
+			return false;
+		}
+		exists = true;
+		return true;
+	}
+
+	const DWORD code = ::GetLastError();
+	if (code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND)
+	{
+		exists = false;
+		return true;
+	}
+
+	SetWindowsSaveError(error, "Cannot inspect save target", path, code);
+	return false;
+}
+
+bool WriteCheckedSaveFile(LPCSTR path, const void* data, u32 size, xr_string* error)
+{
+	VerifyPath(path);
+	HANDLE file = ::CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+		FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (file == INVALID_HANDLE_VALUE)
+	{
+		SetWindowsSaveError(error, "Cannot create staged save file", path, ::GetLastError());
+		return false;
+	}
+
+	const u8* bytes = static_cast<const u8*>(data);
+	u32 offset = 0;
+	DWORD write_error = ERROR_SUCCESS;
+	while (offset < size)
+	{
+		DWORD written = 0;
+		const DWORD chunk = std::min<DWORD>(size - offset, 1024u * 1024u);
+		if (!::WriteFile(file, bytes + offset, chunk, &written, nullptr))
+		{
+			write_error = ::GetLastError();
+			break;
+		}
+		if (written != chunk)
+		{
+			write_error = ERROR_WRITE_FAULT;
+			break;
+		}
+		offset += written;
+	}
+	if (write_error == ERROR_SUCCESS && !::FlushFileBuffers(file))
+		write_error = ::GetLastError();
+	if (!::CloseHandle(file) && write_error == ERROR_SUCCESS)
+		write_error = ::GetLastError();
+
+	if (write_error == ERROR_SUCCESS && offset == size)
+		return true;
+
+	if (write_error == ERROR_SUCCESS)
+		write_error = ERROR_WRITE_FAULT;
+	::DeleteFileA(path);
+	SetWindowsSaveError(error, "Cannot write staged save file", path, write_error);
+	return false;
+}
+
+xr_string LegacySaveBackupName(LPCSTR target)
+{
+	LPCSTR extension = strext(target);
+	if (!extension)
+		return xr_string(target) + "~";
+
+	xr_string backup_extension = extension;
+	backup_extension.insert(1, "~");
+	return EFS.ChangeFileExt(target, backup_extension.c_str());
+}
+
+struct SaveTransactionEntry
+{
+	xr_string Target;
+	xr_string Staged;
+	xr_string Rollback;
+	xr_string Backup;
+	xr_string BackupStaged;
+	xr_string BackupRollback;
+	bool Remove = false;
+	bool KeepLegacyBackup = false;
+	bool HadTarget = false;
+	bool HadBackup = false;
+	bool TargetTouched = false;
+	bool BackupTouched = false;
+};
+
+// The transaction is failure-atomic inside this process, but it is not a multi-file crash journal.
+class SaveTransaction
+{
+public:
+	~SaveTransaction()
+	{
+		if (!m_PreserveRecovery)
+			Cleanup();
+	}
+
+	bool Initialize(LPCSTR anchor, xr_string* error)
+	{
+		xr_string parent = EFS.ExtractFilePath(anchor);
+		if (parent.empty())
+			parent = ".\\";
+
+		for (u32 attempt = 0; attempt < 100; ++attempt)
+		{
+			m_Directory.sprintf("%s.xfsave-%lu-%llu-%u", parent.c_str(),
+				static_cast<unsigned long>(::GetCurrentProcessId()),
+				static_cast<unsigned long long>(::GetTickCount64()), attempt);
+			VerifyPath(m_Directory.c_str());
+			if (::CreateDirectoryA(m_Directory.c_str(), nullptr))
+				return true;
+			if (::GetLastError() != ERROR_ALREADY_EXISTS)
+			{
+				SetWindowsSaveError(error, "Cannot create save transaction directory", m_Directory.c_str(),
+					::GetLastError());
+				m_Directory.clear();
+				return false;
+			}
+		}
+
+		SetSaveError(error, "Cannot allocate a unique save transaction directory near: ", anchor);
+		m_Directory.clear();
+		return false;
+	}
+
+	bool StageFile(LPCSTR target, const void* data, u32 size, bool keep_legacy_backup, xr_string* error)
+	{
+		if (!CanAddTarget(target, error))
+			return false;
+
+		SaveTransactionEntry entry;
+		entry.Target = target;
+		entry.Staged = TemporaryName('s', m_Entries.size());
+		entry.KeepLegacyBackup = keep_legacy_backup;
+		if (!WriteCheckedSaveFile(entry.Staged.c_str(), data, size, error))
+			return false;
+
+		m_Entries.push_back(entry);
+		return true;
+	}
+
+	bool StageRemoval(LPCSTR target, bool keep_legacy_backup, xr_string* error)
+	{
+		if (!CanAddTarget(target, error))
+			return false;
+
+		bool exists = false;
+		if (!QuerySaveFile(target, exists, error))
+			return false;
+		if (!exists)
+			return true;
+
+		SaveTransactionEntry entry;
+		entry.Target = target;
+		entry.Remove = true;
+		entry.KeepLegacyBackup = keep_legacy_backup;
+		m_Entries.push_back(entry);
+		return true;
+	}
+
+	bool Commit(xr_string* error)
+	{
+		if (!PrepareRollback(error))
+			return false;
+
+		xr_string failure;
+		for (SaveTransactionEntry& entry : m_Entries)
+		{
+			if (!CommitTarget(entry, &failure))
+				return FailAndRollback(failure, error);
+			entry.TargetTouched = !entry.Remove || entry.HadTarget;
+		}
+
+		for (SaveTransactionEntry& entry : m_Entries)
+		{
+			if (!entry.HadTarget || !entry.KeepLegacyBackup)
+				continue;
+			if (!CommitReplacement(entry.BackupStaged.c_str(), entry.Backup.c_str(), entry.HadBackup,
+				"Cannot commit save backup", &failure))
+				return FailAndRollback(failure, error);
+			entry.BackupTouched = true;
+			entry.BackupStaged.clear();
+		}
+
+		Cleanup();
+		return true;
+	}
+
+private:
+	xr_string TemporaryName(char kind, size_t index) const
+	{
+		xr_string result;
+		result.sprintf("%s\\%c%08u.tmp", m_Directory.c_str(), kind, static_cast<u32>(index));
+		return result;
+	}
+
+	bool CanAddTarget(LPCSTR target, xr_string* error) const
+	{
+		for (const SaveTransactionEntry& entry : m_Entries)
+		{
+			if (!_stricmp(entry.Target.c_str(), target))
+			{
+				SetSaveError(error, "Duplicate output in save transaction: ", target);
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool CopyForRollback(LPCSTR source, LPCSTR destination, LPCSTR operation, xr_string* error)
+	{
+		if (::CopyFileA(source, destination, TRUE))
+			return true;
+		SetWindowsSaveError(error, operation, source, ::GetLastError());
+		return false;
+	}
+
+	bool PrepareRollback(xr_string* error)
+	{
+		for (size_t index = 0; index < m_Entries.size(); ++index)
+		{
+			SaveTransactionEntry& entry = m_Entries[index];
+			if (!QuerySaveFile(entry.Target.c_str(), entry.HadTarget, error))
+				return false;
+
+			if (!entry.HadTarget)
+			{
+				if (entry.Remove)
+					entry.TargetTouched = false;
+				continue;
+			}
+
+			entry.Rollback = TemporaryName('r', index);
+			if (!CopyForRollback(entry.Target.c_str(), entry.Rollback.c_str(),
+				"Cannot stage canonical rollback copy", error))
+				return false;
+
+			if (!entry.KeepLegacyBackup)
+				continue;
+
+			entry.Backup = LegacySaveBackupName(entry.Target.c_str());
+			entry.BackupStaged = TemporaryName('b', index);
+			if (!CopyForRollback(entry.Target.c_str(), entry.BackupStaged.c_str(),
+				"Cannot stage legacy save backup", error))
+				return false;
+
+			if (!QuerySaveFile(entry.Backup.c_str(), entry.HadBackup, error))
+				return false;
+			if (!entry.HadBackup)
+				continue;
+
+			entry.BackupRollback = TemporaryName('o', index);
+			if (!CopyForRollback(entry.Backup.c_str(), entry.BackupRollback.c_str(),
+				"Cannot stage previous save backup", error))
+				return false;
+		}
+		return true;
+	}
+
+	bool CommitReplacement(LPCSTR staged, LPCSTR target, bool target_exists, LPCSTR operation,
+		xr_string* error)
+	{
+		VerifyPath(target);
+		const bool result = target_exists
+			? !!::ReplaceFileA(target, staged, nullptr, REPLACEFILE_WRITE_THROUGH, nullptr, nullptr)
+			: !!::MoveFileExA(staged, target, MOVEFILE_WRITE_THROUGH);
+		if (result)
+			return true;
+		SetWindowsSaveError(error, operation, target, ::GetLastError());
+		return false;
+	}
+
+	bool CommitTarget(SaveTransactionEntry& entry, xr_string* error)
+	{
+		if (entry.Remove)
+		{
+			if (!entry.HadTarget || ::DeleteFileA(entry.Target.c_str()))
+				return true;
+			SetWindowsSaveError(error, "Cannot remove stale level part", entry.Target.c_str(), ::GetLastError());
+			return false;
+		}
+
+		if (!CommitReplacement(entry.Staged.c_str(), entry.Target.c_str(), entry.HadTarget,
+			"Cannot commit staged save file", error))
+			return false;
+		entry.Staged.clear();
+		return true;
+	}
+
+	bool RestoreFile(LPCSTR source, LPCSTR target, LPCSTR operation, xr_string& error)
+	{
+		VerifyPath(target);
+		if (::MoveFileExA(source, target, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+			return true;
+		SetWindowsSaveError(&error, operation, target, ::GetLastError());
+		return false;
+	}
+
+	bool RemoveRestoredNewFile(LPCSTR path, LPCSTR operation, xr_string& error)
+	{
+		if (::DeleteFileA(path))
+			return true;
+		const DWORD code = ::GetLastError();
+		if (code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND)
+			return true;
+		SetWindowsSaveError(&error, operation, path, code);
+		return false;
+	}
+
+	bool Rollback(xr_string& rollback_error)
+	{
+		bool result = true;
+		for (auto entry = m_Entries.rbegin(); entry != m_Entries.rend(); ++entry)
+		{
+			if (!entry->BackupTouched)
+				continue;
+			xr_string current_error;
+			const bool restored = entry->HadBackup
+				? RestoreFile(entry->BackupRollback.c_str(), entry->Backup.c_str(),
+					"Cannot restore previous save backup", current_error)
+				: RemoveRestoredNewFile(entry->Backup.c_str(), "Cannot remove new save backup during rollback",
+					current_error);
+			if (!restored && result)
+				rollback_error = current_error;
+			result = restored && result;
+		}
+
+		for (auto entry = m_Entries.rbegin(); entry != m_Entries.rend(); ++entry)
+		{
+			if (!entry->TargetTouched)
+				continue;
+			xr_string current_error;
+			const bool restored = entry->HadTarget
+				? RestoreFile(entry->Rollback.c_str(), entry->Target.c_str(),
+					"Cannot restore canonical save file", current_error)
+				: RemoveRestoredNewFile(entry->Target.c_str(), "Cannot remove new canonical file during rollback",
+					current_error);
+			if (!restored && result)
+				rollback_error = current_error;
+			result = restored && result;
+		}
+		return result;
+	}
+
+	bool FailAndRollback(const xr_string& failure, xr_string* error)
+	{
+		xr_string rollback_error;
+		if (Rollback(rollback_error))
+		{
+			if (error)
+				*error = failure;
+			Cleanup();
+			return false;
+		}
+
+		m_PreserveRecovery = true;
+		Msg("! Save rollback is incomplete; transaction files remain in '%s'", m_Directory.c_str());
+		for (const SaveTransactionEntry& entry : m_Entries)
+		{
+			Msg("! Save recovery target='%s' staged='%s' rollback='%s' backup='%s' previous_backup='%s'",
+				entry.Target.c_str(), entry.Staged.c_str(), entry.Rollback.c_str(), entry.Backup.c_str(),
+				entry.BackupRollback.c_str());
+		}
+		if (error)
+		{
+			error->sprintf("%s; %s; recovery files kept in '%s'", failure.c_str(), rollback_error.c_str(),
+				m_Directory.c_str());
+		}
+		return false;
+	}
+
+	void CleanupFile(const xr_string& path)
+	{
+		if (path.empty() || ::DeleteFileA(path.c_str()))
+			return;
+		const DWORD code = ::GetLastError();
+		if (code != ERROR_FILE_NOT_FOUND && code != ERROR_PATH_NOT_FOUND)
+			Msg("! Cannot clean save transaction file '%s' (Windows error %lu)", path.c_str(),
+				static_cast<unsigned long>(code));
+	}
+
+	void Cleanup()
+	{
+		for (SaveTransactionEntry& entry : m_Entries)
+		{
+			CleanupFile(entry.Staged);
+			CleanupFile(entry.Rollback);
+			CleanupFile(entry.BackupStaged);
+			CleanupFile(entry.BackupRollback);
+		}
+		if (!m_Directory.empty() && !::RemoveDirectoryA(m_Directory.c_str()))
+		{
+			const DWORD code = ::GetLastError();
+			if (code != ERROR_PATH_NOT_FOUND)
+				Msg("! Cannot clean save transaction directory '%s' (Windows error %lu)", m_Directory.c_str(),
+					static_cast<unsigned long>(code));
+		}
+		m_Entries.clear();
+		m_Directory.clear();
+	}
+
+private:
+	xr_string m_Directory;
+	xr_vector<SaveTransactionEntry> m_Entries;
+	bool m_PreserveRecovery = false;
+};
+
+xr_string IndexedLevelPartName(LPCSTR base_name, int index)
+{
+	if (!index)
+		return base_name;
+	xr_string result;
+	result.sprintf("%s%d", base_name, index);
+	return result;
+}
+
+bool StageToolLTX(SaveTransaction& transaction, ESceneToolBase* tool, xrGUID& guid, LPCSTR file_name,
+	bool keep_legacy_backup, xr_string* error)
+{
+	const int file_count = tool->SaveFileCount();
+	if (file_count < 1)
+	{
+		SetSaveError(error, "Level part reported an invalid save file count: ", file_name);
+		return false;
+	}
+
+	for (int index = 0; index < file_count; ++index)
+	{
+		const xr_string output = IndexedLevelPartName(file_name, index);
+		CInifile ini(output.c_str(), FALSE, FALSE, FALSE);
+		tool->SaveLTX(ini, index);
+		guid.SaveLTX(ini, "guid", "guid");
+
+		CMemoryWriter serialized;
+		ini.save_as(serialized);
+		if (!transaction.StageFile(output.c_str(), serialized.pointer(), serialized.size(), keep_legacy_backup,
+			error))
+			return false;
+	}
+
+	// The loader consumes numbered parts until the first gap, so obsolete suffixes must disappear atomically.
+	for (int index = file_count;; ++index)
+	{
+		const xr_string stale = IndexedLevelPartName(file_name, index);
+		bool exists = false;
+		if (!QuerySaveFile(stale.c_str(), exists, error))
+			return false;
+		if (!exists)
+			break;
+		if (!transaction.StageRemoval(stale.c_str(), keep_legacy_backup, error))
+			return false;
+	}
+	return true;
+}
+}
+
 // Level Options
 
 void st_LevelOptions::SaveLTX( CInifile& ini )
@@ -328,136 +811,97 @@ xr_string EScene::LevelPartName(LPCSTR map_name, ObjClassID cls)
     return 			LevelPartPath(map_name)+GetTool(cls)->ClassName() + ".part";
 }
 
-void EScene::SaveLTX(LPCSTR map_name, bool bForUndo, bool bForceSaveAll)
+bool EScene::SaveLTX(LPCSTR map_name, bool bForUndo, bool bForceSaveAll, xr_string* error)
 {
 	VERIFY			(map_name);
     R_ASSERT		(!bForUndo);
+	if (error)
+		error->clear();
 
     CTimer 			T;
     T.Start			();
     xr_string 		full_name;
 	full_name		= map_name;
-    
-    xr_string 		part_prefix;
+	xr_string part_prefix = LevelPartPath(full_name.c_str());
+	SaveTransaction transaction;
+	if (!transaction.Initialize(full_name.c_str(), error))
+		return false;
 
-    bool bSaveMain	= true;
-    
-	if (!bForUndo)
-    {
-        if (bSaveMain)
-        {
-    		EFS.MarkFile	(full_name.c_str(),true);
-        }
-    	part_prefix		= LevelPartPath(full_name.c_str());
-    }
-
-    
-    CInifile ini(full_name.c_str(),FALSE,FALSE,TRUE);
-
-    if (bSaveMain)
-    {
-        ini.w_u32			("version","value",CURRENT_FILE_VERSION);
-
-        m_LevelOp.SaveLTX	(ini);
-
-        m_GUID.SaveLTX		(ini,"guid","guid");
-
-		ini.w_string		("level_tag","owner",m_OwnerName.c_str());
-        ini.w_u32			("level_tag","create_time",m_CreateTime);
-
-        ini.w_fvector3		("camera","hpb",EDevice->m_Camera.GetHPB());
-        ini.w_fvector3		("camera","pos",EDevice->m_Camera.GetPosition());
-
-        for(ObjectIt SO=m_ESO_SnapObjects.begin(); SO!=m_ESO_SnapObjects.end(); ++SO)
-        {
-            ini.w_string	("snap_objects",(*SO)->GetName(),NULL);
-        }
-    }
+    CInifile ini(full_name.c_str(), FALSE, FALSE, FALSE);
+	ini.w_u32("version", "value", CURRENT_FILE_VERSION);
+	m_LevelOp.SaveLTX(ini);
+	m_GUID.SaveLTX(ini, "guid", "guid");
+	ini.w_string("level_tag", "owner", m_OwnerName.c_str());
+	ini.w_u32("level_tag", "create_time", m_CreateTime);
+	ini.w_fvector3("camera", "hpb", EDevice->m_Camera.GetHPB());
+	ini.w_fvector3("camera", "pos", EDevice->m_Camera.GetPosition());
+	for (ObjectIt object = m_ESO_SnapObjects.begin(); object != m_ESO_SnapObjects.end(); ++object)
+		ini.w_string("snap_objects", (*object)->GetName(), nullptr);
 
     m_SaveCache.clear		();
-
-    SceneToolsMapPairIt _I = m_SceneTools.begin();
-    SceneToolsMapPairIt _E = m_SceneTools.end();
-
-    for (; _I!=_E; ++_I)
+	for (SceneToolsMapPairIt tool_it = m_SceneTools.begin(); tool_it != m_SceneTools.end(); ++tool_it)
     {
-        if (		(_I->first!=OBJCLASS_DUMMY) && 
-        			_I->second && 
-                    _I->second->IsEnabled() && 
-                    _I->second->IsEditable()
-            )
+		ESceneToolBase* tool = tool_it->second;
+		if (tool_it->first != OBJCLASS_DUMMY && tool && tool->IsEnabled() && tool->IsEditable())
         {
-            if (bForUndo)
+			xr_string part_name = part_prefix + tool->ClassName() + ".part";
+			if (tool->can_use_inifile())
             {
-            	if (_I->second->IsNeedSave())
-                    _I->second->SaveStream	(m_SaveCache);
-            }else
-            {
-            	// !ForUndo
-                    xr_string part_name 	= part_prefix + _I->second->ClassName() + ".part";
-                    if(_I->second->can_use_inifile())
-                    {
-                        EFS.MarkFile			(part_name.c_str(),true);
-                    	SaveToolLTX				(_I->second->FClassID, part_name.c_str());
-                    }  //can_use_ini_file
-                    else
-                    {
-						_I->second->SaveStream	(m_SaveCache);
-
-						EFS.MarkFile			(part_name.c_str(),true);
-
-						IWriter* FF				= FS.w_open	(part_name.c_str());
-						R_ASSERT			(FF);
-                        FF->open_chunk		(CHUNK_TOOLS_GUID);
-                        FF->w				(&m_GUID,sizeof(m_GUID));
-                        FF->close_chunk		();
-
-                        FF->open_chunk		(CHUNK_TOOLS_DATA+_I->first);
-                        FF->w				(m_SaveCache.pointer(),m_SaveCache.size());
-                        FF->close_chunk		();
-
-                        FS.w_close			(FF);
-
-                    }//  ! can_use_ini_file
+				if (!StageToolLTX(transaction, tool, m_GUID, part_name.c_str(), true, error))
+				{
+					m_SaveCache.clear();
+					return false;
+				}
+			}
+			else
+			{
+				tool->SaveStream(m_SaveCache);
+				CMemoryWriter serialized;
+				serialized.open_chunk(CHUNK_TOOLS_GUID);
+				serialized.w(&m_GUID, sizeof(m_GUID));
+				serialized.close_chunk();
+				serialized.open_chunk(CHUNK_TOOLS_DATA + tool_it->first);
+				if (m_SaveCache.size())
+					serialized.w(m_SaveCache.pointer(), m_SaveCache.size());
+				serialized.close_chunk();
+				if (!transaction.StageFile(part_name.c_str(), serialized.pointer(), serialized.size(), true, error))
+				{
+					m_SaveCache.clear();
+					return false;
+				}
             }
 			m_SaveCache.clear	();
         }
     }
-        
-	if (!bForUndo)
-    {
-    	m_RTFlags.set	(flRT_Unsaved,FALSE);
-    	Msg				("Saving time: %3.2f sec",T.GetElapsed_sec());
-    }
+
+	CMemoryWriter serialized_main;
+	ini.save_as(serialized_main);
+	if (!transaction.StageFile(full_name.c_str(), serialized_main.pointer(), serialized_main.size(), true, error))
+		return false;
+	if (!transaction.Commit(error))
+		return false;
+
+	Msg("Saving time: %3.2f sec", T.GetElapsed_sec());
+	return true;
 }
 
-void EScene::SaveToolLTX(ObjClassID clsid, LPCSTR fn)
+bool EScene::SaveToolLTX(ObjClassID clsid, LPCSTR fn, xr_string* error)
 {
+	if (error)
+		error->clear();
     ESceneToolBase* tool 	= GetTool(clsid);
-	int fc = tool->SaveFileCount();
-	if(fc==1)
-    {
-      CInifile ini_part		(fn, FALSE, FALSE, FALSE);
-      tool->SaveLTX			(ini_part, 0);
-      m_GUID.SaveLTX			(ini_part,"guid","guid");
-      ini_part.save_as		();
-    }else
-    {
-    	for(int i=0; i<fc; ++i)
-        {
-        	
-        	string_path 			filename;
-            if(i)
-            	sprintf				(filename, "%s%d", fn, i);
-            else
-            	strcpy				(filename, fn);
+	if (!tool)
+	{
+		SetSaveError(error, "Cannot save unavailable level part: ", fn);
+		return false;
+	}
 
-            CInifile ini_part		(filename, FALSE, FALSE, FALSE);
-            tool->SaveLTX			(ini_part, i);
-            m_GUID.SaveLTX			(ini_part,"guid","guid");
-            ini_part.save_as		();
-        }
-    }
+	SaveTransaction transaction;
+	if (!transaction.Initialize(fn, error))
+		return false;
+	if (!StageToolLTX(transaction, tool, m_GUID, fn, false, error))
+		return false;
+	return transaction.Commit(error);
 }
 
 bool EScene::LoadToolLTX(ObjClassID clsid, LPCSTR fn)
@@ -468,14 +912,21 @@ bool EScene::LoadToolLTX(ObjClassID clsid, LPCSTR fn)
 	return 					res;
 }
 
-void EScene::Save(LPCSTR map_name, bool bUndo, bool bForceSaveAll)
+bool EScene::Save(LPCSTR map_name, bool bUndo, bool bForceSaveAll, xr_string* error)
 {
 	R_ASSERT		(bUndo);
 	VERIFY			(map_name);
-	IWriter* writer = FS.w_open(map_name);
-	R_ASSERT		(writer);
-	SaveUndoStream	(*writer, bForceSaveAll);
-	FS.w_close		(writer);
+	if (error)
+		error->clear();
+
+	SaveTransaction transaction;
+	if (!transaction.Initialize(map_name, error))
+		return false;
+	CMemoryWriter serialized;
+	SaveUndoStream(serialized, bForceSaveAll);
+	if (!transaction.StageFile(map_name, serialized.pointer(), serialized.size(), false, error))
+		return false;
+	return transaction.Commit(error);
 }
 
 void EScene::SaveUndoStream(IWriter& writer, bool bForceSaveAll)
