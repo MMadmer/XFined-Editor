@@ -69,6 +69,40 @@ namespace
 		return s;
 	}
 
+	// ---- E022: parameter forms a kind takes only one of -----------------------------
+	// The catalog line cannot yet say "these two cancel out", so the shape comes from
+	// NqCatalog::ExclusiveForms. The message names the parameters that collided: the
+	// inspector shows every one of them at once, so "wrong combination" alone is no help.
+	void CheckKindForm(SCtx& c, const xr_string& kind, const SNqValue& params, LPCSTR node)
+	{
+		xr_vector<xr_string> forms;
+		NqCatalog::ExclusiveForms(kind.c_str(), forms);
+		if (forms.empty() || !params.IsTable()) return;
+
+		// first parameter present from each form, in the order the file lists them
+		xr_vector<xr_string> picked(forms.size());
+		for (u32 i = 0; i < params.keys.size(); ++i)
+		{
+			const int f = NqCatalog::FormIndex(kind.c_str(), params.keys[i].c_str());
+			if (f >= 0 && picked[f].empty()) picked[f] = params.keys[i];
+		}
+		int used = 0, first = -1;
+		for (u32 f = 0; f < forms.size(); ++f)
+			if (!picked[f].empty()) { ++used; if (first < 0) first = (int)f; }
+
+		if (used > 1)
+		{
+			xr_string list;
+			for (u32 f = 0; f < forms.size(); ++f)
+				if (!picked[f].empty()) { if (!list.empty()) list += " and "; list += "'" + picked[f] + "'"; }
+			ERR(c, "E022", node, 0, "%s takes only one of these at a time, %s are set together",
+				kind.c_str(), list.c_str());
+		}
+		// objective.fetch has no meaning without a form; the kill_count filters are optional
+		if (used == 0 && kind == "objective.fetch")
+			ERR(c, "E022", node, 0, "objective.fetch needs either 'section' or 'item'");
+	}
+
 	// ---- W060 through the pickers -----------------------------------------------
 	void CheckIndexed(SCtx& c, NqPickers::EType t, const xr_string& value, LPCSTR node, LPCSTR slot)
 	{
@@ -178,6 +212,28 @@ namespace
 				ERR(c, "E006", node, slot, "reference field '%s' must be a string", k.c_str());
 		}
 		return true;
+	}
+
+	// squad_ref / object_ref: one concrete world object - { story } | { ref }, nothing else.
+	// Narrower than npc_ref on purpose: a profile or a community names a kind of creature,
+	// and there is no single object behind that to loot, hold a ref on, or count deaths of.
+	void CheckObjectRef(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, LPCSTR type)
+	{
+		if (!v.IsTable())
+		{
+			ERR(c, "E006", node, slot, "expected %s = { story = ... } or { ref = ... }", type);
+			return;
+		}
+		int alts = 0;
+		if (v.Has("story")) { ++alts; CheckIndexed(c, NqPickers::tStory, v.GetString("story"), node, slot); }
+		if (v.Has("ref"))	{ ++alts; NoteRefUse(c, v, nidx, order, slot); }
+		if (alts != 1) ERR(c, "E006", node, slot, "%s needs exactly one of story / ref", type);
+		for (u32 i = 0; i < v.keys.size(); ++i)
+		{
+			const xr_string& k = v.keys[i];
+			if (k != "story" && k != "ref") ERR(c, "E006", node, slot, "%s has no field '%s'", type, k.c_str());
+			else if (!v.vals[i].IsString()) ERR(c, "E006", node, slot, "'%s' must be a string", k.c_str());
+		}
 	}
 
 	// place: { level, pos = {x,y,z}, radius } | { restrictor } | { smart }
@@ -317,6 +373,7 @@ namespace
 		if (t == "npc_ref")		{ CheckNpcRef(c, v, node, slot, nidx, order, false, false); return; }
 		if (t == "target_ref")	{ CheckNpcRef(c, v, node, slot, nidx, order, true, false); return; }
 		if (t == "kill_target")	{ CheckNpcRef(c, v, node, slot, nidx, order, false, true); return; }
+		if (t == "squad_ref" || t == "object_ref") { CheckObjectRef(c, v, node, slot, nidx, order, t.c_str()); return; }
 		if (t == "spawn_spec")
 		{
 			if (!v.IsTable() || !v.Has("section") || !v.Has("smart"))
@@ -728,6 +785,7 @@ void NqValidate::Run(const SNqQuest& q, const SContext& ctx, xr_vector<SNqProble
 			// event conditions are only for the edge-triggered kinds
 			const bool events_ok = (n.kind == "trigger.when" || n.kind == "wait.when" || n.kind == "wait.any");
 			CheckParams(c, *k, n.params, nid, "", (int)i, 200, events_ok);
+			CheckKindForm(c, n.kind, n.params, nid);
 			// pins
 			for (u32 p = 0; p < n.out.size(); ++p)
 			{

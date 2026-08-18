@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // NQ - the kind catalog (docs/NQ_ARCHITECTURE.md par. 6, par. 13.2).
 //
@@ -6,6 +6,8 @@
 // of the linked install, plus the kinds\*.ltx of every installed module. The
 // editor's bundled copy under <sdk>\gamedata\configs\nq\ is only the fallback
 // when no linked game provides one. Cached until Invalidate().
+
+struct SNqValue;
 
 class ECORE_API NqCatalog
 {
@@ -74,6 +76,16 @@ public:
 	static void						KindsFor	(u32 use_mask, xr_vector<const SKind*>& out);
 	// files that made up the catalog (diagnostics)
 	static const xr_vector<xr_string>& Files	();
+
+	// Groups of parameters a kind takes only one of at a time. The catalog line has
+	// no syntax for that yet, so the shape lives here - read by the validator (E022)
+	// and by the inspector, which greys out the losing groups. Each entry is a comma
+	// separated list of parameter names; empty when the kind has no such rule.
+	static void						ExclusiveForms(LPCSTR kind, xr_vector<xr_string>& out);
+	// index of the form `param` belongs to, -1 when the kind has no rule about it
+	static int						FormIndex	(LPCSTR kind, LPCSTR param);
+	// true when `param` belongs to a form that a value already present has ruled out
+	static bool						FormRuledOut(LPCSTR kind, LPCSTR param, const SNqValue& params);
 
 	// MCP quest_catalog: full JSON response
 	static void						McpCatalog	(xr_string& out);

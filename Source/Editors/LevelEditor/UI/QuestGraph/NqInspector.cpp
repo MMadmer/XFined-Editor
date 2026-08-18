@@ -984,7 +984,7 @@ bool NqInspector::DrawParams(const NqCatalog::SKind* k, SNqValue& params, LPCSTR
 	for (u32 i = 0; i < k->params.size(); ++i)
 	{
 		ImGui::PushID((int)i);
-		ch |= DrawParam(k->params[i], params, id_prefix);
+		ch |= DrawParam(k->params[i], params, id_prefix, k->id.c_str());
 		ImGui::PopID();
 	}
 	// parameters present in the file but unknown to the catalog stay editable as raw Lua
@@ -1000,20 +1000,26 @@ bool NqInspector::DrawParams(const NqCatalog::SKind* k, SNqValue& params, LPCSTR
 	return ch;
 }
 
-bool NqInspector::DrawParam(const NqCatalog::SParam& p, SNqValue& params, LPCSTR)
+bool NqInspector::DrawParam(const NqCatalog::SParam& p, SNqValue& params, LPCSTR, LPCSTR kind)
 {
 	SNqValue* slot = params.Get(p.name.c_str());
 	SNqValue v = slot ? *slot : SNqValue::Nil();
 	xr_string label = p.name;
 	if (p.required) label += " *";
+	// a parameter another form has ruled out stays visible but dead: hiding it would
+	// make the alternative forms of the kind impossible to discover
+	const bool ruled_out = NqCatalog::FormRuledOut(kind, p.name.c_str(), params);
+	if (ruled_out) ImGui::BeginDisabled();
 	SNqValue* keep = m_ParamsCtx;
 	m_ParamsCtx = &params;
 	bool ch = DrawTyped(p.type.c_str(), &p, label.c_str(), v);
 	m_ParamsCtx = keep;
+	if (ruled_out) ImGui::EndDisabled();
 	if (ImGui::IsItemHovered())
 	{
 		xr_string tip = p.type;
 		if (p.has_default) tip += " (default " + p.def + ")";
+		if (ruled_out) tip += "\nnot used: another form of " + xr_string(kind) + " is set";
 		ImGui::SetTooltip("%s", tip.c_str());
 	}
 	if (ch)
@@ -1073,6 +1079,7 @@ bool NqInspector::DrawTyped(LPCSTR type, const NqCatalog::SParam* p, LPCSTR labe
 	if (t == "duration")			return DrawDuration(label, v);
 	if (t == "npc_ref")				return DrawNpcRef(label, v, false, false);
 	if (t == "target_ref")			return DrawNpcRef(label, v, true, false);
+	if (t == "object_ref" || t == "squad_ref")	return DrawObjectRef(label, v);
 	if (t == "kill_target")			return DrawNpcRef(label, v, false, true);
 	if (t == "place")				return DrawPlace(label, v);
 	if (t == "spawn_spec")			return DrawSpawnSpec(label, v);
@@ -1339,6 +1346,39 @@ bool NqInspector::DrawNpcRef(LPCSTR label, SNqValue& v, bool target, bool kill)
 	{
 		SNqValue* sp = v.Get("spawn");
 		if (sp && DrawSpawnSpec("spawn", *sp)) ch = true;
+	}
+	ImGui::PopID();
+	return ch;
+}
+
+// object_ref / squad_ref: one concrete object, so only the two ways to name one -
+// a profile or a community would describe a kind of creature, not a thing.
+bool NqInspector::DrawObjectRef(LPCSTR label, SNqValue& v)
+{
+	xr_vector<xr_string> modes = Items("story", "ref");
+	xr_string mode = ModeOf(v, modes);
+	bool ch = false;
+	ImGui::PushID(label);
+	xr_string lt;
+	ImGui::TextUnformatted(Shown(label, lt));
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(ComboRoom(modes, "(unset)"));
+	xr_string m = mode;
+	if (ComboStr("##mode", m, modes, "(unset)"))
+	{
+		ch = true;
+		if (m.empty()) v = SNqValue::Nil();
+		else { SNqValue t = SNqValue::Table(); t.Set(m.c_str(), SNqValue::String("")); v = t; }
+		mode = m;
+	}
+	if (!mode.empty())
+	{
+		xr_string s = v.GetString(mode.c_str());
+		if (DrawPicked("##value", mode == "story" ? "story_id" : "ref_name", s))
+		{
+			v.Set(mode.c_str(), SNqValue::String(s));
+			ch = true;
+		}
 	}
 	ImGui::PopID();
 	return ch;

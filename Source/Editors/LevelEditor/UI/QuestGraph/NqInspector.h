@@ -81,12 +81,13 @@ private:
 
 	// generic parameter editors; every one returns true when the value changed
 	bool			DrawParams		(const NqCatalog::SKind* k, SNqValue& params, LPCSTR id_prefix);
-	bool			DrawParam		(const NqCatalog::SParam& p, SNqValue& params, LPCSTR id_prefix);
+	bool			DrawParam		(const NqCatalog::SParam& p, SNqValue& params, LPCSTR id_prefix, LPCSTR kind);
 	bool			DrawTyped		(LPCSTR type, const NqCatalog::SParam* p, LPCSTR label, SNqValue& v);
 	bool			DrawText		(LPCSTR label, SNqValue& v, bool multiline);
 	bool			DrawPicked		(LPCSTR label, LPCSTR type, xr_string& s);
 	bool			DrawDuration	(LPCSTR label, SNqValue& v);
 	bool			DrawNpcRef		(LPCSTR label, SNqValue& v, bool target, bool kill);
+	bool			DrawObjectRef	(LPCSTR label, SNqValue& v);
 	bool			DrawPlace		(LPCSTR label, SNqValue& v);
 	bool			DrawPosition	(SNqValue& v);
 	bool			DrawSpawnSpec	(LPCSTR label, SNqValue& v);

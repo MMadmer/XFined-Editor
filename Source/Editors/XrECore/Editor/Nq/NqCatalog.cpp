@@ -1,5 +1,6 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "NqCatalog.h"
+#include "NqAsset.h"
 #include "NqUtil.h"
 #include "../EditorGameContent.h"
 #include "../EditorProject.h"
@@ -29,7 +30,8 @@ namespace
 		"place", "spawn_spec", "item_section", "squad_section", "level", "smart", "story_id",
 		"profile", "community", "info", "var_name", "task_id", "quest_id", "ref_name",
 		"signal_name", "spot_type", "relation", "lua", "cases", "cases_cond", "cases_weight",
-		"kill_target", "count_or_all", "value", "cond_list", "node_id",
+		"kill_target", "count_or_all", "value", "cond_list", "node_id", "restrictor",
+		"squad_ref", "object_ref",
 	};
 
 	bool IsTypeName(const xr_string& s)
@@ -391,6 +393,64 @@ void NqCatalog::KindsFor(u32 use_mask, xr_vector<const SKind*>& out)
 	Ensure();
 	out.clear();
 	for (u32 i = 0; i < s_Kinds.size(); ++i) if (s_Kinds[i].use & use_mask) out.push_back(&s_Kinds[i]);
+}
+
+// A catalog line says what a parameter is, not that two of them cancel out. Until it
+// can, the exclusive forms live here, one table read by both the validator and the UI.
+void NqCatalog::ExclusiveForms(LPCSTR kind, xr_vector<xr_string>& out)
+{
+	out.clear();
+	if (!kind) return;
+	const xr_string k = kind;
+	if (k == "objective.fetch")
+	{
+		// one named object, or a section (optionally out of one named container)
+		out.push_back("item");
+		out.push_back("section,count,from");
+	}
+	else if (k == "objective.kill_count")
+	{
+		// the victim is filtered one way at a time
+		out.push_back("community");
+		out.push_back("squad");
+		out.push_back("section");
+	}
+}
+
+static bool FormHasParam(const xr_string& form, LPCSTR param)
+{
+	if (!param) return false;
+	size_t pos = 0;
+	while (pos <= form.size())
+	{
+		const size_t comma = form.find(',', pos);
+		const size_t end = (comma == xr_string::npos) ? form.size() : comma;
+		if (0 == form.compare(pos, end - pos, param)) return true;
+		if (comma == xr_string::npos) break;
+		pos = comma + 1;
+	}
+	return false;
+}
+
+int NqCatalog::FormIndex(LPCSTR kind, LPCSTR param)
+{
+	xr_vector<xr_string> forms;
+	ExclusiveForms(kind, forms);
+	for (u32 f = 0; f < forms.size(); ++f)
+		if (FormHasParam(forms[f], param)) return (int)f;
+	return -1;
+}
+
+bool NqCatalog::FormRuledOut(LPCSTR kind, LPCSTR param, const SNqValue& params)
+{
+	const int mine = FormIndex(kind, param);
+	if (mine < 0 || !params.IsTable()) return false;
+	for (u32 i = 0; i < params.keys.size(); ++i)
+	{
+		const int other = FormIndex(kind, params.keys[i].c_str());
+		if (other >= 0 && other != mine) return true;
+	}
+	return false;
 }
 
 void NqCatalog::McpCatalog(xr_string& out)

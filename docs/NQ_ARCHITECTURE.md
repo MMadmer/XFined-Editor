@@ -232,6 +232,7 @@ return {
 | `npc_ref` | `{ story = "esc_m_trader" }` \| `{ ref = "guard" }` \| `{ profile = "sim_default_stalker_1" }` \| `{ community = "stalker", level = "l01_escape" }` | порядок резолва §8 |
 | `target_ref` | `npc_ref` \| `{ ref = "boars" }` (отряд/объект) \| `{ smart = "esc_smart_terrain_2_12" }` | для целей заданий/меток |
 | `place` | `{ level = "l01_escape", pos = {x,y,z}, radius = 5 }` \| `{ restrictor = "zone_name" }` \| `{ smart = "…" }` | |
+| `object_ref`, `squad_ref` | `{ story = "esc_m_trader" }` \| `{ ref = "stash" }` | ОДИН конкретный объект мира. Уже, чем `npc_ref`: `profile`/`community` называют вид существа, а не вещь, которую можно залутать, запомнить под ref или посчитать её смерть |
 | `spawn_spec` | `{ section = "simulation_boar", smart = "…", ref = "boars", hold = true }` | для `spawn.squad` и целей `objective.kill` |
 | `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `var_name`, `task_id`, `quest_id` (`"<module>.<quest>"` или `"<quest>"` = свой модуль), `ref_name`, `signal_name`, `spot_type`, `relation` (`enemy\|neutral\|friend`) | строки | редактор даёт пикеры (§13.6) |
 | `lua` | `[[ код ]]` | см. §14 |
@@ -433,7 +434,7 @@ complete(node, pin):
 
 ```ini
 [nq.catalog]                       ; заголовок каталога (только в catalog.ltx ядра)
-version = 1                        ; версия каталога; редактор и quest_catalog показывают её
+version = 2                        ; версия каталога; редактор и quest_catalog показывают её
 api     = 1                        ; версия контракта реализации видов (поля begin/poll/…)
 
 [nq.item.give]                     ; секция = "nq." .. kind
@@ -449,6 +450,15 @@ once    = false                    ; main: дефолт node.once
 impl    = core                     ; core | <module id> (кто даёт реализацию через xms.registry)
 since   = 1                        ; версия каталога, в которой вид появился
 ```
+
+**Точка с запятой — начало комментария**, поэтому её нельзя писать в значении:
+`;` внутри `desc` обрезает описание на середине, и вид приезжает в редактор с
+усечённым текстом без единой жалобы. В прозе вместо неё — тире.
+
+`since` — это версия каталога, в которой вид ПОЯВИЛСЯ, а не в которой его последний
+раз правили: поднять `since` у существующего вида значит спрятать его от редактора,
+подключённого к игре постарше, и сломать уже написанные квесты. Новые ПАРАМЕТРЫ
+старого вида `since` не трогают (см. `objective.fetch` в 6.3).
 
 Расширение: модуль кладёт `gamedata\configs\nq\kinds\<mod>.ltx` и в своём
 `scripts\register.script` регистрирует реализации:
@@ -489,7 +499,8 @@ since   = 1                        ; версия каталога, в кото�
 | `dialog.npc_phrase` | `text` (+`node.cond` = precondition) | `next` | нет | фраза NPC |
 | `dialog.actor_phrase` | `text` (+`node.cond`) | `next` | нет | фраза игрока |
 | `objective.kill` | `target: {story}\|{ref}\|{spawn=spawn_spec}`, `by_actor: bool=false` | `done` | да | `npc_on_death_callback`/`monster_on_death_callback`/`squad_on_npc_death`/`squad_on_unregister` + опрос `alife():object(id)` для оффлайн-смертей; `spawn` создаёт цель при входе (`SIMBOARD:create_squad`, `sim_board.script:176`) и запоминает `ref` |
-| `objective.fetch` | `section: item_section`, `count: int=1` (штуки предметов: для патронов — коробки, а не патроны) | `done` | да | опрос инвентаря актора (+`actor_on_item_take`) |
+| `objective.fetch` | ТРИ формы, ровно одна за раз (иначе E022): `section: item_section` (+`count: int=1`) — любые предметы секции в инвентаре; то же плюс `from: object_ref` — засчитываются только вынесенные из ЭТОГО контейнера; `item: object_ref` — один конкретный объект. `count` в штуках предметов: для патронов — коробки, а не патроны | `done` | да | `section` — опрос инвентаря актора (+`actor_on_item_take`); `from` — состав контейнера через `alife():get_children()` (работает оффлайн, что для тайника норма), id засчитывается, только если его видели ВНУТРИ контейнера и потом нашли у игрока; `item` — `parent_id` серверного объекта равен актору |
+| `objective.kill_count` | `count: int=1`, `by_actor: bool=true`, и не более одного фильтра: `community` \| `squad: object_ref` \| `section: string` (иначе E022). Без фильтра — любая смерть NPC | `done` | да | счёт с входа в ноду, дедуп по id, счётчик в токене (`mark_dirty`), переживает сохранение. Оффлайн-смерти опрашиваются только для фильтра `squad` (единственный, у кого известен список кандидатов) и только при `by_actor = false`: опрос не знает убийцу, а убийство игроком всегда онлайн и всегда приносит колбэк |
 | `objective.reach` | `place`, `map_spot: bool=true`, `spot_text: text?` | `done` | да | `level.name()` + дистанция / `db.zone_by_name[...]:inside()`; для позиции создаётся якорь `space_restrictor` (`alife():create`) — под метку карты и цель задания, удаляется при выходе |
 | `wait.timer` | `duration` | `done` | да | игровое время через `game.get_game_time()`; реальное — остаток в секундах, декремент по тику |
 | `wait.when` | `timeout: duration?`; условия — `node.cond` | `done`, `timeout` | да | как `trigger.when`, но с входом |
@@ -1155,6 +1166,7 @@ read-only; чистый документ не скрывает внешнюю п
 | E011 | фразовая нода имеет вход не из фразы/темы (вход из мира) |
 | E020 | событийное условие (`event.*`) в `cond` фразы/темы или в `cases` `flow.branch` (допустимо только в `trigger.when` / `wait.when` / `wait.any`) |
 | E021 | `cases` пусты / имена кейсов дублируются / `weight <= 0` |
+| E022 | у вида выбрано несколько взаимоисключающих форм параметров сразу, либо не выбрано ни одной (`objective.fetch`: `item` против `section`/`count`/`from`; `objective.kill_count`: больше одного фильтра). Формы объявлены в `NqCatalog::ExclusiveForms` — одна таблица на валидатор и на инспектор, который гасит проигравшие поля |
 | E030 | `task`/`quest`/`ref`/`var`/`node` ссылка на несуществующее объявление |
 | E031 | `actor.teleport` на другой уровень |
 | E050 | синтаксическая ошибка кастомного Lua |

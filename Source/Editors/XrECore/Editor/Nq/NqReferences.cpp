@@ -16,6 +16,7 @@ namespace
 			"profile", "community", "info", "var_name", "task_id", "quest_id", "ref_name",
 			"signal_name", "spot_type", "relation", "lua", "cases", "cases_cond", "cases_weight",
 			"kill_target", "count_or_all", "value", "cond_list", "node_id", "restrictor",
+			"squad_ref", "object_ref",
 		};
 		for (u32 i = 0; i < sizeof(types) / sizeof(types[0]); ++i)
 			if (type == types[i]) return true;
@@ -324,6 +325,21 @@ namespace
 			}
 		}
 
+		// squad_ref / object_ref: one concrete world object, addressed the same two ways
+		void WalkObjectRef(const NqCatalog::SKind& kind, const NqCatalog::SParam& param,
+			SNqValue& value, LPCSTR node, LPCSTR slot)
+		{
+			static const LPCSTR allowed[] = { "story", "ref" };
+			if (!WalkObject(kind, param, value, node, slot, param.type.c_str(), allowed,
+				sizeof(allowed) / sizeof(allowed[0]))) return;
+			const int alternatives = (value.Has("story") ? 1 : 0) + (value.Has("ref") ? 1 : 0);
+			if (alternatives != 1)
+				Diagnostic("malformed", NqUtil::Format("%s must select exactly one of story / ref",
+					param.type.c_str()).c_str(), node, slot, kind.id.c_str(), param.name.c_str());
+			if (value.Has("story")) WalkStringLeaf(kind, param, value, "story", "story_id", false, node, slot);
+			if (value.Has("ref")) WalkStringLeaf(kind, param, value, "ref", "ref_name", false, node, slot);
+		}
+
 		void WalkPlace(const NqCatalog::SKind& kind, const NqCatalog::SParam& param,
 			SNqValue& value, LPCSTR node, LPCSTR slot)
 		{
@@ -419,6 +435,7 @@ namespace
 			if (type == "npc_ref") { WalkNpcRef(kind, param, value, node, slot, false, false); return; }
 			if (type == "target_ref") { WalkNpcRef(kind, param, value, node, slot, true, false); return; }
 			if (type == "kill_target") { WalkNpcRef(kind, param, value, node, slot, false, true); return; }
+			if (type == "squad_ref" || type == "object_ref") { WalkObjectRef(kind, param, value, node, slot); return; }
 			if (type == "place") { WalkPlace(kind, param, value, node, slot); return; }
 			if (type == "spawn_spec") { WalkSpawnSpec(kind, param, value, node, slot); return; }
 			if (type == "duration") { WalkDuration(kind, param, value, node, slot); return; }
