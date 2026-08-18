@@ -87,6 +87,8 @@ EScene::~EScene()
 void EScene::OnCreate()
 {
     CreateSceneTools		();
+	m_UndoThreadID			= GetCurrentThreadId();
+	m_UndoObjectGeneration	= 0;
     
 	m_LastAvailObject 		= 0;
     m_LevelOp.Reset			();
@@ -143,6 +145,7 @@ void EScene::AppendObject( CCustomObject* object, bool bUndo )
     ESceneCustomOTool* mt	= GetOTool(object->FClassID);
     VERIFY3(mt,"Can't find Object Tools:",GetTool(object->FClassID)->ClassDesc());
     mt->_AppendObject	(object);
+	++m_UndoObjectGeneration;
     UI->UpdateScene		();
     if (bUndo){	
         object->Select	(true);
@@ -176,6 +179,7 @@ bool EScene::RemoveObject( CCustomObject* object, bool bUndo, bool bDeleting )
     if (mt&&mt->IsEditable())
     {
     	mt->_RemoveObject(object);
+		++m_UndoObjectGeneration;
         // signal everyone "I'm deleting"
 //        if (object->ClassID==OBJCLASS_SCENEOBJECT)
         {

@@ -59,11 +59,41 @@ class PropValue;
 struct SPBItem;
 
 
-#pragma pack( push,1 )
-struct UndoItem {
-	char m_FileName[MAX_PATH];
+enum class EUndoItemType : u8
+{
+	Snapshot,
+	Transform,
 };
-#pragma pack( pop )
+
+enum class EUndoApplyResult : u8
+{
+	Success,
+	EdgeMismatch,
+	RolledBack,
+	RollbackFailed,
+};
+
+struct UndoTransformValue
+{
+	Fvector Position;
+	Fvector Rotation;
+	Fvector Scale;
+};
+
+struct UndoTransformItem
+{
+	ObjClassID ClassID = OBJCLASS_DUMMY;
+	xr_string Name;
+	UndoTransformValue Before;
+	UndoTransformValue After;
+};
+
+struct UndoItem
+{
+	EUndoItemType Type = EUndoItemType::Snapshot;
+	xr_string FileName;
+	xr_vector<UndoTransformItem> Transforms;
+};
 
 class TProperties;
 
@@ -117,6 +147,13 @@ protected:
 
 	xr_deque<UndoItem> m_UndoStack;
 	xr_deque<UndoItem> m_RedoStack;
+	xr_vector<UndoTransformItem> m_PendingTransformUndo;
+	u64 m_UndoObjectGeneration = 0;
+	u64 m_PendingTransformGeneration = 0;
+	DWORD m_UndoThreadID = 0;
+	bool m_TransformUndoActive = false;
+	bool m_TransformUndoFallback = false;
+	bool m_UndoRollbackFailed = false;
 
 	TProperties* m_SummaryInfo;
 
@@ -274,8 +311,12 @@ public:
 
 	void 			UndoClear();
 	void 			UndoSave();
+	bool			UndoTransformBegin(const ObjectList& objects);
+	void			UndoTransformEnd();
+	void			UndoTransformCancel();
 	bool 			Undo();
 	bool 			Redo();
+	bool			UndoRollbackFailed() const { return m_UndoRollbackFailed; }
 
 	bool 			GetBox(Fbox& box, ObjClassID classfilter);
 	bool 			GetBox(Fbox& box, ObjectList& lst);
@@ -358,6 +399,16 @@ public:
 	void            RegisterSubstObjectName(const xr_string& from, const xr_string& to);
 	bool            GetSubstObjectName(const xr_string& from, xr_string& to) const;
 private:
+	bool			SaveUndoSnapshot(UndoItem& item);
+	EUndoApplyResult ApplyUndoTransforms(const xr_vector<UndoTransformItem>& transforms, bool before, bool validateEdge);
+	bool			RestoreUndoSnapshot(const UndoItem& snapshot, const xr_vector<const UndoItem*>& replay);
+	bool			RestoreUndoState(size_t index, const UndoItem* finalTransform = 0);
+	void			HandleUndoRollbackFailure(LPCSTR operation);
+	void			ClearUndoStack(xr_deque<UndoItem>& stack);
+	void			TrimUndoStack();
+	void			TrimRedoStack();
+	void			MergeUndoBaseline(const UndoItem& transformState);
+
 	CLevelGraphEditor m_level_graph;
 	CGameGraphEditor m_game_graph;
 	CMemoryWriter	m_spawn_data;

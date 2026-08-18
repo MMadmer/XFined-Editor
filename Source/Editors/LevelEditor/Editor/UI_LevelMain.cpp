@@ -556,7 +556,11 @@ CCommandVar CommandSaveSelection(CCommandVar p1, CCommandVar p2)
 CCommandVar CommandUndo(CCommandVar p1, CCommandVar p2)
 {
     if( !Scene->locked() ){
-        if( !Scene->Undo() ) 	ELog.DlgMsg( mtInformation, "Undo buffer empty" );
+		if (LTools->GetGimzo()->IsFixed())
+			LTools->GetGimzo()->Clear();
+		if (!Scene->Undo())
+			ELog.DlgMsg(Scene->UndoRollbackFailed() ? mtError : mtInformation,
+				Scene->UndoRollbackFailed() ? "Undo failed to restore every object; the scene was marked modified" : "Undo buffer empty");
         else{
             LTools->Reset		();
             ExecCommand			(COMMAND_CHANGE_ACTION, etaSelect);
@@ -571,7 +575,11 @@ CCommandVar CommandUndo(CCommandVar p1, CCommandVar p2)
 CCommandVar CommandRedo(CCommandVar p1, CCommandVar p2)
 {
     if( !Scene->locked() ){
-        if( !Scene->Redo() ) 	ELog.DlgMsg( mtInformation, "Redo buffer empty" );
+		if (LTools->GetGimzo()->IsFixed())
+			LTools->GetGimzo()->Clear();
+		if (!Scene->Redo())
+			ELog.DlgMsg(Scene->UndoRollbackFailed() ? mtError : mtInformation,
+				Scene->UndoRollbackFailed() ? "Redo failed to restore every object; the scene was marked modified" : "Redo buffer empty");
         else{
             LTools->Reset		();
             ExecCommand			(COMMAND_CHANGE_ACTION, etaSelect);
@@ -1226,13 +1234,16 @@ CCommandVar CommandDropToGround(CCommandVar p1, CCommandVar p2)
     }
 
     // p2 != 0 selects the pivot line trace, mirroring UE's Alt+End
+	Scene->UndoTransformBegin(selection);
     const u32 moved = DropObjectsToGround(selection, false, 0 != u32(p2));
     if (moved)
     {
-        Scene->UndoSave();
+		Scene->UndoTransformEnd();
         ExecCommand(COMMAND_UPDATE_PROPERTIES);
         UI->RedrawScene(true);
     }
+	else
+		Scene->UndoTransformCancel();
     ELog.Msg(mtInformation, "Drop to ground: %d of %d object(s) landed.", moved, selection.size());
     return moved ? TRUE : FALSE;
 }
@@ -2800,10 +2811,13 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             out = "{\"ok\":false,\"error\":\"non-finite component\"}";
             return true;
         }
-        if      (set_rot)	obj->SetRotation(v);	// radians
+		ObjectList transformed;
+		transformed.push_back(obj);
+		Scene->UndoTransformBegin(transformed);
+		if      (set_rot)	obj->SetRotation(v);	// radians
         else if (set_scl)	obj->SetScale(v);
         else				obj->SetPosition(v);
-        Scene->UndoSave();
+		Scene->UndoTransformEnd();
         // the properties panel caches the transform on selection - without this
         // it keeps showing the pre-command values
         ExecCommand(COMMAND_UPDATE_PROPERTIES);
@@ -3442,13 +3456,16 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
         XFinedMCP::GetArg(raw, "mode", mode, sizeof(mode));
         const bool line_trace = (0 == _stricmp(mode, "line"));
 
-        const u32 moved = DropObjectsToGround(batch, GetArgBool(raw, "align_normal", false), line_trace);
+		Scene->UndoTransformBegin(batch);
+		const u32 moved = DropObjectsToGround(batch, GetArgBool(raw, "align_normal", false), line_trace);
         if (moved)
         {
-            Scene->UndoSave();
+			Scene->UndoTransformEnd();
             ExecCommand(COMMAND_UPDATE_PROPERTIES);
             UI->RedrawScene(true);
         }
+		else
+			Scene->UndoTransformCancel();
         char tmp[512];
         sprintf_s(tmp, sizeof(tmp), "{\"ok\":true,\"mode\":\"%s\",\"requested\":%u,\"dropped\":%u,\"missing\":\"%s\"}",
             line_trace ? "line" : "box", u32(batch.size()), moved, missing.c_str());
@@ -3539,11 +3556,17 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             return true;
         }
         const bool is_undo = (0 == xr_strcmp(cmd, "undo"));
+		if (LTools->GetGimzo()->IsFixed())
+			LTools->GetGimzo()->Clear();
         const bool done = is_undo ? !!Scene->Undo() : !!Scene->Redo();
         if (!done)
         {
-            out = is_undo ? "{\"ok\":false,\"error\":\"undo buffer empty\"}"
-                          : "{\"ok\":false,\"error\":\"redo buffer empty\"}";
+            if (Scene->UndoRollbackFailed())
+                out = is_undo ? "{\"ok\":false,\"error\":\"undo rollback incomplete; scene marked modified\"}"
+                              : "{\"ok\":false,\"error\":\"redo rollback incomplete; scene marked modified\"}";
+            else
+                out = is_undo ? "{\"ok\":false,\"error\":\"undo buffer empty\"}"
+                              : "{\"ok\":false,\"error\":\"redo buffer empty\"}";
             return true;
         }
         LTools->Reset();

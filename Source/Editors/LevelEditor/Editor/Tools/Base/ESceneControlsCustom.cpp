@@ -262,6 +262,9 @@ bool  TUI_CustomControl::SelectStart(TShiftState Shift)
     }
     else if (LTools->GetGimzo()->GetStatus() != Gizmo::EStatus::None)
     {
+		ObjectList transformObjects;
+		Scene->GetQueryObjects(transformObjects, LTools->CurrentClassID(), 1, 1, 0);
+		Scene->UndoTransformBegin(transformObjects);
 
         LTools->GetGimzo()->Fixed();
 
@@ -549,7 +552,7 @@ bool  TUI_CustomControl::SelectEnd(TShiftState _Shift)
     if (LTools->GetGimzo()->IsFixed())
     {
         LTools->GetGimzo()->Clear();
-        Scene->UndoSave();
+		Scene->UndoTransformEnd();
         return true;
     }
     else if (bBoxSelection){
