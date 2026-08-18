@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "NqProjectIndex.h"
 
@@ -28,6 +28,13 @@ namespace NqReferences
 		xr_string	code;
 		xr_string	message;
 		xr_string	source;
+		// True only when the walk had to give up on a subtree, so a reference may
+		// be hiding in it. A complaint about a value the walk read perfectly well
+		// (a missing required parameter, a bad enum) says nothing about coverage
+		// and must not block a rename that has nothing to do with it.
+		bool		blocking;
+
+		SDiagnostic() : blocking(false) {}
 
 		xr_string	Text() const;
 	};

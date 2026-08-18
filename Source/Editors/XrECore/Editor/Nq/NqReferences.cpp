@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "NqReferences.h"
 #include "NqCatalog.h"
 #include "NqDoc.h"
@@ -87,10 +87,12 @@ namespace
 		xr_vector<NqReferences::SDiagnostic>& m_Diagnostics;
 		xr_vector<SNqValue*>* m_Edits;
 
+		// `blocking` marks the walk giving up on a subtree - see SDiagnostic
 		void Diagnostic(LPCSTR code, LPCSTR message, LPCSTR node, LPCSTR slot,
-			LPCSTR kind = "", LPCSTR param = "")
+			LPCSTR kind = "", LPCSTR param = "", bool blocking = false)
 		{
 			NqReferences::SDiagnostic diagnostic;
+			diagnostic.blocking = blocking;
 			diagnostic.path = m_Path;
 			diagnostic.node = node ? node : "";
 			diagnostic.slot = slot ? slot : "";
@@ -115,18 +117,18 @@ namespace
 			if (!kind)
 			{
 				Diagnostic("unknown_kind", NqUtil::Format("kind '%s' is absent from the active catalog", kind_id).c_str(),
-					node, slot, kind_id);
+					node, slot, kind_id, "", true);
 				return;
 			}
 			if (!(kind->use & expected_use))
 			{
 				Diagnostic("wrong_kind_use", NqUtil::Format("kind '%s' is not valid in this slot", kind_id).c_str(),
-					node, slot, kind_id);
+					node, slot, kind_id, "", true);
 				return;
 			}
 			if (!params.IsNil() && !params.IsTable())
 			{
-				Diagnostic("malformed", "params must be a table", node, slot, kind_id);
+				Diagnostic("malformed", "params must be a table", node, slot, kind_id, "", true);
 				return;
 			}
 			if (params.IsTable() && !params.arr.empty())
@@ -180,7 +182,7 @@ namespace
 			if (!value.IsTable())
 			{
 				Diagnostic("malformed", NqUtil::Format("%s must be a table", schema).c_str(), node, slot,
-					kind.id.c_str(), param.name.c_str());
+					kind.id.c_str(), param.name.c_str(), true);
 				return false;
 			}
 			if (!value.arr.empty())
@@ -484,7 +486,7 @@ namespace
 		{
 			if (!list.IsTable() || list.arr.empty() || !list.keys.empty())
 			{
-				Diagnostic("malformed", "condition list must be a non-empty array", node, slot);
+				Diagnostic("malformed", "condition list must be a non-empty array", node, slot, "", "", true);
 				return;
 			}
 			for (u32 i = 0; i < list.arr.size(); ++i)
@@ -495,7 +497,7 @@ namespace
 		{
 			if (!list.IsTable())
 			{
-				Diagnostic("malformed", "condition container must be a table", node, slot);
+				Diagnostic("malformed", "condition container must be a table", node, slot, "", "", true);
 				return;
 			}
 			if (list.arr.empty() && list.Has("kind"))
@@ -639,6 +641,7 @@ bool NqReferences::Find(const NqProjectIndex::SSnapshot& snapshot, LPCSTR type, 
 			diagnostic.code = entry.readable ? "incomplete_model" : "unreadable";
 			diagnostic.message = entry.error.empty() ? "quest could not be inspected" : entry.error;
 			diagnostic.source = entry.Source();
+			diagnostic.blocking = true;		// unread content can hide anything
 			out.diagnostics.push_back(diagnostic);
 			continue;
 		}
@@ -647,7 +650,10 @@ bool NqReferences::Find(const NqProjectIndex::SSnapshot& snapshot, LPCSTR type, 
 		walker.Quest(quest);
 	}
 	if (!found_scope) { err = "quest is not present in the project index"; return false; }
-	out.complete = out.diagnostics.empty();
+	// complete means "every reference was seen", not "the project is spotless"
+	out.complete = true;
+	for (u32 i = 0; i < out.diagnostics.size(); ++i)
+		if (out.diagnostics[i].blocking) { out.complete = false; break; }
 	return true;
 }
 
@@ -670,7 +676,14 @@ bool NqReferences::RenameTask(SNqQuest& quest, LPCSTR path, LPCSTR from, LPCSTR 
 	}
 	SWalker walker(path, "memory", "task_id", from, references, diagnostics, &edits);
 	walker.Quest(quest);
-	if (!diagnostics.empty()) return false;
+	// Only a walk that gave up on a subtree can hide a task reference. A graph is
+	// routinely mid-edit and full of unrelated complaints - a missing `place` three
+	// nodes away proves nothing about this rename and must not veto it.
+	xr_vector<SDiagnostic> blocking;
+	for (u32 i = 0; i < diagnostics.size(); ++i)
+		if (diagnostics[i].blocking) blocking.push_back(diagnostics[i]);
+	if (!blocking.empty()) { diagnostics.swap(blocking); return false; }
+	diagnostics.clear();
 
 	SNqTask* task = quest.FindTask(from);
 	if (!task)
