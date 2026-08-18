@@ -418,11 +418,13 @@ CCommandVar CommandClear(CCommandVar p1, CCommandVar p2)
         Tools->m_LastFileName 		= "";
         LTools->m_LastSelectionName = "";
         Scene->UndoClear		();
-        ExecCommand				(COMMAND_UPDATE_CAPTION);
         ExecCommand				(COMMAND_CHANGE_TARGET,OBJCLASS_SCENEOBJECT);
         ExecCommand				(COMMAND_CHANGE_ACTION,etaSelect,estDefault);
         ExecCommand				(COMMAND_UPDATE_PROPERTIES,1);
         Scene->UndoSave			();
+		// The empty undo baseline is initialization state, not a user edit.
+		Scene->m_RTFlags.set(EScene::flRT_Unsaved | EScene::flRT_Modified, FALSE);
+		ExecCommand				(COMMAND_UPDATE_CAPTION);
 		EditorRecovery::OnSceneReplaced();
         return 					TRUE;
     } else {
