@@ -576,6 +576,11 @@ void xrSASH::DescribeOption( char* pszOptionName, const oaOptionDependency &Depe
 	{
 		Option.DataType = OA_TYPE_ENUM;
 		xr_token* pXRToken = pToken->GetToken();
+		if (!pXRToken)
+		{
+			Msg("SASH:: Option \"%s\" is unavailable.", pszOptionName);
+			return;
+		}
 
 		while (pXRToken->name)
 		{

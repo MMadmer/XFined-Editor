@@ -279,7 +279,7 @@ public:
 		if (id1 < EPS_L)
 			Msg("Invalid time factor! (%.4f)",id1);
 		else {
-			if (!OnServer())
+			if (!g_pGameLevel || !OnServer())
 				return;
 
 			Level().SetGameTimeFactor(id1);
@@ -289,7 +289,8 @@ public:
 	virtual void	Save	(IWriter *F)	{};
 	virtual void	Status	(TStatus& S)
 	{	
-		if ( !g_pGameLevel )	return;
+		S[0] = 0;
+		if (!g_pGameLevel)	return;
 
 		float v = Level().GetGameTimeFactor();
 		xr_sprintf	(S,sizeof(S),"%3.5f", v);
@@ -297,13 +298,14 @@ public:
 	}
 	virtual void	Info	(TInfo& I)
 	{	
-		if (!OnServer())	return;
+		I[0] = 0;
+		if (!g_pGameLevel || !OnServer())	return;
 		float v = Level().GetGameTimeFactor();
 		xr_sprintf(I,sizeof(I)," value = %3.5f", v);
 	}
 	virtual void	fill_tips(vecTips& tips, u32 mode)
 	{
-		if (!OnServer())	return;
+		if (!g_pGameLevel || !OnServer())	return;
 		float v = Level().GetGameTimeFactor();
 
 		TStatus  str;

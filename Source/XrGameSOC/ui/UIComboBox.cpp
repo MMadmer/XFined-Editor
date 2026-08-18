@@ -114,14 +114,36 @@ void CUIComboBox::SetCurrentValue()
 {
 	m_list.Clear		();
 	xr_token* tok		= GetOptToken();
+	if (!tok)
+	{
+		m_text.SetText("");
+		m_itoken_id = -1;
+		return;
+	}
 
+	bool has_items = false;
 	while (tok->name)
 	{		
 		AddItem_(tok->name, tok->id);
+		has_items = true;
 		tok++;
 	}
+	if (!has_items)
+	{
+		m_text.SetText("");
+		m_itoken_id = -1;
+		return;
+	}
 
-	LPCSTR cur_val		= *CStringTable().translate( GetOptTokenValue());
+	LPCSTR current_value = GetOptTokenValue();
+	if (!current_value || !current_value[0])
+	{
+		m_text.SetText("");
+		m_itoken_id = -1;
+		return;
+	}
+
+	LPCSTR cur_val		= *CStringTable().translate(current_value);
 	m_text.SetText		( cur_val );
 	m_list.SetSelectedText( cur_val );
 	
@@ -129,20 +151,26 @@ void CUIComboBox::SetCurrentValue()
 	if(itm)
 		m_itoken_id			= (int)(__int64)itm->GetData();
 	else
-		m_itoken_id			= 1; //first
+		SetItem(0);
 }
 
 void CUIComboBox::SaveValue()
 {
-	CUIOptionsItem::SaveValue	();
+	if (m_itoken_id < 0)
+		return;
 	xr_token* tok				= GetOptToken();
+	if (!tok)
+		return;
 	LPCSTR	cur_val				= get_token_name(tok, m_itoken_id);
+	if (!cur_val || !cur_val[0])
+		return;
+	CUIOptionsItem::SaveValue	();
 	SaveOptTokenValue			(cur_val);
 }
 
 bool CUIComboBox::IsChanged()
 {
-	return				(m_backup_itoken_id != m_itoken_id);
+	return m_itoken_id >= 0 && m_backup_itoken_id != m_itoken_id;
 /*
 	xr_token* tok		= GetOptToken();
 	LPCSTR	cur_val		= get_token_name(tok, m_itoken_id);
@@ -160,8 +188,20 @@ LPCSTR CUIComboBox::GetText()
 
 void CUIComboBox::SetItem(int idx)
 {
+	if (idx < 0)
+	{
+		m_itoken_id = -1;
+		m_text.SetText("");
+		return;
+	}
 	m_list.SetSelectedIDX	(idx);
 	CUIListBoxItem* itm		= m_list.GetSelectedItem();
+	if (!itm)
+	{
+		m_itoken_id = -1;
+		m_text.SetText("");
+		return;
+	}
 	m_itoken_id				= (int)(__int64)itm->GetData();
 
 	m_text.SetText			(m_list.GetSelectedText());

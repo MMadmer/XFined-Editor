@@ -413,7 +413,10 @@ public :
 		Status( cur );
 
 		bool res = false;
-		xr_token* tok = GetToken();
+		xr_token* const token_list = GetToken();
+		if (!token_list || !token_list->name)
+			return;
+		xr_token* tok = token_list;
 		while ( tok->name && !res )
 		{
 			if ( !xr_strcmp( tok->name, cur ) )
@@ -428,7 +431,7 @@ public :
 		{
 			tips.push_back( "---  (current)" );
 		}
-		tok = GetToken();
+		tok = token_list;
 		while ( tok->name )
 		{
 			tips.push_back( tok->name );
@@ -541,6 +544,9 @@ public:
 		tokens					= vid_quality_token;
 
 		inherited::Execute		(args);
+		if (!tokens)
+			return;
+
 		//	0 - r1
 		//	1..3 - r2
 		//	4 - r3
@@ -579,31 +585,10 @@ public:
 	virtual			~CCC_soundDevice	()
 	{}
 
-	virtual void Execute(LPCSTR args)
-	{
-		GetToken				();
-		if(!tokens)				return;
-		inherited::Execute		(args);
-	}
-
-	virtual void	Status	(TStatus& S)
-	{
-		GetToken				();
-		if(!tokens)				return;
-		inherited::Status		(S);
-	}
-
 	virtual xr_token* GetToken()
 	{
 		tokens					= snd_devices_token;
 		return inherited::GetToken();
-	}
-
-	virtual void Save(IWriter *F)	
-	{
-		GetToken				();
-		if(!tokens)				return;
-		inherited::Save			(F);
 	}
 };
 #endif

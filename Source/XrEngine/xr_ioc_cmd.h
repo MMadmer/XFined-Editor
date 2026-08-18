@@ -156,7 +156,13 @@ public		:
 
 	virtual void	Execute	(LPCSTR args)
 	{
-		xr_token* tok = tokens;
+		xr_token* tok = GetToken();
+		if (!tok || !tok->name)
+		{
+			Msg("! token [%s] is unavailable", cName);
+			return;
+		}
+
 		while (tok->name) {
 			if (stricmp(tok->name,args)==0) {
 				*value=tok->id;
@@ -168,7 +174,11 @@ public		:
 	}
 	virtual void	Status	(TStatus& S)
 	{
-		xr_token *tok = tokens;
+		S[0] = 0;
+		xr_token* tok = GetToken();
+		if (!tok || !tok->name)
+			return;
+
 		while (tok->name) {
 			if (tok->id==(int)(*value)) {
 				xr_strcpy(S,tok->name);
@@ -181,11 +191,26 @@ public		:
 	}
 	virtual void	Info	(TInfo& I)
 	{	
-		I[0]=0;
-		xr_token *tok = tokens;
+		I[0] = 0;
+		xr_token* tok = GetToken();
+		if (!tok || !tok->name)
+			return;
+
+		size_t available = sizeof(I) - 1;
 		while (tok->name) {
-			if (I[0]) xr_strcat(I,"/");
-			xr_strcat(I,tok->name);
+			const size_t separator_size = I[0] ? 1 : 0;
+			const size_t name_size = xr_strlen(tok->name);
+			if (separator_size + name_size > available)
+			{
+				if (available >= 3)
+					xr_strcat(I, "...");
+				return;
+			}
+
+			if (separator_size)
+				xr_strcat(I, "/");
+			xr_strcat(I, tok->name);
+			available -= separator_size + name_size;
 			tok++;
 		}
 	}
@@ -195,7 +220,11 @@ public		:
 	{
 		TStatus  str;
 		bool res = false;
-		xr_token* tok = GetToken();
+		xr_token* const token_list = GetToken();
+		if (!token_list || !token_list->name)
+			return;
+		xr_token* tok = token_list;
+
 		while ( tok->name && !res )
 		{
 			if ( tok->id == (int)(*value) )
@@ -210,7 +239,7 @@ public		:
 		{
 			tips.push_back( "---  (current)" );
 		}
-		tok = GetToken();
+		tok = token_list;
 		while ( tok->name )
 		{
 			tips.push_back( tok->name );
