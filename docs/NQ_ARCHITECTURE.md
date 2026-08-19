@@ -238,7 +238,7 @@ return {
 | `place` | `{ level = "l01_escape", pos = {x,y,z}, radius = 5 }` \| `{ restrictor = "zone_name" }` \| `{ smart = "…" }` | |
 | `objective_id` | `"bread"` | шаг задачи, названной параметром `task` рядом. Редактор даёт выпадающий список шагов этой задачи |
 | `object_ref`, `squad_ref` | `{ story = "esc_m_trader" }` \| `{ ref = "stash" }` | ОДИН конкретный объект мира. Уже, чем `npc_ref`: `profile`/`community` называют вид существа, а не вещь, которую можно залутать, запомнить под ref или посчитать её смерть |
-| `spawn_spec` | `{ section = "simulation_boar", smart = "…", ref = "boars", hold = true }` | для `spawn.squad` и целей `objective.kill` |
+| `spawn_spec` | `{ section = "simulation_boar", smart = "…", place = <place>, restrictor = "…", spread = 1, ref = "boars", hold = true }` | для `spawn.squad` и целей `objective.kill`. Нужна секция и смарт ЛИБО место; пустой `smart` = не указан. `hold` держит отряд там, куда его поставили: если смарт выбрал автор — на нём, а если автор задал место, отряд не привязывается ни к какому смарту (иначе поводок тянул бы их из того самого рестриктора) |
 | `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `var_name`, `task_id`, `quest_id` (`"<module>.<quest>"` или `"<quest>"` = свой модуль), `ref_name`, `signal_name`, `spot_type`, `relation` (`enemy\|neutral\|friend`) | строки | редактор даёт пикеры (§13.6) |
 | `lua` | `[[ код ]]` | см. §14 |
 | `cases` | `{ { name = "yes", cond = { … } }, … }` / `{ { name = "a", weight = 3 }, … }` | имена = пины |
