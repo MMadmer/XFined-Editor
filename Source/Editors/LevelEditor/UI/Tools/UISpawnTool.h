@@ -1,7 +1,12 @@
-#pragma once
+﻿#pragma once
 class UISpawnTool :public UIToolCustom
 {
 public:
+	// Shape entities (a restrictor and friends) are placed with a shape attached; the
+	// SDK let you pick which before spawning, so this does too.
+	bool			m_ShapeSphere = true;
+	bool			IsSphereShape() const { return m_ShapeSphere; }
+
 	UISpawnTool();
 	virtual ~UISpawnTool();
 	virtual void Draw();

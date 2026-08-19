@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #define SPAWNPOINT_VERSION   			0x0017
 
@@ -138,6 +138,8 @@ public:
     
 	bool 			RefCompare		(LPCSTR ref);
     virtual LPCSTR	RefName			();
+	// a shape entity with no shape is invalid; give it a default one
+	void			EnsureShape		();
 
     bool			CreateSpawnData	(LPCSTR entity_ref);
 	virtual void    Render      	( int priority, bool strictB2F );

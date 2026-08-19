@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 // game-archive fallback for spawn visuals
 #include "..\..\..\..\XrECore\Editor\EThumbnailVisual.h"
 
@@ -1118,12 +1118,40 @@ bool CSpawnPoint::LoadLTX(CInifile& ini, LPCSTR sect_name)
 
 	UpdateTransform	();
 
+	// A shape entity that arrives without a shape is a zone nothing can be inside, and
+	// export refuses it outright ("must contain attached shape"). Scenes written before
+	// placement attached one carry exactly that, so it is repaired on the way in rather
+	// than left to fail at build time.
+	EnsureShape		();
+
 	// BUG fix
     CEditShape* shape	= dynamic_cast<CEditShape*>(m_AttachedObject);
     if (shape)
     	SetScale 	( shape->GetScale());
     
     return true;
+}
+
+// Attaches a default sphere when the entity needs a shape and has none.
+void CSpawnPoint::EnsureShape()
+{
+	if (m_AttachedObject)					return;
+	if (!m_SpawnData.Valid())				return;
+	if (!m_SpawnData.m_Data->shape())		return;
+	CCustomObject* S = Scene->GetOTool(OBJCLASS_SHAPE)->CreateObject(0, 0);
+	CEditShape* shape = dynamic_cast<CEditShape*>(S);
+	if (!shape) { xr_delete(S); return; }
+	Fsphere Sph;
+	Sph.identity();
+	Sph.R = 5.f;
+	shape->add_sphere(Sph);
+	// AttachObject moves the OWNER onto the shape, so the shape has to be standing
+	// where the owner already is - otherwise repairing a restrictor teleports it to
+	// the origin.
+	shape->SetPosition(GetPosition());
+	shape->SetRotation(GetRotation());
+	AttachObject(S);
+	Msg("~ [XMS] '%s' had no shape - a default sphere was attached", GetName());
 }
 
 void CSpawnPoint::SaveLTX(CInifile& ini, LPCSTR sect_name)

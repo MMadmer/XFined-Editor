@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 
 static HMODULE hXRSE_FACTORY = 0;
 
@@ -199,18 +199,35 @@ CCustomObject* ESceneSpawnTool::CreateObject(LPVOID data, LPCSTR name)
 
 	if(data && name)
     {
-        if(pSettings->line_exist( (LPCSTR)data, "$def_sphere") )
+        // A shape entity without a shape is a zone nothing can ever be inside: export
+        // refuses it outright ("must contain attached shape"), and a restrictor that
+        // slips through is invisible to every "is the actor in it" test. Dead Air's
+        // [space_restrictor] carries no $def_sphere, so keying the default sphere off
+        // that alone left every restrictor placed here empty.
+        const bool has_def = !!pSettings->line_exist((LPCSTR)data, "$def_sphere");
+        const bool needs_shape = O->m_SpawnData.Valid() && !!O->m_SpawnData.m_Data->shape();
+        if (has_def || needs_shape)
         {
-        	float size 			= pSettings->r_float( (LPCSTR)data, "$def_sphere");
+        	float size 			= has_def ? pSettings->r_float( (LPCSTR)data, "$def_sphere") : 5.f;
 
             CCustomObject* S	= Scene->GetOTool(OBJCLASS_SHAPE)->CreateObject(0,0);
             CEditShape* shape 	= dynamic_cast<CEditShape*>(S);
             R_ASSERT			(shape);
 
-            Fsphere 			Sph;
-            Sph.identity		();
-            Sph.R				= size;
-            shape->add_sphere	(Sph);
+            UISpawnTool* form	= dynamic_cast<UISpawnTool*>(pForm);
+            if (!form || form->IsSphereShape())
+            {
+                Fsphere 		Sph;
+                Sph.identity	();
+                Sph.R			= size;
+                shape->add_sphere(Sph);
+            }
+            else
+            {
+                Fmatrix 		M;
+                M.identity		();
+                shape->add_box	(M);
+            }
             O->AttachObject		(S);
         }
     }

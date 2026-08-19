@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "EditorModScene.h"
 #include "..\..\XrECore\Editor\EditorGameContent.h"
 
@@ -770,6 +770,42 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 				xf.c.x, xf.c.y, xf.c.z,
 				angles.x, angles.y, angles.z);
 			fresh += entry;
+
+			// The zone's own geometry. A restrictor composed without it arrives with an
+			// empty shape list, so nothing is ever inside it: the marker lands in the
+			// right place and walking in does nothing at all. Baked here instead of
+			// through CEditShape::ApplyScale, because exporting a mod must not rewrite
+			// the scene it is exporting.
+			if (CEditShape* shape = dynamic_cast<CEditShape*>(pt->m_AttachedObject))
+			{
+				CShapeData::ShapeVec& sv = shape->GetShapes();
+				if (!sv.empty())
+				{
+					char line[512];
+					sprintf_s(line, "shapes    = %u\r\n", (u32)sv.size());
+					fresh += line;
+					for (u32 si = 0; si < sv.size(); ++si)
+					{
+						if (sv[si].type == CShapeData::cfSphere)
+						{
+							Fsphere S = sv[si].data.sphere;
+							shape->FTransformS.transform_tiny(S.P);
+							S.R *= shape->GetScale().x;
+							sprintf_s(line, "shape%u    = sphere,%f,%f,%f,%f\r\n",
+								si, S.P.x, S.P.y, S.P.z, S.R);
+						}
+						else
+						{
+							Fmatrix B = sv[si].data.box;
+							B.mulA_43(shape->FTransformS);
+							sprintf_s(line, "shape%u    = box,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f\r\n",
+								si, B.i.x, B.i.y, B.i.z, B.j.x, B.j.y, B.j.z,
+								B.k.x, B.k.y, B.k.z, B.c.x, B.c.y, B.c.z);
+						}
+						fresh += line;
+					}
+				}
+			}
 
 			// logic: written as a module file so it stays multi-line ltx, and the
 			// op only carries the @reference the engine resolves inside the module

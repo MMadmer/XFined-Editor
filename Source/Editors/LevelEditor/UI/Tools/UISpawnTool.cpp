@@ -60,6 +60,14 @@ void UISpawnTool::Draw()
         ImGui::Indent(ImGui::GetStyle().IndentSpacing);
         ImGui::TreePop();
 	}
+	// Only shape entities use it, but saying so costs a line and hunting for it costs
+	// a restrictor that turns out to have no zone at all.
+	ImGui::Separator();
+	ImGui::TextDisabled("shape for restrictors and other zones");
+	if (ImGui::RadioButton("Sphere##spawn_shape", m_ShapeSphere)) m_ShapeSphere = true;
+	ImGui::SameLine();
+	if (ImGui::RadioButton("Box##spawn_shape", !m_ShapeSphere)) m_ShapeSphere = false;
+
 	ImGui::Separator();
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNode("Object List"))
