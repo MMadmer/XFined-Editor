@@ -15,7 +15,11 @@ Gizmo::~Gizmo()
 void Gizmo::Render()
 {
     if (!m_bVisible||Scene->IsPlayInEditor())return;
+    // On top of everything, always. set_Z alone did not hold: every shader pass
+    // reapplies its own depth state, so the axes were quietly occluded by whatever
+    // stood between the camera and them - which is why they vanished as you closed in.
     RCache.set_Z(false);
+    EDevice->SetForceNoZ(true);
     if (m_Type == EType::Move)
     {
         // Solid shafts instead of hairlines: a one pixel wide axis over a lit scene is
@@ -114,6 +118,7 @@ void Gizmo::Render()
 
     }
     
+    EDevice->SetForceNoZ(false);
     RCache.set_Z(true); 
 }
 

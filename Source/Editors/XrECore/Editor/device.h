@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "../../../xrengine/XrDeviceInterface.h"
 #include "ui_camera.h"
@@ -178,6 +178,12 @@ public:
 	// uniforms. Has to run after set_Shader - constants are per-pass.
 	void					ApplyFFConstants();
 #endif
+	// Applying a shader pass applies its state block, depth state included, so a
+	// set_Z(false) before the draw is gone by the time the draw happens. This makes
+	// the next draws ignore depth for real - the gizmo has to be on top of the scene.
+	void SetForceNoZ(bool on) { m_ForceNoZ = on; }
+	bool m_ForceNoZ = false;
+
 	void			   		DP				(D3DPRIMITIVETYPE pt, ref_geom geom, u32 startV, u32 pc);
 	void 					DIP				(D3DPRIMITIVETYPE pt, ref_geom geom, u32 baseV, u32 startV, u32 countV, u32 startI, u32 PC);
 

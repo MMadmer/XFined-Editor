@@ -354,7 +354,7 @@ bool CUI_Camera::Process(TShiftState Shift, int dx, int dy)
                     Fvector mv;
                     mv.mul(m_CamMat.k, -dy*m_SM);
                     m_Position.add(mv);
-                    m_HPB.x += m_SR*dx;
+                    m_HPB.x -= m_SR*dx;		// same sign as Rotate, or the turn mirrors
                     BuildCamera();
                 }
             }else{

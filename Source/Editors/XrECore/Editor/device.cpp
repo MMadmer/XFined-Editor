@@ -1,4 +1,4 @@
-//---------------------------------------------------------------------------
+﻿//---------------------------------------------------------------------------
 #include "stdafx.h"
 #include "../../Public/xfined_resource.h"
 #pragma hdrstop
@@ -577,6 +577,8 @@ void CEditorRenderDevice::DP(D3DPRIMITIVETYPE pt, ref_geom geom, u32 vBase, u32 
     RCache.set_Geometry		(geom);
     for (u32 dwPass = 0; dwPass<dwRequired; dwPass++){
     	RCache.set_Shader	(S,dwPass);
+		// after the pass, or its state block puts depth testing back
+		if (m_ForceNoZ)		RCache.set_Z(FALSE);
 #if defined(USE_DX11)
 		ApplyFFConstants	();
 #endif
@@ -591,6 +593,8 @@ void CEditorRenderDevice::DIP(D3DPRIMITIVETYPE pt, ref_geom geom, u32 baseV, u32
     RCache.set_Geometry		(geom);
     for (u32 dwPass = 0; dwPass<dwRequired; dwPass++){
     	RCache.set_Shader	(S,dwPass);
+		// after the pass, or its state block puts depth testing back
+		if (m_ForceNoZ)		RCache.set_Z(FALSE);
 #if defined(USE_DX11)
 		ApplyFFConstants	();
 #endif

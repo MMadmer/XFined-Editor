@@ -703,6 +703,17 @@ void TUI::SyncAppActivation()
 		return;
 
 	m_bAppActive = active;
+	// A drag that was running when the window lost focus never sees its button come
+	// up, so m_bMoving stayed true with the old buttons still recorded - and the next
+	// right-click resumed that drag instead of starting a look. Alt+Tab is the common
+	// way in, which is why it came back after every switch away and back.
+	if (!active)
+	{
+		m_ShiftState = 0;
+		// only when one is actually running: MoveEnd restores the cursor, and calling
+		// it unpaired leaks a ShowCursor count
+		if (EDevice->m_Camera.IsMoving()) EDevice->m_Camera.MoveEnd(0);
+	}
 	if (!m_bReady)
 		return;
 
