@@ -4,6 +4,10 @@
 #include "../../../XrECore/Editor/Nq/NqPickers.h"
 #include "../../../XrECore/Editor/Nq/NqUtil.h"
 
+// One line under a field saying what it is for; defined further down, used from the
+// task editor above it
+static void Hint(LPCSTR text);
+
 namespace
 {
 	// text widgets over xr_string: the buffer is refilled from the model every
@@ -393,8 +397,8 @@ void NqInspector::DrawQuestSection()
 				{
 					SNqObjective& o = t.objectives[j];
 					ImGui::PushID((int)j);
-					const bool oopen = ImGui::TreeNodeEx("##obj", ImGuiTreeNodeFlags_DefaultOpen, "%u. %s",
-						j + 1, o.id.empty() ? "(no id)" : o.id.c_str());
+					const bool oopen = ImGui::TreeNodeEx("##obj", ImGuiTreeNodeFlags_DefaultOpen, "%u. %s%s",
+						j + 1, o.id.empty() ? "(no id)" : o.id.c_str(), o.visible ? "" : "  (hidden)");
 					ImGui::SameLine();
 					// order is what the engine numbers them by, so it is worth moving
 					ImGui::BeginDisabled(j == 0);
@@ -419,6 +423,8 @@ void NqInspector::DrawQuestSection()
 						ch |= DrawText("title##o", o.title, false);
 						ch |= DrawText("descr##o", o.descr, true);
 						ch |= DrawNpcRef("target##o", o.target, true, false);
+						if (ImGui::Checkbox("visible##o", &o.visible)) ch = true;
+						Hint("off: the step runs but takes no room in the PDA. task.set_objective_visible turns it on later");
 						ImGui::TreePop();
 					}
 					ImGui::PopID();
@@ -1385,7 +1391,8 @@ bool NqInspector::DrawNpcRef(LPCSTR label, SNqValue& v, bool target, bool kill)
 		else
 		{
 			SNqValue t = SNqValue::Table();
-			if (m == "spawn") { SNqValue s = SNqValue::Table(); s.Set("section", SNqValue::String("")); s.Set("smart", SNqValue::String("")); t.Set("spawn", s); }
+			// no empty smart in a fresh spawn spec: it is optional, and "" is not a name
+			if (m == "spawn") { SNqValue s = SNqValue::Table(); s.Set("section", SNqValue::String("")); t.Set("spawn", s); }
 			else if (m == "pos")
 			{
 				t.Set("level", SNqValue::String(NqDocs::CurrentLevel()));
@@ -1514,8 +1521,9 @@ bool NqInspector::DrawSpawnSpec(LPCSTR label, SNqValue& v)
 	if (DrawPicked("section", "squad_section", s)) { v.Set("section", SNqValue::String(s)); ch = true; }
 	Hint("which squad to create; its section decides how many and who they are");
 	s = v.GetString("smart");
-	if (DrawPicked("smart", "smart", s)) { v.Set("smart", SNqValue::String(s)); ch = true; }
-	Hint("the smart terrain that owns them - it is what gives them something to do");
+	// erased when empty: a written "" reads as "a smart was named" everywhere it lands
+	if (DrawPicked("smart", "smart", s)) { if (s.empty()) v.Erase("smart"); else v.Set("smart", SNqValue::String(s)); ch = true; }
+	Hint("optional: the smart that owns them. Empty and with a place set, the nearest one is used");
 
 	SNqValue* pl = v.Get("place");
 	SNqValue place = pl ? *pl : SNqValue::Nil();

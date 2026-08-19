@@ -142,6 +142,9 @@ struct ECORE_API SNqObjective
 	SNqValue	title;			// text: string or { rus = "...", eng = "..." }
 	SNqValue	descr;
 	SNqValue	target;			// target_ref / place table, or nil for a step with no spot
+	bool		visible;		// false hides the step in the PDA until the quest shows it
+
+				SNqObjective() : visible(true) {}
 };
 
 struct ECORE_API SNqTask

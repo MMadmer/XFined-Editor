@@ -614,6 +614,7 @@ bool SNqQuest::Equals(const SNqQuest& o) const
 			const SNqObjective& x = a.objectives[j]; const SNqObjective& y = b.objectives[j];
 			if (x.id != y.id) return false;
 			if (!x.title.Equals(y.title) || !x.descr.Equals(y.descr) || !x.target.Equals(y.target)) return false;
+			if (x.visible != y.visible) return false;
 		}
 	}
 	for (u32 i = 0; i < nodes.size(); ++i)

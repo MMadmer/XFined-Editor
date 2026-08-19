@@ -199,7 +199,8 @@ return {
                               target=<target_ref>|nil, icon=<string>|nil,
                               -- шаги задачи: у каждого свой текст и СВОЯ метка на карте
                               objectives = { { id=<ident>, title=<text>, descr=<text>,
-                                               target=<target_ref>|nil }, … } }, … },
+                                               target=<target_ref>|nil,
+                                               visible=<bool>|nil }, … } }, … },
   nodes     = { <node>, <node>, … },            -- порядок = порядок в файле (важен для детерминизма)
 }
 
@@ -251,6 +252,15 @@ return {
 и читается условием `objective_status`, так что граф может ветвиться на «хлеб найден,
 аптечка ещё нет». Завершение шага (`task.objective_complete`) саму задачу активной
 оставляет — закрывать её по-прежнему `task.complete`.
+
+**Видимость шага.** `visible = false` в объявлении прячет шаг: он работает как
+обычно (его можно завершить, `objective_status` его видит), но в PDA не занимает
+строку — как Collapsed в UI UE. Показать/спрятать по ходу квеста —
+`task.set_objective_visible`. Что квест сделал руками, запоминается в
+`qs.ovis[<task>][<objective>]` и переживает сохранение; движок сериализует задачу
+БЕЗ её шагов (`CGameTask::save` пишет только себя), поэтому после загрузки
+рантайм пересобирает шаги из объявления и возвращает им статусы и видимость
+(`xms_nq_task.script`, `restore_objectives`).
 
 ### 4.4 Эталонный пример
 
@@ -517,6 +527,7 @@ since   = 1                        ; версия каталога, в кото�
 | `task.objective_complete` / `task.objective_fail` | `task`, `objective` | — | нет | отмечает ОДИН шаг задачи; сама задача остаётся активной (`actor:set_task_state(state, tid, index)`) |
 | `task.set_objective_target` | `task`, `objective`, `target?` | — | нет | метка ОТДЕЛЬНОГО шага; без `target` снимается только она. У каждого шага своя (`SGameTaskObjective::change_map_location`) |
 | `task.set_objective_text` | `task`, `objective`, `new_title?`, `new_descr?` | — | нет | текст отдельного шага |
+| `task.set_objective_visible` | `task`, `objective`, `visible: bool=true` | — | нет | показать/спрятать шаг в PDA; спрятанный работает, но строку не занимает |
 | `objective.kill_count` | `count: int=1`, `by_actor: bool=true`, и не более одного фильтра: `community` \| `squad: object_ref` \| `section: string` (иначе E022). Без фильтра — любая смерть NPC | `done` | да | счёт с входа в ноду, дедуп по id, счётчик в токене (`mark_dirty`), переживает сохранение. Оффлайн-смерти опрашиваются только для фильтра `squad` (единственный, у кого известен список кандидатов) и только при `by_actor = false`: опрос не знает убийцу, а убийство игроком всегда онлайн и всегда приносит колбэк |
 | `objective.reach` | `place`, `map_spot: bool=true`, `spot_text: text?` | `done` | да | `level.name()` + дистанция / `db.zone_by_name[...]:inside()`; для позиции создаётся якорь `space_restrictor` (`alife():create`) — под метку карты и цель задания, удаляется при выходе |
 | `wait.timer` | `duration` | `done` | да | игровое время через `game.get_game_time()`; реальное — остаток в секундах, декремент по тику |

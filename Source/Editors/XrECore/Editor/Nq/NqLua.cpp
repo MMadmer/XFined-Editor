@@ -428,6 +428,7 @@ void NqLua::TaskFromValue(LPCSTR id, const SNqValue& v, SNqTask& t)
 			if (const SNqValue* x = o.Get("title"))		obj.title = *x;
 			if (const SNqValue* x = o.Get("descr"))		obj.descr = *x;
 			if (const SNqValue* x = o.Get("target"))	obj.target = *x;
+			if (const SNqValue* x = o.Get("visible"))	obj.visible = x->AsBool(true);
 			t.objectives.push_back(obj);
 		}
 }
@@ -780,6 +781,8 @@ void NqLua::QuestToValue(const SNqQuest& q, SNqValue& out)
 					if (!o.title.IsNil())	Put(ov, "title", o.title);
 					if (!o.descr.IsNil())	Put(ov, "descr", o.descr);
 					if (!o.target.IsNil())	Put(ov, "target", o.target);
+					// visible is the default: only a hidden step says so
+					if (!o.visible)			Put(ov, "visible", SNqValue::Bool(false));
 					objs.Push(ov);
 				}
 				Put(tv, "objectives", objs);
