@@ -145,7 +145,33 @@ namespace
 				Add(NqPickers::tItem, xr_string(*S->Name), name, xr_string());
 			}
 			if (S->line_exist("class", &v) && v && 0 == _stricmp(v, "ON_OFF_S"))
-				Add(NqPickers::tSquad, xr_string(*S->Name), xr_string(), xr_string());
+			{
+				// A squad id says nothing about what is in it, and the section is the
+				// only thing that decides how many bodies you get - "how do I know how
+				// many are in there" has to be answerable without opening the configs.
+				xr_string extra;
+				LPCSTR faction = 0;
+				if (S->line_exist("faction", &faction) && faction && faction[0]) extra = faction;
+				int members = 0;
+				LPCSTR npc = 0;
+				if (S->line_exist("npc", &npc) && npc && npc[0])
+				{
+					xr_vector<xr_string> parts;
+					NqUtil::Split(npc, ',', parts);
+					for (u32 i = 0; i < parts.size(); ++i)
+						if (!NqUtil::Trim(parts[i].c_str()).empty()) ++members;
+				}
+				// a random roster declares a count instead of a list
+				LPCSTR count = 0;
+				if (!members && S->line_exist("npc_count", &count) && count && count[0])
+					members = atoi(count);
+				if (members > 0)
+				{
+					if (!extra.empty()) extra += ", ";
+					extra += NqUtil::Format("%d NPC", members);
+				}
+				Add(NqPickers::tSquad, xr_string(*S->Name), xr_string(), extra);
+			}
 			if (S->line_exist("story_id", &v) && v && v[0])
 			{
 				const xr_string sid = v;		// the lookups below reuse `v`

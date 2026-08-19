@@ -261,7 +261,8 @@ namespace
 			if (!WalkObject(kind, param, value, node, slot, "spawn_spec", allowed,
 				sizeof(allowed) / sizeof(allowed[0]))) return;
 			WalkStringLeaf(kind, param, value, "section", "squad_section", true, node, slot);
-			WalkStringLeaf(kind, param, value, "smart", "smart", true, node, slot);
+			// optional now: a place can stand in for it
+			if (value.Has("smart")) WalkStringLeaf(kind, param, value, "smart", "smart", false, node, slot);
 			if (value.Has("ref")) WalkStringLeaf(kind, param, value, "ref", "ref_name", false, node, slot);
 			if (value.Has("restrictor"))
 				WalkStringLeaf(kind, param, value, "restrictor", "restrictor", false, node, slot);

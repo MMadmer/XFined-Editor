@@ -186,8 +186,8 @@ namespace
 		{
 			++alts;
 			const SNqValue* sp = v.Get("spawn");
-			if (!sp->IsTable() || !sp->Has("section") || !sp->Has("smart"))
-				ERR(c, "E006", node, slot, "spawn needs { section = ..., smart = ... [, ref = ..., hold = ...] }");
+			if (!sp->IsTable() || !sp->Has("section") || (!sp->Has("smart") && !sp->Has("place")))
+				ERR(c, "E006", node, slot, "spawn needs { section = ... } and a smart or a place to put them on");
 			else
 			{
 				CheckIndexed(c, NqPickers::tSquad, sp->GetString("section"), node, slot);
@@ -386,9 +386,9 @@ namespace
 		if (t == "squad_ref" || t == "object_ref") { CheckObjectRef(c, v, node, slot, nidx, order, t.c_str()); return; }
 		if (t == "spawn_spec")
 		{
-			if (!v.IsTable() || !v.Has("section") || !v.Has("smart"))
+			if (!v.IsTable() || !v.Has("section") || (!v.Has("smart") && !v.Has("place")))
 			{
-				ERR(c, "E006", node, slot, "'%s' needs { section = ..., smart = ... [, ref = ..., hold = ...] }", p.name.c_str());
+				ERR(c, "E006", node, slot, "'%s' needs { section = ... } and a smart or a place to put them on", p.name.c_str());
 				return;
 			}
 			CheckIndexed(c, NqPickers::tSquad, v.GetString("section"), node, slot);

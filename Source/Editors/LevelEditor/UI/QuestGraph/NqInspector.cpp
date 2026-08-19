@@ -1474,30 +1474,61 @@ bool NqInspector::DrawObjectRef(LPCSTR label, SNqValue& v)
 	return ch;
 }
 
+// One line under a field saying what it is for. Cheaper than a tooltip nobody hovers,
+// and these rows are the ones people cannot tell apart.
+static void Hint(LPCSTR text)
+{
+	ImGui::Indent();
+	ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+	ImGui::TextWrapped("%s", text);
+	ImGui::PopStyleColor();
+	ImGui::Unindent();
+}
+
 bool NqInspector::DrawSpawnSpec(LPCSTR label, SNqValue& v)
 {
 	if (!v.IsTable()) v = SNqValue::Table();
 	bool ch = false;
 	ImGui::PushID(label);
 	ImGui::Indent();
+	// Two of these rows can both name a restrictor - where they appear and where they
+	// are penned in - so each says what it is for rather than what type it takes.
 	xr_string s = v.GetString("section");
 	if (DrawPicked("section", "squad_section", s)) { v.Set("section", SNqValue::String(s)); ch = true; }
+	Hint("which squad to create; its section decides how many and who they are");
 	s = v.GetString("smart");
 	if (DrawPicked("smart", "smart", s)) { v.Set("smart", SNqValue::String(s)); ch = true; }
-	// where they actually stand, and the zone they may not leave
+	Hint("the smart terrain that owns them - it is what gives them something to do");
+
 	SNqValue* pl = v.Get("place");
 	SNqValue place = pl ? *pl : SNqValue::Nil();
-	if (DrawPlace("place", place))
+	if (DrawPlace("place: where they appear", place))
 	{
 		if (place.IsNil()) v.Erase("place"); else v.Set("place", place);
 		ch = true;
 	}
+	Hint("empty = on the smart. A zone scatters them across it, a point puts them all on it");
+
+	if (place.IsTable() && place.Has("restrictor"))
+	{
+		float spread = (float)v.GetNumber("spread", 1.0);
+		if (ImGui::SliderFloat("spread##spawn", &spread, 0.05f, 1.f, "%.2f"))
+		{
+			if (spread >= 0.999f) v.Erase("spread"); else v.Set("spread", SNqValue::Number(spread));
+			ch = true;
+		}
+		Hint("how much of the zone to spawn in: 0.5 keeps them off the edges. The zone itself does not change");
+	}
+
 	s = v.GetString("restrictor");
-	if (DrawPicked("restrictor", "restrictor", s)) { if (s.empty()) v.Erase("restrictor"); else v.Set("restrictor", SNqValue::String(s)); ch = true; }
+	if (DrawPicked("restrictor: they cannot leave it", "restrictor", s)) { if (s.empty()) v.Erase("restrictor"); else v.Set("restrictor", SNqValue::String(s)); ch = true; }
+	Hint("a zone they are penned into. They keep working, they just cannot wander off");
 	s = v.GetString("ref");
-	if (DrawPicked("ref", "ref_name", s)) { if (s.empty()) v.Erase("ref"); else v.Set("ref", SNqValue::String(s)); ch = true; }
+	if (DrawPicked("ref: name to refer to them later", "ref_name", s)) { if (s.empty()) v.Erase("ref"); else v.Set("ref", SNqValue::String(s)); ch = true; }
+	Hint("other nodes point at this squad by that name");
 	bool hold = v.GetBool("hold", true);
 	if (ImGui::Checkbox("hold", &hold)) { v.Set("hold", SNqValue::Bool(hold)); ch = true; }
+	Hint("pins the squad to its smart, so the simulation cannot send it elsewhere");
 	ImGui::Unindent();
 	ImGui::PopID();
 	return ch;
@@ -1533,11 +1564,12 @@ bool NqInspector::DrawPlace(LPCSTR label, SNqValue& v)
 	if (mode == "pos") ch |= DrawPosition(v);
 	else if (!mode.empty())
 	{
-		// the mode name doubles as the picker type: "smart", "restrictor"; a ref is
-		// named by this quest, so it gets the ref list instead of a game index
+		// The field is labelled with the mode: an unnamed box under a combo, next to a
+		// second box that says "restrictor", is two blanks and a guess.
 		xr_string s = v.GetString(mode.c_str());
 		LPCSTR type = (mode == "ref") ? "ref_name" : mode.c_str();
-		if (DrawPicked("##value", type, s)) { v.Set(mode.c_str(), SNqValue::String(s)); ch = true; }
+		xr_string field = mode + "##place_value";
+		if (DrawPicked(field.c_str(), type, s)) { v.Set(mode.c_str(), SNqValue::String(s)); ch = true; }
 	}
 	ImGui::PopID();
 	return ch;
