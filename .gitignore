@@ -51,3 +51,7 @@ gamedata/textures/
 # Python bytecode from tools/mcp
 __pycache__/
 *.pyc
+
+# Per-user editor state: window size, GPU name, recent files.
+# $local_root$ resolves here, so this IS the live prefs file, not a template.
+level.ini
