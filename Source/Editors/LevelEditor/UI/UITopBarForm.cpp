@@ -37,6 +37,15 @@ UITopBarForm::~UITopBarForm()
 	
 }
 
+// An icon strip with no labels is a guessing game, and several of these buttons
+// start a compile or launch the game. AllowWhenDisabled on purpose: the ones that
+// grey out while a build runs are exactly the ones worth naming.
+static void ToolBarTip(LPCSTR text)
+{
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		ImGui::SetTooltip("%s", text);
+}
+
 void UITopBarForm::Draw()
 {
 	ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -54,11 +63,13 @@ void UITopBarForm::Draw()
 		;
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2( 2,2));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(UIToolBarWindowPad(), UIToolBarWindowPad()));
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(2, 2));
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 2));
 	ImGui::Begin("TOOLBAR", NULL, window_flags);
 	const float icon = UIToolBarIconSize();
+	// the button frame the height was measured with
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(UIToolBarFramePad(), UIToolBarFramePad()));
 	{
 
 
@@ -67,45 +78,53 @@ void UITopBarForm::Draw()
 		{
 			m_timeUndo = EDevice->TimerAsync() + 130;
 			ClickUndo();
-		}ImGui::SameLine();
+		}
+		ToolBarTip("Undo the last change (Ctrl+Z)");ImGui::SameLine();
 		m_tRedo->Load();
 		if (ImGui::ImageButton("##Redo", ui_imtex(m_tRedo), ImVec2(icon, icon), ImVec2(m_timeRedo > EDevice->TimerAsync() ? 0.5 : 0, 0), ImVec2(m_timeRedo > EDevice->TimerAsync() ? 1 : 0.5, 1), 0))
 		{
 			m_timeRedo = EDevice->TimerAsync() + 130;
 			ClickRedo();
-		}ImGui::SameLine();
+		}
+		ToolBarTip("Redo the change that was undone (Ctrl+Y)");ImGui::SameLine();
 
 		m_tNew->Load();
 		if (ImGui::ImageButton("##New", ui_imtex(m_tNew), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickNew();
-		}ImGui::SameLine();
+		}
+		ToolBarTip("New scene");ImGui::SameLine();
 		m_tOpen->Load();
 		if (ImGui::ImageButton("##Open", ui_imtex(m_tOpen), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickOpen();
-		}ImGui::SameLine();
+		}
+		ToolBarTip("Open a scene");ImGui::SameLine();
 		m_tSave->Load();
 		if (ImGui::ImageButton("##Save", ui_imtex(m_tSave), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickSave();
-		}ImGui::SameLine();
+		}
+		ToolBarTip("Save the scene");ImGui::SameLine();
 
 		m_tCForm->Load();
 		if (ImGui::ImageButton("##CForm", ui_imtex(m_tCForm), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickCForm();
-		}ImGui::SameLine();
+		}
+		ToolBarTip("Build the collision geometry (CForm) of this scene");ImGui::SameLine();
 		m_tAIMap->Load();
 		if (ImGui::ImageButton("##AIMap", ui_imtex(m_tAIMap), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickAIMap();
-		}ImGui::SameLine();
+		}
+		ToolBarTip("Build the AI map of this scene");ImGui::SameLine();
 		m_tGGraph->Load();
 		if (ImGui::ImageButton("##GGraph", ui_imtex(m_tGGraph), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickGGraph();
-		}ImGui::SameLine();
+		}
+		ToolBarTip("Build the game graph of this scene");ImGui::SameLine();
 
 
 
@@ -116,6 +135,7 @@ void UITopBarForm::Draw()
 			{
 				ClickTerminated();
 			}
+		ToolBarTip("Stop the compiler or the game that is running");
 		}
 		else
 		{
@@ -124,11 +144,13 @@ void UITopBarForm::Draw()
 			{
 				ClickPlayInEditor();
 			}
+		ToolBarTip("Play the scene inside the editor");
 		}
 		{
 			ImGui::SameLine(0,0);
-			if (ImGui::ArrowButton("##PlaySettings", ImGuiDir_Down, ImVec2(ImGui::GetFrameHeight(), 20),0))
+			if (ImGui::ArrowButton("##PlaySettings", ImGuiDir_Down, ImVec2(ImGui::GetFrameHeight(), icon), 0))
 				ImGui::OpenPopup("test");
+			ToolBarTip("Options for playing in the editor");
 
 			ImGui::SameLine();
 			if (ImGui::BeginPopup("test"))
@@ -149,13 +171,15 @@ void UITopBarForm::Draw()
 		if (ImGui::ImageButton("##ReloadConfigs", ui_imtex(m_tReloadConfigs), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickReloadConfigs();
-		}ImGui::SameLine();
+		}
+		ToolBarTip("Re-read the game configs from disk (system.ltx, game.ltx)");ImGui::SameLine();
 
 		m_tBuildAndMake->Load();
 		if (ImGui::ImageButton("##BuildAndMake", ui_imtex(m_tBuildAndMake), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickBuildAndMake();
 		}
+		ToolBarTip("Compile the level and run the level builder (xrLC)");
 		ImGui::SameLine();
 		m_tPlayPC->Load();
 
@@ -163,12 +187,14 @@ void UITopBarForm::Draw()
 		{
 			ClickPlayPC();
 		}
+		ToolBarTip("Build the scene for play and launch the game on it");
 		ImGui::SameLine();
 		m_tPlayCleanGame->Load();
 		if (ImGui::ImageButton("##PlayCleanGame", ui_imtex(m_tPlayCleanGame), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
 		{
 			ClickPlayCleanGame();
 		}
+		ToolBarTip("Launch the game as it is, without building anything");
 		ImGui::SameLine();
 
 		
@@ -182,6 +208,7 @@ void UITopBarForm::Draw()
 		{
 			ClickOpenGameData();
 		}
+		ToolBarTip("Open the gamedata folder in Explorer");
 
 		// Shipping the mod is the single most-used action in this editor, so it
 		// gets a labelled button - the icon strip next to it is all level-compiler
@@ -190,7 +217,7 @@ void UITopBarForm::Draw()
 		char build_target[MAX_PATH] = {};
 		EditorMod::BuildTargetText(build_target, sizeof(build_target));
 		ImGui::BeginDisabled(!EditorMod::CanBuildIntoGame());
-		if (ImGui::Button("Build Mod"))
+		if (ImGui::Button("Build Mod", ImVec2(0, icon + UIToolBarFramePad() * 2.f)))
 			ExecCommand(COMMAND_MOD_BUILD);
 		ImGui::EndDisabled();
 		if (ImGui::IsItemHovered())
@@ -200,6 +227,7 @@ void UITopBarForm::Draw()
 				build_target);
 	}
 	ImGui::SameLine(0,1);
+	ImGui::PopStyleVar();
 	ImGui::End();
 	ImGui::PopStyleVar(5);
 	

@@ -213,19 +213,27 @@ void XrUIManager::DockLayoutPlace(const char* window_name, EDockSlot slot)
 	ImGui::DockBuilderDockWindow(window_name, (ImGuiID)m_DockNodes[slot]);
 }
 
+// What the toolbar pushes around its buttons. Shared, because the row's height is
+// only honest if it is measured with the same numbers the row is drawn with.
+float UIToolBarFramePad()	{ return 2.f; }
+float UIToolBarWindowPad()	{ return 1.f; }
+
 // Icons scale with the font: the toolbar is the one row that is all icon, so a
-// fixed pixel size makes them shrink to nothing next to scaled-up text.
+// fixed pixel size makes them shrink to nothing next to scaled-up text. The row
+// below is icon + 6 and cannot be shorter, so this number is also the row's floor.
 float UIToolBarIconSize()
 {
-	return _max(20.f, ImGui::GetFontSize() * 1.35f);
+	return _max(24.f, ImGui::GetFontSize() * 1.37f);
 }
 
 // What the row actually needs: the icon, the button frame around it, and the
 // window padding above and below.
 float UIToolBarHeight()
 {
-	const ImGuiStyle& st = ImGui::GetStyle();
-	return UIToolBarIconSize() + st.FramePadding.y * 2.f + st.WindowPadding.y * 2.f;
+	// Measured with the padding the toolbar actually pushes, not the theme's:
+	// the default WindowPadding is three times larger, and counting it left a
+	// visible strip of nothing under the buttons.
+	return UIToolBarIconSize() + UIToolBarFramePad() * 2.f + UIToolBarWindowPad() * 2.f;
 }
 
 void XrUIManager::DockNextWindowWith(const char* next_to)

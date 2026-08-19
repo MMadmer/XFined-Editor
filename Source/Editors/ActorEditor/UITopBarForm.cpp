@@ -33,11 +33,13 @@ void UITopBarForm::Draw()
 		;
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2( 2,2));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(UIToolBarWindowPad(), UIToolBarWindowPad()));
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(2, 2));
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 2));
 	ImGui::Begin("TOOLBAR", NULL, window_flags);
 	const float icon = UIToolBarIconSize();
+	// the button frame the height was measured with
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(UIToolBarFramePad(), UIToolBarFramePad()));
 	{
 #define ADD_BUTTON_IMAGE_S(Name)\
 		if (ImGui::ImageButton("##" #Name, m_t##Name->surface_get(), ImVec2(icon, icon), ImVec2(m_time##Name>EDevice->TimerAsync() ? 0.5 : 0, 0), ImVec2(m_time##Name>EDevice->TimerAsync() ? 1 : 0.5, 1), 0))\
@@ -56,6 +58,7 @@ void UITopBarForm::Draw()
 				ATools->PhysicsStopSimulate();
 		}
 	}
+	ImGui::PopStyleVar();
 	ImGui::End();
 	ImGui::PopStyleVar(5);
 }

@@ -14,6 +14,8 @@ using TShiftState = int;
 // 20px icons plus a button frame do not go into 24 minus padding, so the row was
 // cut off at the bottom and the icons stayed tiny however large the font got.
 // Both follow the font now, and the dockspace below reserves what they actually take.
+XREUI_API float UIToolBarFramePad();
+XREUI_API float UIToolBarWindowPad();
 XREUI_API float UIToolBarIconSize();
 XREUI_API float UIToolBarHeight();
 class XREUI_API XrUIManager
