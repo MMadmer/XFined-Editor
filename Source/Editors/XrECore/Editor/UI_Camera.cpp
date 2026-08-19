@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #pragma hdrstop
 
 #include "UI_Camera.h"
@@ -247,6 +247,10 @@ bool CUI_Camera::MoveStart(TShiftState Shift)
 		((Shift&ssRight) || (Shift&ssMiddle) || ((Shift&ssAlt)&&(Shift&ssLeft)));
 
 	if ((Shift&ssShift) || ue_claim){
+		// A claim that arrives while a move is already running must still set the mode:
+		// inheriting whatever the last drag left behind is how a right-click ended up
+		// driving the legacy fly path.
+		if (m_bMoving && m_UENav != ue_claim) m_UENav = ue_claim;
     	if (!m_bMoving){
 		    ShowCursor	(FALSE);
     	    UI->IR_GetMousePosScreen(m_StartPos);
@@ -272,7 +276,12 @@ bool CUI_Camera::MoveEnd(TShiftState Shift)
 {
 	m_Shift = Shift;
 	const bool nav_end		= m_UENav && !(Shift&(ssLeft|ssRight|ssMiddle));
-	const bool legacy_end	= !m_UENav && ((!Shift&ssLeft)||(!Shift&ssShift));
+	// (!Shift & ssLeft) is not "left is up": ! binds first, so this was (0|1) & 2 == 0
+	// always, and the legacy drag only ended when every button and modifier happened to
+	// be released at once. It usually was not, so m_bMoving stuck at true with
+	// m_UENav false - and the next right-click found a move already in progress, kept
+	// the stale legacy mode, and flew the camera backwards instead of looking around.
+	const bool legacy_end	= !m_UENav && (!(Shift&ssLeft) || !(Shift&ssShift));
 	if (nav_end || legacy_end){
 	    SetCursorPos(m_StartPos.x, m_StartPos.y);
     	ShowCursor	(TRUE);

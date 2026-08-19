@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 
 Gizmo::Gizmo()
 {
@@ -18,29 +18,48 @@ void Gizmo::Render()
     RCache.set_Z(false);
     if (m_Type == EType::Move)
     {
+        // Solid shafts instead of hairlines: a one pixel wide axis over a lit scene is
+        // nearly invisible, which is the whole complaint. Unselected is bright too -
+        // half brightness read as "off" against anything but a dark floor.
+        const bool no_xz = (OBJCLASS_AIMAP == LTools->CurrentClassID());
+        const float shaft = 0.82f, shaft_r = 0.022f, head = 0.18f, head_r = 0.062f;
+        const u32 dim = 190;
+
         Fvector Start = m_ScreenPosition;
         Fvector X; X.set(1, 0, 0); X.add(m_ScreenPosition);
         Fvector Y; Y.set(0, 1, 0); Y.add(m_ScreenPosition);
         Fvector Z; Z.set(0, 0, 1); Z.add(m_ScreenPosition);
 
-        if (OBJCLASS_AIMAP != LTools->CurrentClassID())
+        const u32 cx = color_rgba(m_CurrentStatus == EStatus::SelectedX ? 255 : dim, 0, 0, 255);
+        const u32 cy = color_rgba(0, m_CurrentStatus == EStatus::SelectedY ? 255 : dim, 0, 255);
+        const u32 cz = color_rgba(0, 0, m_CurrentStatus == EStatus::SelectedZ ? 255 : dim, 255);
+
+        // the shaft's centre sits half its length along the axis
+        Fvector mid;
+        if (!no_xz)
         {
-			DU_impl.DrawLine(Start, X, color_rgba(m_CurrentStatus == EStatus::SelectedX ? 255 : 127, 0, 0, 255));
+            mid.set(shaft * 0.5f, 0, 0); mid.add(Start);
+            DU_impl.DrawCylinder(Fidentity, mid, Fvector().set(1, 0, 0), shaft, shaft_r, cx, cx, TRUE, FALSE);
         }
-		DU_impl.DrawLine(Start, Y, color_rgba(0, m_CurrentStatus == EStatus::SelectedY ? 255 : 127, 0, 255)); 
-        if (OBJCLASS_AIMAP != LTools->CurrentClassID())
+        mid.set(0, shaft * 0.5f, 0); mid.add(Start);
+        DU_impl.DrawCylinder(Fidentity, mid, Fvector().set(0, 1, 0), shaft, shaft_r, cy, cy, TRUE, FALSE);
+        if (!no_xz)
         {
-            DU_impl.DrawLine(Start, Z, color_rgba(0, 0, m_CurrentStatus == EStatus::SelectedZ ? 255 : 127, 255));
+            mid.set(0, 0, shaft * 0.5f); mid.add(Start);
+            DU_impl.DrawCylinder(Fidentity, mid, Fvector().set(0, 0, 1), shaft, shaft_r, cz, cz, TRUE, FALSE);
         }
-        if (OBJCLASS_AIMAP != LTools->CurrentClassID())
-        {
-            DU_impl.DrawCone(Fidentity, X, Fvector().set(-1, 0, 0), 0.1f, 0.03f, color_rgba(m_CurrentStatus == EStatus::SelectedX ? 255 : 127, 0, 0, 255), color_rgba(255, 0, 0, 255), TRUE, FALSE);
-        }
-        DU_impl.DrawCone(Fidentity, Y, Fvector().set(0, -1, 0), 0.1f, 0.03f, color_rgba(0, m_CurrentStatus == EStatus::SelectedY ? 255 : 127, 0, 255), color_rgba(0, 255, 0, 255), TRUE, FALSE);
-        if (OBJCLASS_AIMAP != LTools->CurrentClassID())
-        {
-            DU_impl.DrawCone(Fidentity, Z, Fvector().set(0, 0, -1), 0.1f, 0.03f, color_rgba(0, 0, m_CurrentStatus == EStatus::SelectedZ ? 255 : 127, 255), color_rgba(0, 0, 255, 255), TRUE, FALSE);
-        }
+
+        if (!no_xz)
+            DU_impl.DrawCone(Fidentity, X, Fvector().set(-1, 0, 0), head, head_r, cx, color_rgba(255, 0, 0, 255), TRUE, FALSE);
+        DU_impl.DrawCone(Fidentity, Y, Fvector().set(0, -1, 0), head, head_r, cy, color_rgba(0, 255, 0, 255), TRUE, FALSE);
+        if (!no_xz)
+            DU_impl.DrawCone(Fidentity, Z, Fvector().set(0, 0, -1), head, head_r, cz, color_rgba(0, 0, 255, 255), TRUE, FALSE);
+
+        // the pivot itself: without it the arms meet at nothing and the exact point
+        // being moved is a guess
+        DU_impl.DrawBox(Start, Fvector().set(0.055f, 0.055f, 0.055f), TRUE, FALSE,
+            m_CurrentStatus == EStatus::SelectedXYZ ? color_rgba(255, 255, 255, 255) : color_rgba(225, 225, 225, 255),
+            color_rgba(255, 255, 255, 255));
     }
     else  if (m_Type == EType::Scale)
     {
@@ -201,14 +220,15 @@ void Gizmo::OnFrame()
         m_RotateMatrix.identity();
         Box.getcenter(m_Position);
     }
-    Fvector ViewNormal = EDevice->m_Camera.GetPosition();
-    ViewNormal.sub(m_Position);
-    ViewNormal.normalize_safe();
-    Fvector CameraRight = EDevice->m_Camera.GetDirection();
-
-    m_bVisible =  SelectedCount > 0;
-    float DotProduct = CameraRight.dotproduct(ViewNormal);
-    m_bVisible = m_bVisible && DotProduct <0;
+    m_bVisible = SelectedCount > 0;
+    // Is the object in front of the camera? This used to normalize the object-to-camera
+    // vector first, which breaks the moment the camera gets close: normalize_safe hands
+    // back a zero vector, the dot product is 0, the "< 0" test fails, and the gizmo of
+    // the very thing you walked up to disappears. Whether a point is in front does not
+    // depend on how far away it is, so the length stays out of it.
+    Fvector ToObject;
+    ToObject.sub(m_Position, EDevice->m_Camera.GetPosition());
+    m_bVisible = m_bVisible && ToObject.dotproduct(EDevice->m_Camera.GetDirection()) > 0.f;
     if(m_bVisible)
     {
         RCache.set_xform_world(Fidentity);
