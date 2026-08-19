@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "..\XrECore\Editor\EditorChooseEvents.h"
 #include "..\..\XrECore\Editor\EditorGameConfigs.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
@@ -281,8 +281,18 @@ void UIMainForm::DrawContextMenu()
    
 }
 
+// The viewport strip is all icons and had not a single label, which is how "Add" -
+// the button that places a spawn object at all - reads as decoration nobody finds.
+static void VpTip(LPCSTR text)
+{
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		ImGui::SetTooltip("%s", text);
+}
+
 void UIMainForm::DrawRenderToolBar(ImVec2 Size)
 {
+    // square, and following the font: 16 by line-height squashed the art sideways
+    const float vp_icon = UIToolBarIconSize() * 0.8f;
     {
         ImGui::BeginGroup();
         m_tMenu->Load();
@@ -433,10 +443,11 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
 				}
 				ImGui::EndPopup();
 			}
-            if (ImGui::ImageButton("##Menu", ui_imtex(m_tMenu), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Menu", ui_imtex(m_tMenu), ImVec2(vp_icon, vp_icon)))
 			{
 				ImGui::OpenPopup("MenuScene");
             }
+            VpTip("Viewport options");
         }
         ImGui::EndGroup();
     }
@@ -481,11 +492,12 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Border));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
-            if (ImGui::ImageButton("##Select", ui_imtex(m_tSelect), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Select", ui_imtex(m_tSelect), ImVec2(vp_icon, vp_icon)))
             {
                 LTools->SetAction(etaSelect);
                 LTools->GetGimzo()->SetType(Gizmo::EType::None);
             }
+            VpTip("Select and transform objects");
             if (bPushColor)
             {
                 ImGui::PopStyleColor();
@@ -504,11 +516,12 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tAdd->Load();
-            if (ImGui::ImageButton("##Add", ui_imtex(m_tAdd), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Add", ui_imtex(m_tAdd), ImVec2(vp_icon, vp_icon)))
             {
                 LTools->SetAction(etaAdd);
                 LTools->GetGimzo()->SetType(Gizmo::EType::None);
             }
+            VpTip("Add mode: click in the viewport to place the item picked in the Object List");
             if (bPushColor)
             {
                 ImGui::PopStyleColor();
@@ -530,11 +543,12 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tMove->Load();
-            if (ImGui::ImageButton("##Move", ui_imtex(m_tMove), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Move", ui_imtex(m_tMove), ImVec2(vp_icon, vp_icon)))
             {
                 LTools->SetAction(etaSelect);
                 LTools->GetGimzo()->SetType(Gizmo::EType::Move);
             }
+            VpTip("Move the selection");
 
             if (bPushColor)
             {
@@ -556,11 +570,12 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tScale->Load();
-            if (ImGui::ImageButton("##Scale", ui_imtex(m_tScale), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Scale", ui_imtex(m_tScale), ImVec2(vp_icon, vp_icon)))
             {
                 LTools->SetAction(etaSelect);
                 LTools->GetGimzo()->SetType(Gizmo::EType::Scale);
             }
+            VpTip("Scale the selection");
             if (bPushColor)
             {
                 ImGui::PopStyleColor();
@@ -581,11 +596,12 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tRotate->Load();
-            if (ImGui::ImageButton("##Rotate", ui_imtex(m_tRotate), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Rotate", ui_imtex(m_tRotate), ImVec2(vp_icon, vp_icon)))
             {
                 LTools->SetAction(etaSelect);
                 LTools->GetGimzo()->SetType(Gizmo::EType::Rotate);
             }
+            VpTip("Rotate the selection");
             if (bPushColor)
             {
                 ImGui::PopStyleColor();
@@ -610,10 +626,11 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tNSnap->Load();
-            if (ImGui::ImageButton("##NSnap", ui_imtex(m_tNSnap), ImVec2(16, ImGui::GetFontSize()), ImVec2(0, 0), ImVec2(0.5f, 1.f)))
+            if (ImGui::ImageButton("##NSnap", ui_imtex(m_tNSnap), ImVec2(vp_icon, vp_icon), ImVec2(0, 0), ImVec2(0.5f, 1.f)))
             {
                 ExecCommand(COMMAND_SET_SETTINGS, etfNormalAlign, !Tools->GetSettings(etfNormalAlign));
             }
+            VpTip("Align a placed object to the surface normal");
 			if (bPushColor)
 			{
 				ImGui::PopStyleColor();
@@ -624,10 +641,11 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
         ImGui::SameLine();
 
         m_tZoomSel->Load();
-        if (ImGui::ImageButton("##ZoomSelection", ui_imtex(m_tZoomSel), ImVec2(16, ImGui::GetFontSize()), ImVec2(0, 0), ImVec2(0.5f, 1.f)))
+        if (ImGui::ImageButton("##ZoomSelection", ui_imtex(m_tZoomSel), ImVec2(vp_icon, vp_icon), ImVec2(0, 0), ImVec2(0.5f, 1.f)))
 		{
 			ExecCommand(COMMAND_ZOOM_EXTENTS, TRUE);
         }
+        VpTip("Frame the selection");
         ImGui::EndGroup();
     }
     {
@@ -645,10 +663,11 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tGrid->Load();
-            if (ImGui::ImageButton("##Grid", ui_imtex(m_tGrid), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Grid", ui_imtex(m_tGrid), ImVec2(vp_icon, vp_icon)))
             {
                 LTools->GetGimzo()->SwitchStep(Gizmo::EType::Move, !LTools->GetGimzo()->IsStepEnable(Gizmo::EType::Move));
             }
+            VpTip("Snap movement to the grid step");
             if (bPushColor)
             {
                 ImGui::PopStyleColor();
@@ -710,10 +729,11 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tScaleGrid->Load();
-            if (ImGui::ImageButton("##ScaleGrid", ui_imtex(m_tScaleGrid), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##ScaleGrid", ui_imtex(m_tScaleGrid), ImVec2(vp_icon, vp_icon)))
             {
                 LTools->GetGimzo()->SwitchStep(Gizmo::EType::Scale, !LTools->GetGimzo()->IsStepEnable(Gizmo::EType::Scale));
             }
+            VpTip("Snap scaling to the step");
             if (bPushColor)
             {
                 ImGui::PopStyleColor();
@@ -775,10 +795,11 @@ void UIMainForm::DrawRenderToolBar(ImVec2 Size)
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Border));
             }
             m_tAngle->Load();
-            if (ImGui::ImageButton("##Angle", ui_imtex(m_tAngle), ImVec2(16, ImGui::GetFontSize())))
+            if (ImGui::ImageButton("##Angle", ui_imtex(m_tAngle), ImVec2(vp_icon, vp_icon)))
             {
                 LTools->GetGimzo()->SwitchStep(Gizmo::EType::Rotate, !LTools->GetGimzo()->IsStepEnable(Gizmo::EType::Rotate));
             }
+            VpTip("Snap rotation to the angle step");
             if (bPushColor)
             {
                 ImGui::PopStyleColor();
