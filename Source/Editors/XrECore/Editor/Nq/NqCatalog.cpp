@@ -31,7 +31,7 @@ namespace
 		"profile", "community", "info", "var_name", "task_id", "quest_id", "ref_name",
 		"signal_name", "spot_type", "relation", "lua", "cases", "cases_cond", "cases_weight",
 		"kill_target", "count_or_all", "value", "cond_list", "node_id", "restrictor",
-		"squad_ref", "object_ref",
+		"squad_ref", "object_ref" "objective_id",
 	};
 
 	bool IsTypeName(const xr_string& s)

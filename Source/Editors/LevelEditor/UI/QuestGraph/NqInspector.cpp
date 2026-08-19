@@ -383,6 +383,57 @@ void NqInspector::DrawQuestSection()
 				ch |= ComboStr("type##t", t.type, types);
 				ch |= DrawNpcRef("target##t", t.target, true, false);
 				ch |= InputStr("icon##t", t.icon);
+
+				// The steps of the task. Each is its own line in the PDA with its own
+				// marker, which is how one task covers "collect X, then Y, then report"
+				// instead of needing a quest apiece.
+				ImGui::Separator();
+				ImGui::TextDisabled("objectives (%d)", (int)t.objectives.size());
+				for (u32 j = 0; j < t.objectives.size(); ++j)
+				{
+					SNqObjective& o = t.objectives[j];
+					ImGui::PushID((int)j);
+					const bool oopen = ImGui::TreeNodeEx("##obj", ImGuiTreeNodeFlags_DefaultOpen, "%u. %s",
+						j + 1, o.id.empty() ? "(no id)" : o.id.c_str());
+					ImGui::SameLine();
+					// order is what the engine numbers them by, so it is worth moving
+					ImGui::BeginDisabled(j == 0);
+					if (ImGui::SmallButton("^")) { std::swap(t.objectives[j], t.objectives[j - 1]); ch = true; }
+					ImGui::EndDisabled();
+					ImGui::SameLine();
+					ImGui::BeginDisabled(j + 1 >= t.objectives.size());
+					if (ImGui::SmallButton("v")) { std::swap(t.objectives[j], t.objectives[j + 1]); ch = true; }
+					ImGui::EndDisabled();
+					ImGui::SameLine();
+					if (ImGui::SmallButton("x"))
+					{
+						t.objectives.erase(t.objectives.begin() + j);
+						ch = true;
+						if (oopen) ImGui::TreePop();
+						ImGui::PopID();
+						break;
+					}
+					if (oopen)
+					{
+						ch |= InputStr("id##o", o.id);
+						ch |= DrawText("title##o", o.title, false);
+						ch |= DrawText("descr##o", o.descr, true);
+						ch |= DrawNpcRef("target##o", o.target, true, false);
+						ImGui::TreePop();
+					}
+					ImGui::PopID();
+				}
+				if (ImGui::SmallButton("+ objective"))
+				{
+					SNqObjective o;
+					for (u32 number = 1;; ++number)
+					{
+						o.id = NqUtil::Format("step%u", number);
+						if (!t.FindObjective(o.id.c_str())) break;
+					}
+					t.objectives.push_back(o);
+					ch = true;
+				}
 				ImGui::TreePop();
 			}
 			ImGui::PopID();
@@ -1080,6 +1131,7 @@ bool NqInspector::DrawTyped(LPCSTR type, const NqCatalog::SParam* p, LPCSTR labe
 	if (t == "npc_ref")				return DrawNpcRef(label, v, false, false);
 	if (t == "target_ref")			return DrawNpcRef(label, v, true, false);
 	if (t == "object_ref" || t == "squad_ref")	return DrawObjectRef(label, v);
+	if (t == "objective_id")		return DrawObjectiveId(label, v);
 	if (t == "kill_target")			return DrawNpcRef(label, v, false, true);
 	if (t == "place")				return DrawPlace(label, v);
 	if (t == "spawn_spec")			return DrawSpawnSpec(label, v);
@@ -1353,6 +1405,44 @@ bool NqInspector::DrawNpcRef(LPCSTR label, SNqValue& v, bool target, bool kill)
 
 // object_ref / squad_ref: one concrete object, so only the two ways to name one -
 // a profile or a community would describe a kind of creature, not a thing.
+// The steps of whichever task the sibling "task" parameter names. Typing an id by
+// hand would be guessing, and the validator would only tell you afterwards.
+bool NqInspector::DrawObjectiveId(LPCSTR label, SNqValue& v)
+{
+	const SNqValue* owner = m_ParamsCtx ? m_ParamsCtx->Get("task") : 0;
+	const SNqTask* task = (owner && owner->IsString()) ? m_Quest.FindTask(owner->s.c_str()) : 0;
+	xr_vector<xr_string> ids;
+	if (task)
+		for (u32 i = 0; i < task->objectives.size(); ++i) ids.push_back(task->objectives[i].id);
+
+	xr_string cur = v.IsString() ? v.s : xr_string();
+	bool ch = false;
+	ImGui::PushID(label);
+	xr_string lt;
+	ImGui::TextUnformatted(Shown(label, lt));
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(-1.f);
+	if (!task)
+	{
+		ImGui::TextDisabled(owner && owner->IsString() ? "pick a task that exists first" : "pick the task first");
+		ImGui::PopID();
+		return false;
+	}
+	if (ids.empty())
+	{
+		ImGui::TextDisabled("task '%s' has no objectives yet", task->id.c_str());
+		ImGui::PopID();
+		return false;
+	}
+	if (ComboStr("##objective", cur, ids, "(unset)"))
+	{
+		v = cur.empty() ? SNqValue::Nil() : SNqValue::String(cur);
+		ch = true;
+	}
+	ImGui::PopID();
+	return ch;
+}
+
 bool NqInspector::DrawObjectRef(LPCSTR label, SNqValue& v)
 {
 	xr_vector<xr_string> modes = Items("story", "ref");

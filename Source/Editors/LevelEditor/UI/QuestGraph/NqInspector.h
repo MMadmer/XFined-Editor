@@ -88,6 +88,7 @@ private:
 	bool			DrawDuration	(LPCSTR label, SNqValue& v);
 	bool			DrawNpcRef		(LPCSTR label, SNqValue& v, bool target, bool kill);
 	bool			DrawObjectRef	(LPCSTR label, SNqValue& v);
+	bool			DrawObjectiveId	(LPCSTR label, SNqValue& v);
 	bool			DrawPlace		(LPCSTR label, SNqValue& v);
 	bool			DrawPosition	(SNqValue& v);
 	bool			DrawSpawnSpec	(LPCSTR label, SNqValue& v);

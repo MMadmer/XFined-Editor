@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // NQ - node quest graph. In-memory model of one .nqasset (docs/NQ_ARCHITECTURE.md
 // par. 4, par. 13.1). UI-free and owned by XrECore, so the export gate, the MCP layer and
@@ -133,14 +133,28 @@ struct ECORE_API SNqNode
 	const xr_vector<SNqAction>*	SlotC		(LPCSTR slot) const;
 };
 
-struct ECORE_API SNqTask
+// One step of a task. The engine has always kept these (CGameTask holds a vector of
+// SGameTaskObjective); each carries its own text and its own map spot, which is what
+// lets "collect X, then Y, then report" be a single PDA task instead of three quests.
+struct ECORE_API SNqObjective
 {
 	xr_string	id;
 	SNqValue	title;			// text: string or { rus = "...", eng = "..." }
 	SNqValue	descr;
-	xr_string	type;			// additional | storyline
-	SNqValue	target;			// target_ref table or nil
-	xr_string	icon;
+	SNqValue	target;			// target_ref / place table, or nil for a step with no spot
+};
+
+struct ECORE_API SNqTask
+{
+	xr_string				id;
+	SNqValue				title;			// text: string or { rus = "...", eng = "..." }
+	SNqValue				descr;
+	xr_string				type;			// additional | storyline
+	SNqValue				target;			// target_ref table or nil
+	xr_string				icon;
+	xr_vector<SNqObjective>	objectives;		// ordered; the engine numbers them from 1
+
+	const SNqObjective*		FindObjective(LPCSTR id) const;
 };
 
 struct ECORE_API SNqVar

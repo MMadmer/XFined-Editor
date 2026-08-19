@@ -304,8 +304,10 @@ namespace
 	void CheckCases(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, bool weighted, bool events_ok);
 
 	// one parameter against its catalog definition
+	// `siblings` is the params table this value came out of: an objective id only
+	// means something next to the task it belongs to, and that task is a sibling.
 	void CheckParamValue(SCtx& c, const SKind& k, const SParam& p, const SNqValue& v, LPCSTR node, LPCSTR slot,
-						 int nidx, int order, bool events_ok)
+						 int nidx, int order, bool events_ok, const SNqValue* siblings = 0)
 	{
 		const xr_string& t = p.type;
 		// numbers
@@ -414,6 +416,17 @@ namespace
 			if (k.id == "spawn.squad" || k.id == "spawn.object" || k.id == "item.spawn") NoteRefDecl(c, v.s, nidx, order, slot);
 			return;
 		}
+		if (t == "objective_id")
+		{
+			if (!v.IsString()) { ERR(c, "E006", node, slot, "'%s' must be an objective id", p.name.c_str()); return; }
+			// only meaningful next to its task, which every kind taking one passes along
+			const SNqValue* owner = siblings ? siblings->Get("task") : 0;
+			const SNqTask* task = (owner && owner->IsString()) ? c.q.FindTask(owner->s.c_str()) : 0;
+			if (!task) ERR(c, "E030", node, slot, "objective '%s' names no task", v.s.c_str());
+			else if (!task->FindObjective(v.s.c_str()))
+				ERR(c, "E030", node, slot, "task '%s' declares no objective '%s'", task->id.c_str(), v.s.c_str());
+			return;
+		}
 		if (t == "task_id")
 		{
 			if (!c.q.FindTask(v.s.c_str())) ERR(c, "E030", node, slot, "task '%s' is not declared in tasks", v.s.c_str());
@@ -464,7 +477,7 @@ namespace
 				if (p.required) ERR(c, "E006", node, slot.c_str(), "required parameter '%s' (%s) is missing", p.name.c_str(), p.type.c_str());
 				continue;
 			}
-			CheckParamValue(c, k, p, *v, node, slot.c_str(), nidx, order, events_ok);
+			CheckParamValue(c, k, p, *v, node, slot.c_str(), nidx, order, events_ok, &params);
 		}
 	}
 
@@ -763,6 +776,17 @@ void NqValidate::Run(const SNqQuest& q, const SContext& ctx, xr_vector<SNqProble
 		if (!t.descr.IsNil()) CheckText(c, t.descr, 0, sl.c_str());
 		if (t.type != "additional" && t.type != "storyline") ERR(c, "E006", 0, sl.c_str(), "task type must be \"additional\" or \"storyline\"");
 		if (!t.target.IsNil()) CheckNpcRef(c, t.target, 0, sl.c_str(), -1, 0, true, false);
+		for (u32 j = 0; j < t.objectives.size(); ++j)
+		{
+			const SNqObjective& o = t.objectives[j];
+			xr_string osl = NqUtil::Format("task:%s/objective:%s", t.id.c_str(), o.id.c_str());
+			if (!NqText::ValidId(o.id.c_str())) ERR(c, "E006", 0, osl.c_str(), "objective id '%s' must be [a-z0-9_]+", o.id.c_str());
+			for (u32 k = 0; k < j; ++k)
+				if (t.objectives[k].id == o.id) ERR(c, "E006", 0, osl.c_str(), "duplicate objective id '%s'", o.id.c_str());
+			if (!o.title.IsNil()) CheckText(c, o.title, 0, osl.c_str());
+			if (!o.descr.IsNil()) CheckText(c, o.descr, 0, osl.c_str());
+			if (!o.target.IsNil()) CheckNpcRef(c, o.target, 0, osl.c_str(), -1, 0, true, false);
+		}
 	}
 	if (ctx.file_path && ctx.file_path[0])
 	{

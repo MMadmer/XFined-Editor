@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "NqAsset.h"
 #include "NqUtil.h"
 #include "NqCatalog.h"
@@ -432,6 +432,14 @@ int SNqQuest::NodeIndex(LPCSTR id_) const
 	return found != m_NodeIndex.entries.end() ? found->second : -1;
 }
 
+const SNqObjective* SNqTask::FindObjective(LPCSTR id_) const
+{
+	if (!id_) return 0;
+	for (u32 i = 0; i < objectives.size(); ++i)
+		if (objectives[i].id == id_) return &objectives[i];
+	return 0;
+}
+
 SNqTask* SNqQuest::FindTask(LPCSTR id_)
 {
 	if (!id_) return 0;
@@ -599,6 +607,14 @@ bool SNqQuest::Equals(const SNqQuest& o) const
 		const SNqTask& a = tasks[i]; const SNqTask& b = o.tasks[i];
 		if (a.id != b.id || a.type != b.type || a.icon != b.icon) return false;
 		if (!a.title.Equals(b.title) || !a.descr.Equals(b.descr) || !a.target.Equals(b.target)) return false;
+		// the steps are part of the task: an edit to one has to mark the document dirty
+		if (a.objectives.size() != b.objectives.size()) return false;
+		for (u32 j = 0; j < a.objectives.size(); ++j)
+		{
+			const SNqObjective& x = a.objectives[j]; const SNqObjective& y = b.objectives[j];
+			if (x.id != y.id) return false;
+			if (!x.title.Equals(y.title) || !x.descr.Equals(y.descr) || !x.target.Equals(y.target)) return false;
+		}
 	}
 	for (u32 i = 0; i < nodes.size(); ++i)
 	{

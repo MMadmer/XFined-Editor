@@ -196,7 +196,10 @@ return {
   activation= "auto",            -- "auto" (при старте/установке) | "manual" (действием quest.activate)
   vars      = { <name> = <default>, … },        -- переменные квеста (bool/number/string)
   tasks     = { <task id> = { title=<text>, descr=<text>, type="additional"|"storyline",
-                              target=<target_ref>|nil, icon=<string>|nil }, … },
+                              target=<target_ref>|nil, icon=<string>|nil,
+                              -- шаги задачи: у каждого свой текст и СВОЯ метка на карте
+                              objectives = { { id=<ident>, title=<text>, descr=<text>,
+                                               target=<target_ref>|nil }, … } }, … },
   nodes     = { <node>, <node>, … },            -- порядок = порядок в файле (важен для детерминизма)
 }
 
@@ -232,11 +235,22 @@ return {
 | `npc_ref` | `{ story = "esc_m_trader" }` \| `{ ref = "guard" }` \| `{ profile = "sim_default_stalker_1" }` \| `{ community = "stalker", level = "l01_escape" }` | порядок резолва §8 |
 | `target_ref` | `npc_ref` \| `{ ref = "boars" }` (отряд/объект) \| `{ smart = "esc_smart_terrain_2_12" }` | для целей заданий/меток |
 | `place` | `{ level = "l01_escape", pos = {x,y,z}, radius = 5 }` \| `{ restrictor = "zone_name" }` \| `{ smart = "…" }` | |
+| `objective_id` | `"bread"` | шаг задачи, названной параметром `task` рядом. Редактор даёт выпадающий список шагов этой задачи |
 | `object_ref`, `squad_ref` | `{ story = "esc_m_trader" }` \| `{ ref = "stash" }` | ОДИН конкретный объект мира. Уже, чем `npc_ref`: `profile`/`community` называют вид существа, а не вещь, которую можно залутать, запомнить под ref или посчитать её смерть |
 | `spawn_spec` | `{ section = "simulation_boar", smart = "…", ref = "boars", hold = true }` | для `spawn.squad` и целей `objective.kill` |
 | `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `var_name`, `task_id`, `quest_id` (`"<module>.<quest>"` или `"<quest>"` = свой модуль), `ref_name`, `signal_name`, `spot_type`, `relation` (`enemy\|neutral\|friend`) | строки | редактор даёт пикеры (§13.6) |
 | `lua` | `[[ код ]]` | см. §14 |
 | `cases` | `{ { name = "yes", cond = { … } }, … }` / `{ { name = "a", weight = 3 }, … }` | имена = пины |
+
+**Подзадачи.** Движок носит их с самого начала: `CGameTask` держит вектор
+`SGameTaskObjective`, у каждого свои заголовок, описание, иконка и метка
+(`set_map_location` / `set_map_object_id`). Индекс 0 — сама задача, шаги нумеруются
+с единицы в порядке объявления. Поэтому «собери X, собери Y, доложи Z» — это ОДНА
+задача PDA с тремя строками и, если надо, тремя метками, а не три квеста.
+Состояние шагов живёт в `qs.objectives[<task>][<objective>]`, переживает сохранение
+и читается условием `objective_status`, так что граф может ветвиться на «хлеб найден,
+аптечка ещё нет». Завершение шага (`task.objective_complete`) саму задачу активной
+оставляет — закрывать её по-прежнему `task.complete`.
 
 ### 4.4 Эталонный пример
 
@@ -500,6 +514,9 @@ since   = 1                        ; версия каталога, в кото�
 | `dialog.actor_phrase` | `text` (+`node.cond`) | `next` | нет | фраза игрока |
 | `objective.kill` | `target: {story}\|{ref}\|{spawn=spawn_spec}`, `by_actor: bool=false` | `done` | да | `npc_on_death_callback`/`monster_on_death_callback`/`squad_on_npc_death`/`squad_on_unregister` + опрос `alife():object(id)` для оффлайн-смертей; `spawn` создаёт цель при входе (`SIMBOARD:create_squad`, `sim_board.script:176`) и запоминает `ref` |
 | `objective.fetch` | ТРИ формы, ровно одна за раз (иначе E022): `section: item_section` (+`count: int=1`) — любые предметы секции в инвентаре; то же плюс `from: object_ref` — засчитываются только вынесенные из ЭТОГО контейнера; `item: object_ref` — один конкретный объект. `count` в штуках предметов: для патронов — коробки, а не патроны | `done` | да | `section` — опрос инвентаря актора (+`actor_on_item_take`); `from` — состав контейнера через `alife():get_children()` (работает оффлайн, что для тайника норма), id засчитывается, только если его видели ВНУТРИ контейнера и потом нашли у игрока; `item` — `parent_id` серверного объекта равен актору |
+| `task.objective_complete` / `task.objective_fail` | `task`, `objective` | — | нет | отмечает ОДИН шаг задачи; сама задача остаётся активной (`actor:set_task_state(state, tid, index)`) |
+| `task.set_objective_target` | `task`, `objective`, `target?` | — | нет | метка ОТДЕЛЬНОГО шага; без `target` снимается только она. У каждого шага своя (`SGameTaskObjective::change_map_location`) |
+| `task.set_objective_text` | `task`, `objective`, `new_title?`, `new_descr?` | — | нет | текст отдельного шага |
 | `objective.kill_count` | `count: int=1`, `by_actor: bool=true`, и не более одного фильтра: `community` \| `squad: object_ref` \| `section: string` (иначе E022). Без фильтра — любая смерть NPC | `done` | да | счёт с входа в ноду, дедуп по id, счётчик в токене (`mark_dirty`), переживает сохранение. Оффлайн-смерти опрашиваются только для фильтра `squad` (единственный, у кого известен список кандидатов) и только при `by_actor = false`: опрос не знает убийцу, а убийство игроком всегда онлайн и всегда приносит колбэк |
 | `objective.reach` | `place`, `map_spot: bool=true`, `spot_text: text?` | `done` | да | `level.name()` + дистанция / `db.zone_by_name[...]:inside()`; для позиции создаётся якорь `space_restrictor` (`alife():create`) — под метку карты и цель задания, удаляется при выходе |
 | `wait.timer` | `duration` | `done` | да | игровое время через `game.get_game_time()`; реальное — остаток в секундах, декремент по тику |
@@ -559,6 +576,7 @@ since   = 1                        ; версия каталога, в кото�
 | `node_done` | `node: string` | нода с `once` уже отработала (`done`) |
 | `quest_status` | `quest: quest_id`, `is: enum(inactive\|active\|completed\|failed)` | состояние другого квеста |
 | `task_status` | `task`, `is: enum(none\|active\|completed\|failed)` | §9 |
+| `objective_status` | `task`, `objective`, `is: enum(none\|active\|completed\|failed)` | шаг задачи в статусе; состояние из `qs.objectives` |
 | `actor_on_level` | `level` | `level.name()` |
 | `actor_in_place` | `place` | как `objective.reach` |
 | `npc_alive` / `npc_dead` | `npc_ref` | `se:alive()` серверного объекта / отсутствие |
@@ -1167,6 +1185,7 @@ read-only; чистый документ не скрывает внешнюю п
 | E011 | фразовая нода имеет вход не из фразы/темы (вход из мира) |
 | E020 | событийное условие (`event.*`) в `cond` фразы/темы или в `cases` `flow.branch` (допустимо только в `trigger.when` / `wait.when` / `wait.any`) |
 | E021 | `cases` пусты / имена кейсов дублируются / `weight <= 0` |
+| E030 (подзадачи) | `objective` называет шаг, которого нет у указанной `task`, либо рядом нет самой `task` |
 | E022 | у вида выбрано несколько взаимоисключающих форм параметров сразу, либо не выбрано ни одной (`objective.fetch`: `item` против `section`/`count`/`from`; `objective.kill_count`: больше одного фильтра). Формы объявлены в `NqCatalog::ExclusiveForms` — одна таблица на валидатор и на инспектор, который гасит проигравшие поля |
 | E030 | `task`/`quest`/`ref`/`var`/`node` ссылка на несуществующее объявление |
 | E031 | `actor.teleport` на другой уровень |

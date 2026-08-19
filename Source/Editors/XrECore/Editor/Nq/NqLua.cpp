@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "NqLua.h"
 #include "NqUtil.h"
 #include "NqCatalog.h"
@@ -419,6 +419,17 @@ void NqLua::TaskFromValue(LPCSTR id, const SNqValue& v, SNqTask& t)
 	t.type = v.GetString("type", "additional");
 	if (const SNqValue* x = v.Get("target"))	t.target = *x;
 	t.icon = v.GetString("icon", "");
+	if (const SNqValue* objs = v.Get("objectives"))
+		for (u32 i = 0; i < objs->arr.size(); ++i)
+		{
+			const SNqValue& o = objs->arr[i];
+			SNqObjective obj;
+			obj.id = o.GetString("id");
+			if (const SNqValue* x = o.Get("title"))		obj.title = *x;
+			if (const SNqValue* x = o.Get("descr"))		obj.descr = *x;
+			if (const SNqValue* x = o.Get("target"))	obj.target = *x;
+			t.objectives.push_back(obj);
+		}
 }
 
 namespace
@@ -757,6 +768,22 @@ void NqLua::QuestToValue(const SNqQuest& q, SNqValue& out)
 			Put(tv, "type", SNqValue::String(t.type.empty() ? "additional" : t.type.c_str()));
 			if (!t.target.IsNil())	Put(tv, "target", t.target);
 			if (!t.icon.empty())	Put(tv, "icon", SNqValue::String(t.icon));
+			if (!t.objectives.empty())
+			{
+				// an array, because the order is the order the engine numbers them in
+				SNqValue objs = SNqValue::Table();
+				for (u32 j = 0; j < t.objectives.size(); ++j)
+				{
+					const SNqObjective& o = t.objectives[j];
+					SNqValue ov = SNqValue::Table();
+					Put(ov, "id", SNqValue::String(o.id));
+					if (!o.title.IsNil())	Put(ov, "title", o.title);
+					if (!o.descr.IsNil())	Put(ov, "descr", o.descr);
+					if (!o.target.IsNil())	Put(ov, "target", o.target);
+					objs.Push(ov);
+				}
+				Put(tv, "objectives", objs);
+			}
 			Put(tasks, t.id.c_str(), tv);
 		}
 		Put(out, "tasks", tasks);
