@@ -343,11 +343,12 @@ namespace
 		void WalkPlace(const NqCatalog::SKind& kind, const NqCatalog::SParam& param,
 			SNqValue& value, LPCSTR node, LPCSTR slot)
 		{
-			static const LPCSTR allowed[] = { "level", "pos", "radius", "restrictor", "smart" };
+			static const LPCSTR allowed[] = { "level", "pos", "radius", "restrictor", "smart", "ref" };
 			if (!WalkObject(kind, param, value, node, slot, "place", allowed,
 				sizeof(allowed) / sizeof(allowed[0]))) return;
 			const bool position = value.Has("pos") || value.Has("level") || value.Has("radius");
-			const int alternatives = (position ? 1 : 0) + (value.Has("restrictor") ? 1 : 0) + (value.Has("smart") ? 1 : 0);
+			const int alternatives = (position ? 1 : 0) + (value.Has("restrictor") ? 1 : 0) +
+				(value.Has("smart") ? 1 : 0) + (value.Has("ref") ? 1 : 0);
 			if (alternatives != 1)
 				Diagnostic("malformed", "place must select exactly one of level+pos, restrictor or smart", node,
 					slot, kind.id.c_str(), param.name.c_str());
@@ -357,6 +358,8 @@ namespace
 				WalkPosition(kind, param, value, node, slot);
 				WalkRadius(kind, param, value, node, slot);
 			}
+			if (value.Has("ref"))
+				WalkStringLeaf(kind, param, value, "ref", "ref_name", false, node, slot);
 			if (value.Has("restrictor"))
 				WalkStringLeaf(kind, param, value, "restrictor", "restrictor", false, node, slot);
 			if (value.Has("smart")) WalkStringLeaf(kind, param, value, "smart", "smart", false, node, slot);

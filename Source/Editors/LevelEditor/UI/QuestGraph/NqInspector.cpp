@@ -1405,7 +1405,9 @@ bool NqInspector::DrawSpawnSpec(LPCSTR label, SNqValue& v)
 
 bool NqInspector::DrawPlace(LPCSTR label, SNqValue& v)
 {
-	xr_vector<xr_string> modes = Items("pos", "restrictor", "smart");
+	// "ref" names an object this quest created - the only way to point at something
+	// that did not exist when the graph was written
+	xr_vector<xr_string> modes = Items("pos", "restrictor", "smart", "ref");
 	xr_string mode = ModeOf(v, modes);
 	if (mode.empty() && v.IsTable() && v.Has("level")) mode = "pos";
 	bool ch = false;
@@ -1431,9 +1433,11 @@ bool NqInspector::DrawPlace(LPCSTR label, SNqValue& v)
 	if (mode == "pos") ch |= DrawPosition(v);
 	else if (!mode.empty())
 	{
-		// the mode name doubles as the picker type: "smart", "restrictor"
+		// the mode name doubles as the picker type: "smart", "restrictor"; a ref is
+		// named by this quest, so it gets the ref list instead of a game index
 		xr_string s = v.GetString(mode.c_str());
-		if (DrawPicked("##value", mode.c_str(), s)) { v.Set(mode.c_str(), SNqValue::String(s)); ch = true; }
+		LPCSTR type = (mode == "ref") ? "ref_name" : mode.c_str();
+		if (DrawPicked("##value", type, s)) { v.Set(mode.c_str(), SNqValue::String(s)); ch = true; }
 	}
 	ImGui::PopID();
 	return ch;
@@ -1456,8 +1460,13 @@ bool NqInspector::DrawPosition(SNqValue& v)
 		for (int i = 0; i < 3; ++i) p.Push(SNqValue::Number(xyz[i]));
 		v.Set("pos", p); ch = true;
 	}
+	// The point is a sphere, not a pixel. Saying so on the label, because "radius"
+	// under an x/y/z reads as decoration and the author is left thinking they have to
+	// stand exactly on the spot.
 	float r = (float)v.GetNumber("radius", 5.0);
-	if (ImGui::InputFloat("radius", &r)) { v.Set("radius", SNqValue::Number(r)); ch = true; }
+	if (ImGui::InputFloat("radius, m", &r)) { v.Set("radius", SNqValue::Number(r)); ch = true; }
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("How close the player has to get, in metres. 5 when not set.");
 	if (ImGui::SmallButton("from camera"))
 	{
 		// the current scene level and the viewport camera position

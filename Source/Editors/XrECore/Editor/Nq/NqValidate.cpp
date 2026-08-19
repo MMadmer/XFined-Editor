@@ -236,13 +236,21 @@ namespace
 		}
 	}
 
-	// place: { level, pos = {x,y,z}, radius } | { restrictor } | { smart }
-	bool CheckPlace(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot)
+	// place: { level, pos = {x,y,z}, radius } | { restrictor } | { smart } | { ref }
+	bool CheckPlace(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order)
 	{
 		if (!v.IsTable())
 		{
-			ERR(c, "E006", node, slot, "expected a place { level = ..., pos = { x, y, z }, radius = r } / { restrictor = ... } / { smart = ... }");
+			ERR(c, "E006", node, slot, "expected a place { level = ..., pos = { x, y, z }, radius = r } / { restrictor = ... } / { smart = ... } / { ref = ... }");
 			return false;
+		}
+		// an object the quest creates: nothing to look up in a picker, but it has to
+		// be a ref this quest actually declares
+		if (v.Has("ref"))
+		{
+			if (!v.Get("ref")->IsString()) ERR(c, "E006", node, slot, "ref must be a string");
+			else NoteRefUse(c, v, nidx, order, slot);
+			return true;
 		}
 		if (v.Has("restrictor"))
 		{
@@ -262,7 +270,7 @@ namespace
 				if (!r->IsNumber() || r->n <= 0) ERR(c, "E006", node, slot, "radius must be a positive number");
 			return true;
 		}
-		ERR(c, "E006", node, slot, "place needs level+pos, restrictor or smart");
+		ERR(c, "E006", node, slot, "place needs level+pos, restrictor, smart or ref");
 		return false;
 	}
 
@@ -369,7 +377,7 @@ namespace
 			return;
 		}
 		if (t == "duration")	{ CheckDuration(c, v, node, slot); return; }
-		if (t == "place")		{ CheckPlace(c, v, node, slot); return; }
+		if (t == "place")		{ CheckPlace(c, v, node, slot, nidx, order); return; }
 		if (t == "npc_ref")		{ CheckNpcRef(c, v, node, slot, nidx, order, false, false); return; }
 		if (t == "target_ref")	{ CheckNpcRef(c, v, node, slot, nidx, order, true, false); return; }
 		if (t == "kill_target")	{ CheckNpcRef(c, v, node, slot, nidx, order, false, true); return; }
