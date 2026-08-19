@@ -258,6 +258,13 @@ void TUI::MouseWheel(TShiftState Shift, float steps)
 void TUI::IR_OnMouseMove(int x, int y)
 {
 	if (!m_bReady) return;
+	// A left drag no tool took is the camera's: press stays with the tools (click to
+	// select, grab to transform), and only once the mouse actually moves and nothing
+	// captured it does this become navigation.
+	if (!EDevice->m_Camera.IsMoving() && !m_MouseCaptured && !m_MouseMultiClickCaptured &&
+		(x || y) && (m_ShiftState & ssLeft) &&
+		!(m_ShiftState & (ssRight|ssMiddle|ssAlt|ssShift|ssCtrl)))
+		EDevice->m_Camera.LeftDragStart(m_ShiftState);
 	if (!EDevice->m_Camera.Process(m_ShiftState,x,y))
     {
         if( m_MouseCaptured || m_MouseMultiClickCaptured )

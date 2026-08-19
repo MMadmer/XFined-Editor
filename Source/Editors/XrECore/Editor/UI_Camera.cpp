@@ -272,6 +272,25 @@ bool CUI_Camera::MoveStart(TShiftState Shift)
     return false;
 }
 
+// The left button is not claimed at press time - the tools need it for picking and
+// for grabbing the gizmo. This is called once a left drag has proven to be a drag and
+// nothing took it, which is the moment UE starts flying.
+bool CUI_Camera::LeftDragStart(TShiftState Shift)
+{
+	if (m_bMoving) return false;
+	ShowCursor	(FALSE);
+	UI->IR_GetMousePosScreen(m_StartPos);
+	m_bMoving	= true;
+	m_UENav		= true;
+	m_MoveKeys	= 0;
+	m_NavInput	= false;
+	m_Shift		= Shift;
+	float d = m_Position.distance_to(m_Target);
+	if (d > 0.5f && d < 500.f)	m_OrbitDist = d;
+	else						{ m_OrbitDist = 10.f; m_Target.mad(m_Position, m_CamMat.k, m_OrbitDist); }
+	return true;
+}
+
 bool CUI_Camera::MoveEnd(TShiftState Shift)
 {
 	m_Shift = Shift;
@@ -328,6 +347,15 @@ bool CUI_Camera::Process(TShiftState Shift, int dx, int dy)
                     BuildCamera();
                 }else if (R){
                     Rotate(dx, dy);
+                }else if (L){
+                    // UE's left drag: the vertical flies forward and back, the
+                    // horizontal turns. Same sign as the dolly above - drag down
+                    // pulls back.
+                    Fvector mv;
+                    mv.mul(m_CamMat.k, -dy*m_SM);
+                    m_Position.add(mv);
+                    m_HPB.x += m_SR*dx;
+                    BuildCamera();
                 }
             }else{
             switch (m_Style){

@@ -1,4 +1,4 @@
-//---------------------------------------------------------------------------
+﻿//---------------------------------------------------------------------------
 #ifndef UI_CameraH
 #define UI_CameraH
 
@@ -22,6 +22,9 @@ class ECORE_API CUI_Camera{
 	ECameraStyle	m_Style;
     bool			m_bMoving;
     bool			m_UENav;		// Unreal-style navigation (RMB/MMB/Alt+LMB without Shift)
+	// A left drag the tools did not take: UE flies the camera on it (forward/back on
+	// the vertical, turn on the horizontal). Started from the move handler rather than
+	// the press, so a click still selects and a gizmo drag still transforms.
     bool			m_NavInput;		// any drag/keys happened during current/last nav — gates the RMB context menu
     u32				m_MoveKeys;		// ENavMoveKey bits held while flying
     float			m_OrbitDist;	// Alt+LMB orbit distance to m_Target
@@ -56,6 +59,7 @@ public:
 	void			BuildCamera	();
 	void			Reset		();
     void 			Update		(float dt);
+	bool			LeftDragStart(TShiftState Shift);
     void			SetStyle	(ECameraStyle style);
 	ECameraStyle	GetStyle	(){return m_Style;}
 

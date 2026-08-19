@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 
 TUI_CustomControl::TUI_CustomControl(int st, int act, ESceneToolBase* parent)
 {
@@ -319,7 +319,10 @@ bool  TUI_CustomControl::SelectStart(TShiftState Shift)
     int cnt 		= Scene->RaySelect((Shift & ssCtrl)?-1:(Shift & ssAlt)?0:1,filter,&picked);
     if (any_class && picked && picked->FClassID!=LTools->CurrentClassID())
         LTools->SetTarget(picked->FClassID, 0);	// deferred, applied next frame
-    bBoxSelection    = ((0!=cnt) && ((Shift & ssCtrl)||(Shift & ssAlt))) || (0==cnt);
+    // Box selection is Alt+LMB now. A plain left drag over empty space used to start
+    // one, which is exactly the gesture that has to be free for the camera to fly on -
+    // and a rubber band nobody asked for is what you got instead of moving.
+    bBoxSelection    = !!(Shift & ssAlt);
     if( bBoxSelection )
     {
         UI->EnableSelectionRect( true );
