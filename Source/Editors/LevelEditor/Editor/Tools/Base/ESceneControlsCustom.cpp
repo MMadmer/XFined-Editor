@@ -313,22 +313,27 @@ bool  TUI_CustomControl::SelectStart(TShiftState Shift)
     const bool any_class = !!Tools->GetSettings(etfPickAnyClass);
     const ObjClassID filter = any_class ? OBJCLASS_DUMMY : parent_tool->FClassID;
 
-    if (!((Shift&ssCtrl)||(Shift&ssAlt))) Scene->SelectObjects( false, any_class?OBJCLASS_DUMMY:cls);
-
-    ESceneToolBase* picked = 0;
-    int cnt 		= Scene->RaySelect((Shift & ssCtrl)?-1:(Shift & ssAlt)?0:1,filter,&picked);
-    if (any_class && picked && picked->FClassID!=LTools->CurrentClassID())
-        LTools->SetTarget(picked->FClassID, 0);	// deferred, applied next frame
     // Box selection is Alt+LMB now. A plain left drag over empty space used to start
-    // one, which is exactly the gesture that has to be free for the camera to fly on -
-    // and a rubber band nobody asked for is what you got instead of moving.
-    bBoxSelection    = !!(Shift & ssAlt);
+    // one, which is exactly the gesture the camera has to be free to fly on - and a
+    // rubber band nobody asked for is what you got instead of moving.
+    bBoxSelection = !!(Shift & ssAlt);
+
+    // Ctrl adds to what is already selected; without it the gesture replaces it. The
+    // marquee follows the same rule, or it could only ever grow.
+    if (!(Shift & ssCtrl)) Scene->SelectObjects( false, any_class?OBJCLASS_DUMMY:cls);
+
     if( bBoxSelection )
     {
+        // no ray pick under a marquee: the frustum decides when the drag ends
         UI->EnableSelectionRect( true );
         UI->UpdateSelectionRect(UI->m_StartCp,UI->m_CurrentCp);
         return true;
     }
+
+    ESceneToolBase* picked = 0;
+    Scene->RaySelect((Shift & ssCtrl)?-1:1,filter,&picked);
+    if (any_class && picked && picked->FClassID!=LTools->CurrentClassID())
+        LTools->SetTarget(picked->FClassID, 0);	// deferred, applied next frame
     return false;
 }
 
@@ -561,7 +566,9 @@ bool  TUI_CustomControl::SelectEnd(TShiftState _Shift)
     else if (bBoxSelection){
         UI->EnableSelectionRect( false );
         bBoxSelection = false;
-        Scene->FrustumSelect(_Shift&ssAlt?0:1,LTools->CurrentClassID());
+        // Alt is what opened the marquee, so it cannot also mean "deselect" here -
+        // the band would never select anything. Ctrl+Alt removes instead.
+        Scene->FrustumSelect(_Shift&ssCtrl?0:1,LTools->CurrentClassID());
     }
     return true;
 }
