@@ -257,12 +257,15 @@ namespace
 		void WalkSpawnSpec(const NqCatalog::SKind& kind, const NqCatalog::SParam& param,
 			SNqValue& value, LPCSTR node, LPCSTR slot)
 		{
-			static const LPCSTR allowed[] = { "section", "smart", "ref", "hold" };
+			static const LPCSTR allowed[] = { "section", "smart", "ref", "hold", "place", "restrictor" };
 			if (!WalkObject(kind, param, value, node, slot, "spawn_spec", allowed,
 				sizeof(allowed) / sizeof(allowed[0]))) return;
 			WalkStringLeaf(kind, param, value, "section", "squad_section", true, node, slot);
 			WalkStringLeaf(kind, param, value, "smart", "smart", true, node, slot);
 			if (value.Has("ref")) WalkStringLeaf(kind, param, value, "ref", "ref_name", false, node, slot);
+			if (value.Has("restrictor"))
+				WalkStringLeaf(kind, param, value, "restrictor", "restrictor", false, node, slot);
+			if (SNqValue* place = value.Get("place")) WalkPlace(kind, param, *place, node, slot);
 			if (SNqValue* hold = value.Get("hold"))
 				if (!hold->IsBool())
 					Diagnostic("malformed", "spawn_spec field 'hold' must be a bool", node,

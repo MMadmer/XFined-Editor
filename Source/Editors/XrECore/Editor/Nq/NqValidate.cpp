@@ -393,6 +393,8 @@ namespace
 			}
 			CheckIndexed(c, NqPickers::tSquad, v.GetString("section"), node, slot);
 			CheckIndexed(c, NqPickers::tSmart, v.GetString("smart"), node, slot);
+			if (const SNqValue* pl = v.Get("place")) CheckPlace(c, *pl, node, slot, nidx, order);
+			if (v.Has("restrictor")) CheckIndexed(c, NqPickers::tRestrictor, v.GetString("restrictor"), node, slot);
 			NoteRefDecl(c, v.GetString("ref"), nidx, order, slot);
 			return;
 		}

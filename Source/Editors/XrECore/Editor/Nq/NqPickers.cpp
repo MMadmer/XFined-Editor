@@ -556,6 +556,39 @@ namespace
 	// level; the runtime looks it up by OBJECT NAME (db.zone_by_name), so the name in
 	// the level's spawn is the id, and no config section carries it. Only the project
 	// can answer: rawdata\levels\<level>\spawn.part is plain ltx text.
+	// One record out of the level spawn. Restrictors get their own picker entry;
+	// smart terrains only get a place hint, because a smart is already in the index
+	// from simulation.ltx - it just has nothing on it to tell one from another.
+	void NoteSpawnObject(const xr_string& section, const xr_string& name,
+						 const xr_string& level, const xr_string& where)
+	{
+		if (name.empty()) return;
+		xr_string hint = level;
+		if (!where.empty())
+		{
+			// "x, y, z" with too many digits to read at a glance
+			float x = 0, y = 0, z = 0;
+			if (3 == sscanf(where.c_str(), "%f , %f , %f", &x, &y, &z))
+				hint += NqUtil::Format(" (%.0f, %.0f, %.0f)", x, y, z);
+		}
+		if (section == "space_restrictor")
+		{
+			Add(NqPickers::tRestrictor, name, xr_string(), hint);
+			return;
+		}
+		if (section != "smart_terrain") return;
+		// Dead Air ships no display names for its own smarts (smart_names.ltx covers
+		// the CoP levels only), so where it stands is the only thing that tells the
+		// author which of four hundred it is.
+		for (u32 i = 0; i < s_Index[NqPickers::tSmart].size(); ++i)
+			if (s_Index[NqPickers::tSmart][i].id == name)
+			{
+				if (s_Index[NqPickers::tSmart][i].extra.empty())
+					s_Index[NqPickers::tSmart][i].extra = hint;
+				return;
+			}
+	}
+
 	void BuildProjectRestrictors()
 	{
 		if (!EditorProject::Active()) return;
@@ -580,7 +613,7 @@ namespace
 			// the object name the runtime looks a zone up by. The [object_N] header is
 			// no use here - an attached shape sits between it and the spawndata, and
 			// every one of those is just called "shape".
-			xr_string section, name;
+			xr_string section, name, where;
 			bool in_spawndata = false;
 			size_t pos = 0;
 			while (pos < text.size())
@@ -592,8 +625,8 @@ namespace
 				if (line.empty()) continue;
 				if (line[0] == '[')
 				{
-					if (section == "space_restrictor") Add(NqPickers::tRestrictor, name, xr_string(), level);
-					section.clear(); name.clear();
+					NoteSpawnObject(section, name, level, where);
+					section.clear(); name.clear(); where.clear();
 					in_spawndata = line.size() > 11 && 0 == _strnicmp(line.c_str(), "[object_", 8) &&
 						0 == _stricmp(line.c_str() + line.size() - 11, "_spawndata]");
 					continue;
@@ -602,12 +635,14 @@ namespace
 				const size_t eq = line.find('=');
 				if (eq == xr_string::npos) continue;
 				const xr_string key = NqUtil::Trim(line.substr(0, eq));
-				if (key != "000002" && key != "000003") continue;
+				if (key != "000002" && key != "000003" && key != "000006") continue;
 				xr_string value = NqUtil::Trim(line.substr(eq + 1));
 				if (value.size() >= 2 && value[0] == '"') value = value.substr(1, value.size() - 2);
-				if (key == "000002") section = value; else name = value;
+				if (key == "000002") section = value;
+				else if (key == "000003") name = value;
+				else where = value;			// 000006 is the position
 			}
-			if (section == "space_restrictor") Add(NqPickers::tRestrictor, name, xr_string(), level);
+			NoteSpawnObject(section, name, level, where);
 		}
 	}
 

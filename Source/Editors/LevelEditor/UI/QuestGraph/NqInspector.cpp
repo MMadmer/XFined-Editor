@@ -1484,6 +1484,16 @@ bool NqInspector::DrawSpawnSpec(LPCSTR label, SNqValue& v)
 	if (DrawPicked("section", "squad_section", s)) { v.Set("section", SNqValue::String(s)); ch = true; }
 	s = v.GetString("smart");
 	if (DrawPicked("smart", "smart", s)) { v.Set("smart", SNqValue::String(s)); ch = true; }
+	// where they actually stand, and the zone they may not leave
+	SNqValue* pl = v.Get("place");
+	SNqValue place = pl ? *pl : SNqValue::Nil();
+	if (DrawPlace("place", place))
+	{
+		if (place.IsNil()) v.Erase("place"); else v.Set("place", place);
+		ch = true;
+	}
+	s = v.GetString("restrictor");
+	if (DrawPicked("restrictor", "restrictor", s)) { if (s.empty()) v.Erase("restrictor"); else v.Set("restrictor", SNqValue::String(s)); ch = true; }
 	s = v.GetString("ref");
 	if (DrawPicked("ref", "ref_name", s)) { if (s.empty()) v.Erase("ref"); else v.Set("ref", SNqValue::String(s)); ch = true; }
 	bool hold = v.GetBool("hold", true);
