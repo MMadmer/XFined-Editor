@@ -129,6 +129,22 @@ void UISpawnTool::MultiSelByRefObject(bool clear_prev)
     }
 }
 
+// What a spawn class actually is. The list shows the leaf of the $spawn path, so a
+// row reads "spawn group" or "graph point" and tells the author nothing about whether
+// it is a zone, a marker, or engine bookkeeping they should not be placing at all.
+static LPCSTR SpawnClassMeaning(LPCSTR cls)
+{
+	if (!cls) return 0;
+	if (0 == _stricmp(cls, "SMRTTRRN"))	return "Smart terrain: owns NPCs and hands them jobs. Place one to get a smart of your own instead of hunting numbered ones";
+	if (0 == _stricmp(cls, "SPC_RS_S"))	return "Zone with a shape. Quests use it as a place, a marker target, or a pen NPCs cannot leave";
+	if (0 == _stricmp(cls, "SCRIPTZN"))	return "Script zone: a shape the level's own logic reacts to";
+	if (0 == _stricmp(cls, "LVL_CHNG"))	return "Level changer: walking into it sends the player to another level";
+	if (0 == _stricmp(cls, "AI_SPGRP"))	return "Spawn group (legacy): a respawn point of the old kind, not a smart terrain";
+	if (0 == _stricmp(cls, "AI_GRAPH"))	return "Graph point: a vertex of the game graph, used when the level is compiled - not a runtime object";
+	if (0 == _stricmp(cls, "SO_HLAMP"))	return "Hanging lamp";
+	return 0;
+}
+
 void UISpawnTool::RefreshList()
 {
     ListItemsVec items;
@@ -144,7 +160,24 @@ void UISpawnTool::RefreshList()
             if (caption.size())
             {
                 ListItem* I = LHelper().CreateItem(items, caption.c_str(), 0, ListItem::flDrawThumbnail, (LPVOID) * (*it)->Name);
-                //m_caption_to_sect[caption] = sect;
+                if (I)
+                {
+                    // the section is the name everything else refers to, and the class
+                    // is what decides whether this row is any use to a quest
+                    LPCSTR cls = 0;
+                    (*it)->line_exist("class", &cls);
+                    string512 tip;
+                    LPCSTR meaning = SpawnClassMeaning(cls);
+                    sprintf_s(tip, "%s%s%s%s%s", sect.c_str(),
+                        (cls && cls[0]) ? "  (class " : "", (cls && cls[0]) ? cls : "", (cls && cls[0]) ? ")" : "",
+                        meaning ? "" : "");
+                    if (meaning)
+                    {
+                        xr_strcat(tip, sizeof(tip), "\n");
+                        xr_strcat(tip, sizeof(tip), meaning);
+                    }
+                    I->hint = tip;
+                }
             }
         }
     }

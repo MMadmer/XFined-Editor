@@ -1,4 +1,4 @@
-//---------------------------------------------------------------------------
+﻿//---------------------------------------------------------------------------
 #ifndef ItemListTypesH
 #define ItemListTypesH
 
@@ -20,6 +20,9 @@ public:
 public:
     UIItemListForm* Parent;
     int 				tag;
+    // What this row actually is, in words, shown on hover. A list of $spawn path
+    // leaves ("spawn group", "graph point") says nothing about what they do.
+    shared_str			hint;
     LPVOID				m_Object;
     int					icon_index;
     u32					prop_color;

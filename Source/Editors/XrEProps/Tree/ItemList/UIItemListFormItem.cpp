@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 
 UIItemListFormItem::UIItemListFormItem(shared_str Name) :Object(nullptr), UITreeItem(Name)
 {
@@ -47,6 +47,8 @@ void UIItemListFormItem::Draw()
 			ImGui::SameLine(0, 0);
 		}
 		ImGui::TreeNodeEx(Text.c_str(), Flags);
+		if (Object && Object->hint.size() && ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", Object->hint.c_str());
 		if (ImGui::IsItemClicked())
 		{
 			if (Form->m_Flags.test(cfMultiSelect))
