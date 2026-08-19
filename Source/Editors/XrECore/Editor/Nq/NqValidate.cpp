@@ -150,6 +150,9 @@ namespace
 	}
 
 	// npc_ref: { story } | { ref } | { profile } | { community[, level] }
+	bool CheckPlace(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order);
+	void CheckSpawnSpec(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, LPCSTR what);
+
 	bool CheckNpcRef(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, bool allow_smart, bool allow_spawn)
 	{
 		if (!v.IsTable())
@@ -185,17 +188,7 @@ namespace
 		if (allow_spawn && v.Has("spawn"))
 		{
 			++alts;
-			const SNqValue* sp = v.Get("spawn");
-			if (!sp->IsTable() || !sp->Has("section") || (!sp->Has("smart") && !sp->Has("place")))
-				ERR(c, "E006", node, slot, "spawn needs { section = ... } and a smart or a place to put them on");
-			else
-			{
-				CheckIndexed(c, NqPickers::tSquad, sp->GetString("section"), node, slot);
-				CheckIndexed(c, NqPickers::tSmart, sp->GetString("smart"), node, slot);
-				NoteRefDecl(c, sp->GetString("ref"), nidx, order, slot);
-				if (const SNqValue* h = sp->Get("hold"))
-					if (h->IsBool() && !h->b) WARN(c, "W031", node, slot, "spawned squad without hold - it may leave for the simulation");
-			}
+			CheckSpawnSpec(c, *v.Get("spawn"), node, slot, nidx, order, "spawn");
 		}
 		if (alts == 0)
 		{
@@ -237,6 +230,28 @@ namespace
 	}
 
 	// place: { level, pos = {x,y,z}, radius } | { restrictor } | { smart } | { ref }
+	// One spawn spec wherever it appears: the spawn_spec parameter of spawn.squad and the
+	// { spawn = ... } form of a kill target. They used to be checked in two places and only one
+	// of them looked at the place - which is how a quest could name a restrictor that was never
+	// placed, validate clean, and then spawn nobody at all.
+	void CheckSpawnSpec(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, LPCSTR what)
+	{
+		// an empty smart is not a smart: the runtime reads it as unset, so must this
+		const xr_string smart = v.GetString("smart");
+		if (!v.IsTable() || !v.Has("section") || (smart.empty() && !v.Has("place")))
+		{
+			ERR(c, "E006", node, slot, "'%s' needs { section = ... } and a smart or a place to put them on", what ? what : "spawn");
+			return;
+		}
+		CheckIndexed(c, NqPickers::tSquad, v.GetString("section"), node, slot);
+		CheckIndexed(c, NqPickers::tSmart, smart, node, slot);
+		if (const SNqValue* pl = v.Get("place")) CheckPlace(c, *pl, node, slot, nidx, order);
+		if (v.Has("restrictor")) CheckIndexed(c, NqPickers::tRestrictor, v.GetString("restrictor"), node, slot);
+		NoteRefDecl(c, v.GetString("ref"), nidx, order, slot);
+		if (const SNqValue* h = v.Get("hold"))
+			if (h->IsBool() && !h->b) WARN(c, "W031", node, slot, "spawned squad without hold - it may leave for the simulation");
+	}
+
 	bool CheckPlace(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order)
 	{
 		if (!v.IsTable())
@@ -384,20 +399,7 @@ namespace
 		if (t == "target_ref")	{ CheckNpcRef(c, v, node, slot, nidx, order, true, false); return; }
 		if (t == "kill_target")	{ CheckNpcRef(c, v, node, slot, nidx, order, false, true); return; }
 		if (t == "squad_ref" || t == "object_ref") { CheckObjectRef(c, v, node, slot, nidx, order, t.c_str()); return; }
-		if (t == "spawn_spec")
-		{
-			if (!v.IsTable() || !v.Has("section") || (!v.Has("smart") && !v.Has("place")))
-			{
-				ERR(c, "E006", node, slot, "'%s' needs { section = ... } and a smart or a place to put them on", p.name.c_str());
-				return;
-			}
-			CheckIndexed(c, NqPickers::tSquad, v.GetString("section"), node, slot);
-			CheckIndexed(c, NqPickers::tSmart, v.GetString("smart"), node, slot);
-			if (const SNqValue* pl = v.Get("place")) CheckPlace(c, *pl, node, slot, nidx, order);
-			if (v.Has("restrictor")) CheckIndexed(c, NqPickers::tRestrictor, v.GetString("restrictor"), node, slot);
-			NoteRefDecl(c, v.GetString("ref"), nidx, order, slot);
-			return;
-		}
+		if (t == "spawn_spec") { CheckSpawnSpec(c, v, node, slot, nidx, order, p.name.c_str()); return; }
 		if (t == "cases_cond")		{ CheckCases(c, v, node, slot, nidx, order, false, events_ok); return; }
 		if (t == "cases_weight")	{ CheckCases(c, v, node, slot, nidx, order, true, events_ok); return; }
 		if (t == "cond_list")

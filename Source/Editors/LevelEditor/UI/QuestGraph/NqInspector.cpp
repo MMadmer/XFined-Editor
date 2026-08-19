@@ -1288,7 +1288,21 @@ bool NqInspector::DrawPicked(LPCSTR label, LPCSTR type, xr_string& s)
 {
 	bool ch = false;
 	ImGui::PushID(label);
+	// A name nothing can resolve looks exactly like a good one in a plain box. The index
+	// already knows better, so the box says so while it is being typed rather than letting
+	// the build ship a quest that points at an object nobody ever placed.
+	const NqPickers::EType pt = NqPickers::TypeFromName(type);
+	const bool unknown = !s.empty() && pt != NqPickers::tCount &&
+						 !NqPickers::Index(pt).empty() && !NqPickers::Known(pt, s.c_str());
+	if (unknown) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
 	ch |= InputStr(label, s, false, 0.f, ButtonRoom("..."));
+	if (unknown)
+	{
+		ImGui::PopStyleColor();
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("nothing named '%s' is in the %s list - place it first, or pick one that exists",
+				s.c_str(), NqPickers::TypeName(pt));
+	}
 	ImGui::SameLine();
 	// the filter is cleared here, not on the appearing frame: the list is gathered
 	// before the popup opens, so a leftover query would decide its width

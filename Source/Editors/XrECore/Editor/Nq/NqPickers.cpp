@@ -615,6 +615,9 @@ namespace
 			}
 	}
 
+	// a spawndata position of exactly zero means the object header carries the real one
+	static const char* kZeroPos = "0.000000, 0.000000, 0.000000";
+
 	void BuildProjectRestrictors()
 	{
 		if (!EditorProject::Active()) return;
@@ -639,8 +642,13 @@ namespace
 			// the object name the runtime looks a zone up by. The [object_N] header is
 			// no use here - an attached shape sits between it and the spawndata, and
 			// every one of those is just called "shape".
-			xr_string section, name, where;
-			bool in_spawndata = false;
+			// The spawndata's 000003 is name_replace, and for an object the AUTHOR placed it is
+			// empty: the editor keeps the name in the [object_N] header and the exporter names the
+			// op after it. Reading only 000003 left every restrictor the author placed out of the
+			// index, so the picker had to be fed from the live scene - and with the scene closed a
+			// perfectly good name read as "not placed in this project".
+			xr_string section, name, where, hdr_name, hdr_where;
+			bool in_spawndata = false, in_header = false;
 			size_t pos = 0;
 			while (pos < text.size())
 			{
@@ -651,31 +659,48 @@ namespace
 				if (line.empty()) continue;
 				if (line[0] == '[')
 				{
-					NoteSpawnObject(section, name, level, where);
+					NoteSpawnObject(section, name.empty() ? hdr_name : name, level,
+						(where.empty() || where == kZeroPos) ? hdr_where : where);
 					section.clear(); name.clear(); where.clear();
 					in_spawndata = line.size() > 11 && 0 == _strnicmp(line.c_str(), "[object_", 8) &&
 						0 == _stricmp(line.c_str() + line.size() - 11, "_spawndata]");
+					// a plain [object_N] header, not _attached_N and not _spawndata
+					in_header = false;
+					if (!in_spawndata && 0 == _strnicmp(line.c_str(), "[object_", 8) && line[line.size() - 1] == ']')
+					{
+						in_header = true;
+						for (size_t i = 8; i + 1 < line.size(); ++i)
+							if (line[i] < '0' || line[i] > '9') { in_header = false; break; }
+						if (in_header) { hdr_name.clear(); hdr_where.clear(); }
+					}
 					continue;
 				}
-				if (!in_spawndata) continue;
 				const size_t eq = line.find('=');
 				if (eq == xr_string::npos) continue;
 				const xr_string key = NqUtil::Trim(line.substr(0, eq));
-				if (key != "000002" && key != "000003" && key != "000006") continue;
 				xr_string value = NqUtil::Trim(line.substr(eq + 1));
 				if (value.size() >= 2 && value[0] == '"') value = value.substr(1, value.size() - 2);
+				if (in_header)
+				{
+					if (key == "name") hdr_name = value;
+					else if (key == "position") hdr_where = value;
+					continue;
+				}
+				if (!in_spawndata) continue;
+				if (key != "000002" && key != "000003" && key != "000006") continue;
 				if (key == "000002") section = value;
 				else if (key == "000003") name = value;
 				else where = value;			// 000006 is the position
 			}
-			NoteSpawnObject(section, name, level, where);
+			NoteSpawnObject(section, name.empty() ? hdr_name : name, level,
+				(where.empty() || where == kZeroPos) ? hdr_where : where);
 		}
 	}
 
 	// ---- disk cache ----------------------------------------------------------------
 	// bump the number on every change to what an entry stores, or caches written by
 	// an older editor come back with the fields it did not know how to fill
-	const char* kCacheFormat = "nqindex 6 ";
+	const char* kCacheFormat = "nqindex 7 ";
 
 	void CachePath(string_path& out)
 	{

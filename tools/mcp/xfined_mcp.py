@@ -171,7 +171,10 @@ TOOLS = [
                        "JSGME offers to copy over the game. "
                        "The module export is a CLEAN build: the target module folder is emptied first, so a file "
                        "the project no longer has cannot survive there; "
-                       "a target inside the game's gamedata is refused - mods never merge into the game tree.",
+                       "a target inside the game's gamedata is refused - mods never merge into the game tree. "
+                       "The answer carries 'warnings': quest problems that did not stop the build "
+                       "(a restrictor the quest names but nobody placed, a section the game does not have) - "
+                       "a build with warnings shipped, but it probably does not do what the author meant.",
         "inputSchema": {
             "type": "object",
             "properties": {

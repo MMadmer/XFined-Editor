@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "EditorGameContent.h"
 #include "EditorGameModes.h"
 #include "EditorModManifest.h"
@@ -7,6 +7,7 @@
 #include "ui_main.h"
 #include "Nq/NqExport.h"
 #include "Nq/NqDoc.h"
+#include "Nq/NqUtil.h"
 
 //------------------------------------------------------------------------------
 // small file/string helpers (WinAPI only, like EditorProject)
@@ -160,8 +161,24 @@ static void JsonAppend(xr_string& out, LPCSTR s)
 {
 	for (const char* p = s; *p; ++p)
 	{
-		if (*p == '"' || *p == '\\') out += '\\';
-		out += *p;
+		// A raw control character inside a JSON string is not JSON at all: the reader on
+		// the other end gives up on the whole answer over one newline in a message.
+		switch (*p)
+		{
+		case '"':	out += "\\\""; break;
+		case '\\':	out += "\\\\"; break;
+		case '\n':	out += "\\n"; break;
+		case '\r':	out += "\\r"; break;
+		case '\t':	out += "\\t"; break;
+		default:
+			if ((unsigned char)*p < 0x20)
+			{
+				char esc[8];
+				sprintf_s(esc, "\\u%04x", (unsigned)(unsigned char)*p);
+				out += esc;
+			}
+			else out += *p;
+		}
 	}
 }
 
@@ -844,9 +861,11 @@ static int CountOrphansRec(LPCSTR dst, LPCSTR src)
 }
 
 bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
-					   int& files, xr_string& out_path, xr_string& err, bool confirmed)
+					   int& files, xr_string& out_path, xr_string& err, bool confirmed,
+					   xr_string* warnings)
 {
 	files = 0; out_path.clear(); err.clear();
+	if (warnings) warnings->clear();
 	if (!project_root || !project_root[0])	{ err = "no active project"; return false; }
 
 	SManifest m;
@@ -867,8 +886,20 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 	// the player: every *.nqasset must validate before anything is copied.
 	{
 		xr_vector<xr_string> nq_log;
-		if (!NqExport::ValidateProject(project_root, err, nq_log))
-			return false;
+		int nq_errors = 0, nq_warnings = 0;
+		const bool nq_ok = NqExport::ValidateProject(project_root, err, nq_log, &nq_errors, &nq_warnings);
+		if (warnings && nq_warnings)
+		{
+			// the lines the author needs to read, not a count they have to go looking for
+			*warnings = NqUtil::Format("quest warnings: %d", nq_warnings);
+			for (u32 i = 0; i < nq_log.size(); ++i)
+			{
+				if (nq_log[i].find(": E") != xr_string::npos) continue;
+				*warnings += "\n  ";
+				*warnings += nq_log[i];
+			}
+		}
+		if (!nq_ok) return false;
 	}
 
 	// A declared mode is worthless until the player can tick it, so the files
@@ -1205,13 +1236,13 @@ static void RunBuildIntoGame()
 	xr_string bake_note;
 	EditorMod::RunPreBuildBake(bake_note);
 	int files = 0;
-	xr_string path, err;
-	bool ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err);
+	xr_string path, err, warn;
+	bool ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err, false, &warn);
 	if (!ok && 0 == strncmp(err.c_str(), "target already holds a module", 29))
 	{
 		if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
 			"%s\n\n%s\n\nThose files will be DELETED. Continue?", err.c_str(), path.c_str()))
-			ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err, true);
+			ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err, true, &warn);
 		else
 		{
 			sprintf_s(s_Message, "Build cancelled.");
@@ -1232,6 +1263,14 @@ static void RunBuildIntoGame()
 			"Toggle the module from the console:  xms_enable %s  /  xms_disable %s",
 			bake_note.c_str(), bake_note.empty() ? "" : "\n",
 			files, path.c_str(), m.id.c_str(), m.id.c_str());
+		// what shipped but is probably wrong: a restrictor nobody placed, a section the
+		// game does not have. The build does not stop for these, so this is the only
+		// place the author can learn of them
+		if (!warn.empty())
+		{
+			xr_strcat(s_Message, sizeof(s_Message), "\n\n");
+			xr_strcat(s_Message, sizeof(s_Message), warn.c_str());
+		}
 	}
 	else
 		sprintf_s(s_Message, "Build failed: %s", err.c_str());
@@ -1473,16 +1512,16 @@ static void RunDeferredExport()
 	xr_string bake_note;
 	EditorMod::RunPreBuildBake(bake_note);
 	int files = 0;
-	xr_string path, err;
+	xr_string path, err, warn;
 	bool ok = EditorMod::Export(EditorProject::Root(), s_DeferredExportTarget,
-		s_DeferredExportFlat, files, path, err);
+		s_DeferredExportFlat, files, path, err, false, &warn);
 	if (!ok && 0 == strncmp(err.c_str(), "target already holds a module", 29))
 	{
 		if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
 			"%s\n\n%s\n\nThose files will be DELETED. Continue?", err.c_str(), path.c_str()))
 		{
 			ok = EditorMod::Export(EditorProject::Root(), s_DeferredExportTarget,
-				s_DeferredExportFlat, files, path, err, true);
+				s_DeferredExportFlat, files, path, err, true, &warn);
 		}
 		else
 		{
@@ -1498,6 +1537,11 @@ static void RunDeferredExport()
 		::WritePrivateProfileStringA("xms", "export_target", s_DeferredExportTarget, ini);
 		sprintf_s(s_Message, "%s%sExport complete: %d file(s) copied to\n%s",
 			bake_note.c_str(), bake_note.empty() ? "" : "\n", files, path.c_str());
+		if (!warn.empty())
+		{
+			xr_strcat(s_Message, sizeof(s_Message), "\n\n");
+			xr_strcat(s_Message, sizeof(s_Message), warn.c_str());
+		}
 	}
 	else
 		sprintf_s(s_Message, "Export failed: %s", err.c_str());
@@ -1705,10 +1749,10 @@ void EditorMod::McpExport(LPCSTR raw, xr_string& out)
 	RunPreBuildBake(bake_note);
 
 	int files = 0;
-	xr_string path, err;
+	xr_string path, err, warn;
 	// MCP is the programmatic path: the caller already decided, and it must
 	// never stall on a question
-	if (!Export(EditorProject::Root(), target, flat, files, path, err, true))
+	if (!Export(EditorProject::Root(), target, flat, files, path, err, true, &warn))
 	{
 		out = "{\"ok\":false,\"error\":\"";
 		JsonAppend(out, err.c_str());
@@ -1721,5 +1765,9 @@ void EditorMod::McpExport(LPCSTR raw, xr_string& out)
 	JsonAppendPath(out, path.c_str());
 	out += "\",\"baked\":\"";
 	JsonAppend(out, bake_note.c_str());
+	// an agent gets the same warnings the dialog shows: a build that shipped a quest
+	// naming something that does not exist is not a clean build
+	out += "\",\"warnings\":\"";
+	JsonAppend(out, warn.c_str());
 	out += "\"}";
 }

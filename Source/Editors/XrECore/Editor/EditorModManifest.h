@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // XMS (XFined Module System) mod-authoring support.
 //
@@ -67,9 +67,13 @@ namespace EditorMod
 	// project does not are deleted. When those exist and `confirmed` is false
 	// it refuses instead, so the caller can ask first - the target may be
 	// someone else's module that shares the id.
+	// `warnings` (optional) comes back with the quest problems that did not stop the
+	// build: a warning nobody is shown is a warning that does not exist, and the one
+	// that matters most - a quest naming a restrictor that was never placed - reads as
+	// a clean build otherwise.
 	ECORE_API bool	Export				(LPCSTR project_root, LPCSTR target_root, bool flat,
 										 int& files, xr_string& out_path, xr_string& err,
-										 bool confirmed = false);
+										 bool confirmed = false, xr_string* warnings = 0);
 
 	// modal windows (drawn from CLevelMain::OnDrawUI) + Mod menu triggers
 	ECORE_API void	DrawUI				();
