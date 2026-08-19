@@ -1188,7 +1188,7 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 	// is all the author ever gets to read.
 	const xr_string t = type;
 	const bool doc_scoped = (t == "task_id" || t == "var_name" || t == "ref_name" || t == "node_id" || t == "quest_id");
-	xr_vector<xr_string> labels, values;
+	xr_vector<xr_string> labels, values, extras;
 	LPCSTR note = 0;
 
 	if (doc_scoped)
@@ -1209,6 +1209,7 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 			if (m_Search[0] && !ContainsNoCaseAscii(ids[i], m_Search)) continue;
 			labels.push_back(ids[i]);
 			values.push_back(ids[i]);
+			extras.push_back(xr_string());
 		}
 		if (labels.empty()) note = ids.empty() ? "nothing declared in this quest" : "nothing matches";
 	}
@@ -1227,6 +1228,9 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 				if (!found[i]->name.empty()) label += "  -  " + found[i]->name;
 				labels.push_back(label);
 				values.push_back(found[i]->id);
+				// who they are and how many, where a smart stands, which level a
+				// restrictor is on - the index knows, and a list of bare ids does not
+				extras.push_back(found[i]->extra);
 			}
 			if (labels.empty()) note = "nothing matches";
 		}
@@ -1235,7 +1239,13 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 	const ImGuiStyle& st = ImGui::GetStyle();
 	const float em = ImGui::GetFrameHeight();
 	float w = ImGui::CalcTextSize("nothing declared in this quest").x;
-	for (u32 i = 0; i < labels.size(); ++i) w = _max(w, ImGui::CalcTextSize(labels[i].c_str()).x);
+	for (u32 i = 0; i < labels.size(); ++i)
+	{
+		float row = ImGui::CalcTextSize(labels[i].c_str()).x;
+		if (i < extras.size() && !extras[i].empty())
+			row += ImGui::CalcTextSize("  ").x + ImGui::CalcTextSize(extras[i].c_str()).x;
+		w = _max(w, row);
+	}
 	w += st.WindowPadding.x * 2.f + st.FramePadding.x * 2.f + st.ScrollbarSize;
 	// wide enough to be worth opening, capped so a stray long id cannot span the
 	// screen; anything past the cap stays reachable through the scrollbar
@@ -1253,7 +1263,14 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 	ImGui::BeginChild("##list", ImVec2(-1.f, ImGui::GetTextLineHeightWithSpacing() * rows),
 		false, ImGuiWindowFlags_HorizontalScrollbar);
 	for (u32 i = 0; i < labels.size(); ++i)
+	{
 		if (ImGui::Selectable(labels[i].c_str())) { out = values[i]; picked = true; ImGui::CloseCurrentPopup(); }
+		if (i < extras.size() && !extras[i].empty())
+		{
+			ImGui::SameLine();
+			ImGui::TextDisabled("%s", extras[i].c_str());
+		}
+	}
 	if (note) ImGui::TextDisabled("%s", note);
 	ImGui::EndChild();
 
