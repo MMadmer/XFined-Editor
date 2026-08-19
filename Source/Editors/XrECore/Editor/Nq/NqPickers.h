@@ -42,6 +42,13 @@ public:
 		xr_string	extra;		// origin hint: section, file, level, "project"
 	};
 
+	// The restrictors of the OPEN SCENE, live. The scene lives a layer above this one,
+	// so the level editor hands over a reader instead. Read on every query rather than
+	// folded into the cached index: the index is built once per project, and an object
+	// placed a second ago has to be in the list without a save and without a reload.
+	typedef void (*TSceneRestrictors)(xr_vector<SEntry>& out);
+	static void						SetSceneRestrictors(TSceneRestrictors fn);
+
 	// true when a linked game backs the indexes (otherwise every index is empty
 	// and W060 is not raised)
 	static bool						Available	();

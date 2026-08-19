@@ -1,4 +1,5 @@
 ﻿#include "stdafx.h"
+#include "../../XrECore/Editor/Nq/NqPickers.h"
 #include "Recovery/EditorRecovery.h"
 #include "..\..\XrAPI\xrGameManager.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
@@ -20,10 +21,33 @@
 
 CLevelMain*	LUI=(CLevelMain*)UI;
 
+// The restrictors of the scene that is open, for the quest pickers. They live one
+// layer down and cannot reach the scene, so it is handed to them.
+static void CollectSceneRestrictors(xr_vector<NqPickers::SEntry>& out)
+{
+    out.clear();
+    if (!Scene) return;
+    ObjectList& lst = Scene->ListObj(OBJCLASS_SPAWNPOINT);
+    for (ObjectIt it = lst.begin(); it != lst.end(); ++it)
+    {
+        CSpawnPoint* sp = dynamic_cast<CSpawnPoint*>(*it);
+        if (!sp) continue;
+        LPCSTR section = sp->RefName();
+        if (!section || 0 != xr_strcmp(section, "space_restrictor")) continue;
+        LPCSTR name = sp->GetName();
+        if (!name || !name[0]) continue;
+        NqPickers::SEntry e;
+        e.id = name;
+        e.extra = "scene";
+        out.push_back(e);
+    }
+}
+
 CLevelMain::CLevelMain()
 {
     m_Cursor        = xr_new<C3DCursor>();
     EPrefs			= xr_new<CLevelPreferences>();
+    NqPickers::SetSceneRestrictors(CollectSceneRestrictors);
 }
 
 CLevelMain::~CLevelMain()

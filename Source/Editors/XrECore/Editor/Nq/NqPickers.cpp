@@ -15,6 +15,10 @@ namespace
 	bool							s_Available	= false;
 	xr_string						s_BuiltFor;			// fingerprint + project root
 	xr_string						s_ProjectRoot;
+	// restrictors as the level files have them; the open scene is merged on top
+	xr_vector<NqPickers::SEntry>	s_DiskRestrictors;
+	NqPickers::TSceneRestrictors	s_SceneRestrictors	= 0;
+	u32								s_SceneStamp		= 0;
 
 	const char* kTypeNames[NqPickers::tCount] =
 	{
@@ -741,27 +745,54 @@ namespace
 		}
 		BuildProjectStories();
 		BuildProjectRestrictors();
+		s_SceneStamp = 0;			// the scene merge has to run again after a rebuild
 		// the project sources run after the game index was sorted (and after the cache,
 		// so a freshly placed object never needs a reindex), so they sort themselves
 		const NqPickers::EType project_fed[] = { NqPickers::tStory, NqPickers::tRestrictor };
 		for (u32 i = 0; i < sizeof(project_fed) / sizeof(project_fed[0]); ++i)
 			std::sort(s_Index[project_fed[i]].begin(), s_Index[project_fed[i]].end(),
 					  [](const NqPickers::SEntry& a, const NqPickers::SEntry& b) { return a.id < b.id; });
+		s_DiskRestrictors = s_Index[NqPickers::tRestrictor];
 	}
 
 	void Ensure()
 	{
 		if (!s_Built || s_BuiltFor != CurrentKey()) Build();
 	}
+
+	// Composes the restrictor list: what the level files hold, plus whatever the open
+	// scene has right now. Rate limited because a picker popup asks every frame and the
+	// scene walk is not free - a fifth of a second is below noticing.
+	void EnsureSceneRestrictors()
+	{
+		if (!s_SceneRestrictors) return;
+		const u32 now = ::GetTickCount();
+		if (s_SceneStamp && now - s_SceneStamp < 200) return;
+		s_SceneStamp = now ? now : 1;
+
+		xr_vector<NqPickers::SEntry> live;
+		s_SceneRestrictors(live);
+
+		s_Index[NqPickers::tRestrictor] = s_DiskRestrictors;
+		s_Known[NqPickers::tRestrictor].clear();
+		for (u32 i = 0; i < s_Index[NqPickers::tRestrictor].size(); ++i)
+			s_Known[NqPickers::tRestrictor].insert(s_Index[NqPickers::tRestrictor][i].id);
+		for (u32 i = 0; i < live.size(); ++i)
+			Add(NqPickers::tRestrictor, live[i].id, live[i].name, live[i].extra);
+		std::sort(s_Index[NqPickers::tRestrictor].begin(), s_Index[NqPickers::tRestrictor].end(),
+				  [](const NqPickers::SEntry& a, const NqPickers::SEntry& b) { return a.id < b.id; });
+	}
 }
 
 //------------------------------------------------------------------------------
 bool NqPickers::Available()		{ Ensure(); return s_Available; }
-void NqPickers::Invalidate()	{ s_Built = false; }
+void NqPickers::Invalidate()	{ s_Built = false; s_SceneStamp = 0; }
+void NqPickers::SetSceneRestrictors(TSceneRestrictors fn) { s_SceneRestrictors = fn; s_SceneStamp = 0; }
 
 const xr_vector<NqPickers::SEntry>& NqPickers::Index(EType t)
 {
 	Ensure();
+	if (t == tRestrictor) EnsureSceneRestrictors();
 	static xr_vector<SEntry> empty;
 	return (t >= 0 && t < tCount) ? s_Index[t] : empty;
 }
@@ -770,6 +801,7 @@ bool NqPickers::Known(EType t, LPCSTR id)
 {
 	Ensure();
 	if (t < 0 || t >= tCount || !id) return false;
+	if (t == tRestrictor) EnsureSceneRestrictors();
 	return s_Known[t].count(xr_string(id)) != 0;
 }
 
